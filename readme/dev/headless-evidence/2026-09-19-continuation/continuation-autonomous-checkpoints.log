@@ -1,0 +1,15 @@
+START copy-stopped-profiles
+PASS stopped-profile-clones-and-existing-e2ee
+START autonomous-outbound-and-fts
+PASS autonomous-outbound-and-fts
+START autonomous-inbound-decryption-and-fts
+PASS autonomous-inbound-decryption-and-fts
+START outage-local-save-and-deferred-remote-change
+PASS outage-local-save-and-deferred-remote-change
+START autonomous-recovery-same-process
+PASS autonomous-recovery-same-process
+START full-profile-restore-with-unsynced-note
+PASS full-profile-restore-with-unsynced-note
+START protected-credential-and-source-preservation
+PASS protected-credential-and-source-preservation
+PASS autonomous-acceptance

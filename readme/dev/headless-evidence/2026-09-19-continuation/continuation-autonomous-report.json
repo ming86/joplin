@@ -1,0 +1,63 @@
+{
+  "status": "PASS",
+  "scope": "real-compiled-clients-existing-e2ee-test-account",
+  "steps": 7,
+  "checkpoints": [
+    {
+      "status": "START",
+      "step": "copy-stopped-profiles"
+    },
+    {
+      "status": "PASS",
+      "step": "stopped-profile-clones-and-existing-e2ee"
+    },
+    {
+      "status": "START",
+      "step": "autonomous-outbound-and-fts"
+    },
+    {
+      "status": "PASS",
+      "step": "autonomous-outbound-and-fts"
+    },
+    {
+      "status": "START",
+      "step": "autonomous-inbound-decryption-and-fts"
+    },
+    {
+      "status": "PASS",
+      "step": "autonomous-inbound-decryption-and-fts"
+    },
+    {
+      "status": "START",
+      "step": "outage-local-save-and-deferred-remote-change"
+    },
+    {
+      "status": "PASS",
+      "step": "outage-local-save-and-deferred-remote-change"
+    },
+    {
+      "status": "START",
+      "step": "autonomous-recovery-same-process"
+    },
+    {
+      "status": "PASS",
+      "step": "autonomous-recovery-same-process"
+    },
+    {
+      "status": "START",
+      "step": "full-profile-restore-with-unsynced-note"
+    },
+    {
+      "status": "PASS",
+      "step": "full-profile-restore-with-unsynced-note"
+    },
+    {
+      "status": "START",
+      "step": "protected-credential-and-source-preservation"
+    },
+    {
+      "status": "PASS",
+      "step": "protected-credential-and-source-preservation"
+    }
+  ]
+}

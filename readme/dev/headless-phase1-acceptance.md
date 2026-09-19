@@ -1,0 +1,27 @@
+# Phase 1 acceptance from the supplied continuation results
+
+Date: 2026-09-19. Source: `chatgpt-phase1-continuation-results.zip`, supplied by the user/Codex builder. These are externally executed results reviewed here, not a claim that this sandbox ran the native build or live account.
+
+**Phase 1's functional acceptance is recorded as passed for the tested Linux ARM64 configuration. Proceed to Phase 1.5.** This is the agreed private headless-core milestone, not certification of all operating systems, arbitrary resource protection, public API hosting or production deployment.
+
+The supplied report states that the existing real-history branch `feat/headless-encrypted-core` is clean and ends at `10bf74ee79537b697b82db92b6519087fdf3ad51`. Its compiler-fix, cancellation-fix and acceptance-runner commits correspond to the three previously delivered snapshot-history commits. No source correction was needed after import. Full vendored Yarn TypeScript compilation and CLI build passed on that updated source. The comparator was the unmodified original `f4ecbed4e6f693be49e1dd64d6e1ec1d74f767e9` build.
+
+The seven-checkpoint report and log both show PASS: stopped clones/existing E2EE identity; autonomous outbound sync/FTS; autonomous inbound sync/decryption/FTS; local editing/search during client-only outage; recovery in the same process; offline complete-profile restore including an unsynchronized note; and protected credentials/original-source preservation. The builder used the normal 300-second interval, not headless one-shot commands to force progress.
+
+The earlier native/build/API/manual-E2EE evidence is carried forward. The continuation did not repeat those already passed checks. An initial relocated stock-CLI staging attempt lacked a workspace dependency; adding its actual dependencies fixed staging before the successful run, without changing application code.
+
+## Exact recording limitation
+
+The long-running tool session detached, so the operating-system exit code was not directly captured. The PASS line and seven-step PASS report were observed and the runner stopped. In the delivered source, PASS is emitted after `acceptance()` returns through its cleanup, so this supports normal completion; it is still not direct observation of exit status 0.
+
+We record that limitation explicitly and **do not require a repeat of the long live test solely to recover the exit code**. The previous handoff's stricter recording condition is waived for this evidence review, not silently asserted satisfied. No failed functional checkpoint is being waived. Capture normal exit status on future newly needed runs when convenient.
+
+## Recovery and scope
+
+Private configuration, keys, copied profiles and restore material remain on the builder under `/tmp/acceptance-private/`. Do not upload them, regenerate E2EE identity, or reset the account. The source profiles were preserved. Synthetic synchronized notes remain in the disposable account. Both test service and runner were stopped according to the report.
+
+The next code adds an external account-bound application interface. It does not change the already tested CLI core, its dependencies or database format. A short read-only interface check against the existing compiled core is a Phase 1.5 check, not a reason to reopen Phase 1.
+
+## Evidence files
+
+The exact supplied text artifacts are retained under `headless-evidence/2026-09-19-continuation/`: `CONTINUATION-RESULTS.md`, `continuation-autonomous-report.json`, `continuation-autonomous-checkpoints.log`, and `continuation-build.log`.

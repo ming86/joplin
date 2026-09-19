@@ -1,0 +1,15 @@
+continuation rebuild started: 2026-09-19T14:05:29Z
+container: joplin-phase1-runtime
+source: 10bf74ee79537b697b82db92b6519087fdf3ad51
+tsc started: 2026-09-19T14:05:29Z
+Done in 18s 514ms
+tsc completed: 2026-09-19T14:05:49Z
+workspace build started: 2026-09-19T14:05:49Z
+[14:05:50] Using gulpfile /work/joplin/packages/app-cli/gulpfile.js
+[14:05:50] Starting 'build'...
+[14:05:50] Starting 'prepareBuild'...
+[14:05:50] Finished 'prepareBuild' after 94 ms
+[14:05:50] Finished 'build' after 94 ms
+workspace build completed: 2026-09-19T14:05:50Z
+cli: /work/joplin/packages/app-cli/build/main.js
+continuation rebuild completed: 2026-09-19T14:05:50Z
