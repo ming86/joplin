@@ -299,10 +299,11 @@ class Registry {
 		this.cancelTimers_();
 
 		return new Promise((resolve) => {
-			shim.setInterval(() => {
+			const cancellationPoll = shim.setInterval(() => {
 				// ensure processing complete
 				if (!this.setupRecurrentCalls_.length && !this.schedSyncCalls_.length && !this.timerCallbackCalls_.length && !this.waitForReSyncCalls_.length) {
 					this.cancelTimers_();
+					shim.clearInterval(cancellationPoll);
 					resolve(null);
 				}
 			}, 100);
