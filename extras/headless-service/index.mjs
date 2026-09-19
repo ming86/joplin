@@ -66,6 +66,7 @@ export function createAccountRegistry(configurations, factories = {}) {
 	}
 	const backends = new Map();
 	const providers = new Map();
+	const semanticBackends = new Map();
 	return Object.freeze({
 		forPrincipal(subject, accountId) {
 			const config = accounts.get(accountId);
@@ -79,10 +80,19 @@ export function createAccountRegistry(configurations, factories = {}) {
 			};
 			const identity = note => ({ ...note, accountId });
 			const readable = note => { if (!eligible(note)) throw new ServiceError('note_unavailable'); return identity(note); };
+			const semantic = () => {
+				if (!factories.makeSemanticBackend) return null;
+				if (!semanticBackends.has(accountId)) {
+					const engine = factories.makeSemanticBackend(structuredClone(config));
+					if (engine) requireValue(engine.accountId === accountId, 'semantic_account_mismatch');
+					semanticBackends.set(accountId, engine);
+				}
+				return semanticBackends.get(accountId);
+			};
 			const semanticStatus = Object.freeze({ state: 'unavailable', reason: 'not_implemented', ...(config.embedding ? { embeddingSpaceId: config.embedding.space.id } : {}) });
 			return Object.freeze({
 				accountId,
-				status() { permit('read'); return { accountId, semantic: semanticStatus }; },
+				status() { permit('read'); return { accountId, semantic: semantic()?.status() ?? semanticStatus }; },
 				async listNotebooks(options, signal) {
 					permit('read'); const result = await backend().listNotebooks(options, signal);
 					return { ...result, items: result.items.map(identity) };
@@ -107,6 +117,8 @@ export function createAccountRegistry(configurations, factories = {}) {
 					requireValue(typeof query === 'string' && query.trim().length > 0 && query.length <= 10000, 'invalid_query');
 					pagination(options);
 					if (signal?.aborted) throw new ServiceError('request_cancelled');
+					if (mode !== 'keyword' && semantic()) return semantic().search({ query, mode, ...options }, signal);
+					requireValue(!options.notebookId, 'notebook_filter_requires_semantic_engine');
 					if (mode === 'semantic') return { accountId, requestedMode: mode, executedMode: null, semantic: semanticStatus, items: [], hasMore: false };
 					const result = await backend().search(query, options, signal);
 					return { accountId, requestedMode: mode, executedMode: 'keyword', semantic: semanticStatus, items: result.items.filter(eligible).map(note => ({ ...identity(note), provenance: 'keyword' })), hasMore: result.hasMore };

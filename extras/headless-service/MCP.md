@@ -100,3 +100,10 @@ The test/reference client in `scripts/lib/stdio-client.mjs` is deliberately sepa
 - Codex stdio setup: https://developers.openai.com/codex/mcp/
 
 The sources define protocol and host behavior; the repository tests/logs establish only the observations stated above.
+
+
+## Phase 2B extension
+
+The Phase 2A read-only Codex CLI observation has passed; its exact report is in `evidence/2026-09-20-codex/`. The original instructions above describe the Phase 2A baseline.
+
+A configured `semantic` block now enables meaning-based and hybrid retrieval in `search_notes` and starts a per-account indexer in this process. See [SEMANTIC.md](SEMANTIC.md). This process then owns a separate SQLCipher index and its key; it still never opens the core Joplin DB or needs the core DB/E2EE keys. Unconfigured clients retain explicit semantic-unavailable behavior. No public transport or authentication scheme was added.

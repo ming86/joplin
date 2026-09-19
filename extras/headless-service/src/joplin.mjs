@@ -106,7 +106,11 @@ export function createJoplinClient(config) {
 			});
 		},
 		async listNotes(options, signal) {
-			return pageResult(await request('notes', { ...pagination(options), fields: noteFields }, 'GET', undefined, signal), noteResult);
+			return pageResult(await request('notes', { ...pagination(options), order_by: 'id', order_dir: 'ASC', fields: noteFields }, 'GET', undefined, signal), noteResult);
+		},
+		async listIndexNotes(options, signal) {
+			// Metadata-only enumeration avoids accumulating many large bodies in one response.
+			return pageResult(await request('notes', { ...pagination(options), order_by: 'id', order_dir: 'ASC', fields: 'id' }, 'GET', undefined, signal), noteResult);
 		},
 		async getNote(id, signal) {
 			return noteResult(await request(`notes/${identifier(id)}`, { fields: noteFields }, 'GET', undefined, signal));

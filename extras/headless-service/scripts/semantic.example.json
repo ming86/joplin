@@ -1,0 +1,35 @@
+{
+  "accountId": "personal",
+  "baseUrl": "http://127.0.0.1:41184",
+  "apiTokenFile": "/run/secrets/joplin-api-token",
+  "allowWrites": false,
+  "semanticDatabasePath": "/data/personal/semantic.sqlite",
+  "semanticKeyRef": "personal/semantic",
+  "semantic": {
+    "enabled": true,
+    "keyFile": "/run/secrets/semantic-database-key",
+    "sqliteModule": "/absolute/runtime/native/headless-native/node_modules/sqlite3",
+    "pollMs": 5000,
+    "rescanMs": 300000,
+    "batchSize": 16,
+    "chunks": { "maxBytes": 2400, "overlapBytes": 240 },
+    "embedding": {
+      "protocol": "openai-embeddings",
+      "baseUrl": "http://127.0.0.1:11434/v1",
+      "model": "bge-m3",
+      "remoteProcessing": false,
+      "timeoutMs": 30000,
+      "maxInputBytes": 8192,
+      "maxBatch": 16,
+      "space": {
+        "id": "bge-m3-local-operator-v1",
+        "revision": "REPLACE_WITH_DEPLOYED_MODEL_REVISION",
+        "dimensions": 1024,
+        "preprocessingVersion": "title-body-v1",
+        "normalization": "l2",
+        "documentPrefix": "",
+        "queryPrefix": ""
+      }
+    }
+  }
+}

@@ -4,7 +4,9 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { once } from 'node:events';
 export class StdioTestClient {
-	constructor(config, executable = fileURLToPath(new URL('../../mcp.mjs', import.meta.url))) {
+	constructor(config, executable = fileURLToPath(new URL('../../mcp.mjs', import.meta.url)), { timeoutMs = 15000 } = {}) {
+		if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120000) throw Error('Invalid request timeout');
+		this.timeoutMs = timeoutMs;
 		this.child = spawn(process.execPath, [executable, config], { stdio: ['pipe', 'pipe', 'pipe'] });
 		this.pending = new Map(); this.serial = 0; this.stderr = ''; let buffer = '';
 		this.child.stderr.setEncoding('utf8'); this.child.stderr.on('data', data => { this.stderr = (this.stderr + data).slice(-4096); });
@@ -29,7 +31,7 @@ export class StdioTestClient {
 	request(method, params) {
 		const id = ++this.serial;
 		return new Promise((resolve, reject) => {
-			const timer = setTimeout(() => { this.pending.delete(id); reject(Error('MCP request timed out')); }, 15000);
+			const timer = setTimeout(() => { this.pending.delete(id); reject(Error('MCP request timed out')); }, this.timeoutMs);
 			this.pending.set(id, { resolve, reject, timer });
 			this.child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, ...(params ? { params } : {}) })}\n`);
 		});

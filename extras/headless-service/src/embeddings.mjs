@@ -25,8 +25,8 @@ export function noteFingerprint(note, preprocessingVersion) {
 	return createHash('sha256').update(JSON.stringify([note.title, note.body, preprocessingVersion])).digest('hex');
 }
 
-// Phase 1.5 transport boundary. The transport is supplied by the trusted application;
-// Phase 2 supplies the actual OpenAI-compatible HTTP transport. Tests use a fake one.
+// The transport is supplied by the trusted application; HTTP and fake transports
+// share validation and model-specific preparation here.
 export function bindEmbeddingProvider(input, transport) {
 	const space = embeddingSpace(input);
 	return Object.freeze({
@@ -39,7 +39,11 @@ export function bindEmbeddingProvider(input, transport) {
 			const prefix = purpose === 'query' ? space.queryPrefix : space.documentPrefix;
 			let response;
 			try { response = await transport(texts.map(text => prefix + text), purpose, signal); }
-			catch { throw new ServiceError(signal?.aborted ? 'request_cancelled' : 'embedding_provider_unavailable'); }
+			catch (error) {
+				if (signal?.aborted) throw new ServiceError('request_cancelled');
+				if (error instanceof ServiceError) throw error;
+				throw new ServiceError('embedding_provider_unavailable');
+			}
 			if (signal?.aborted) throw new ServiceError('request_cancelled');
 			requireValue(response && Array.isArray(response.data) && response.data.length === texts.length, 'invalid_embedding_response');
 			const vectors = new Array(texts.length);

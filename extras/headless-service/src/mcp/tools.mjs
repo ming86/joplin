@@ -38,7 +38,7 @@ export function createTools(service, { allowWrites = false } = {}) {
 	function add(name, description, inputSchema, run, writing = false) {
 		tools.set(name, {
 			definition: { name, description, inputSchema, annotations: {
-				readOnlyHint: !writing, destructiveHint: writing && name === 'update_note', idempotentHint: !writing, openWorldHint: false,
+				readOnlyHint: !writing, destructiveHint: writing && name === 'update_note', idempotentHint: !writing, openWorldHint: name === 'search_notes',
 			} }, run, writing,
 		});
 	}
@@ -48,8 +48,8 @@ export function createTools(service, { allowWrites = false } = {}) {
 		const result = await service.listNotes({ page: args.page, limit: args.limit ?? 20 }, signal);
 		return { ...result, items: result.items.map(summary) };
 	});
-	add('search_notes', 'Search this account using Joplin query syntax. keyword is available; semantic is not yet implemented; hybrid reports keyword-only fallback. Results contain previews.',
-		object({ query: { type: 'string', minLength: 1, maxLength: 10000 }, mode: { type: 'string', enum: ['keyword', 'semantic', 'hybrid'] }, page, limit }, ['query']), async (args, signal) => {
+	add('search_notes', 'Search this account. keyword uses Joplin syntax; configured semantic/hybrid use plain text and optional notebookId (page 1 only). Availability and fallback are explicit. Results contain previews and optional matching excerpts.',
+		object({ query: { type: 'string', minLength: 1, maxLength: 10000 }, mode: { type: 'string', enum: ['keyword', 'semantic', 'hybrid'] }, notebookId: id, page, limit }, ['query']), async (args, signal) => {
 			const result = await service.search({ ...args, limit: args.limit ?? 20 }, signal);
 			return { ...result, items: result.items.map(summary) };
 		});

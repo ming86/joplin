@@ -81,3 +81,8 @@ A successful `PASS phase15-account-smoke` against the real compiled core complet
 ## Phase 2A: MCP entry point
 
 `mcp.mjs` exposes this account-bound service over stdio, read-only by default, with optional bounded Markdown create/update tools. See [MCP.md](MCP.md) for the configuration, tool contract, transport scope, native integration test and remaining selected-host check. This adds no package dependencies, public HTTP listener or semantic indexer, and does not change the Joplin CLI core.
+
+
+## Phase 2B semantic retrieval
+
+Optional semantic indexing and hybrid retrieval are implemented outside the core. See [SEMANTIC.md](SEMANTIC.md) for configuration, separate encrypted storage, runtime ownership, limits and real-provider acceptance. Existing account/keyword behavior remains available without enabling it. The new native integration uses a real encrypted core and store with a fixture HTTP embedding endpoint; it does not establish model quality.

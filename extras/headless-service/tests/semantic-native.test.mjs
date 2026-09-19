@@ -1,0 +1,90 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import net from 'node:net';
+import { randomBytes } from 'node:crypto';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { fileURLToPath } from 'node:url';
+import { StdioTestClient } from '../scripts/lib/stdio-client.mjs';
+import { server, readJson } from './fixtures.mjs';
+const cli = process.env.JOPLIN_MCP_TEST_CLI;
+const sqliteModule = process.env.JOPLIN_HEADLESS_SQLITE_MODULE;
+
+test('actual SQLCipher Joplin core -> HTTP fixture embeddings -> encrypted semantic DB -> separate MCP client', {
+	skip: !cli || !sqliteModule ? 'Set JOPLIN_MCP_TEST_CLI and JOPLIN_HEADLESS_SQLITE_MODULE.' : false, timeout: 120000,
+}, async t => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'joplin-semantic-native-'));
+	const children = new Set();
+	async function stop(child) {
+		if (child.exitCode !== null || child.signalCode !== null) return;
+		const done = once(child, 'exit'); child.kill('SIGTERM'); const timer = setTimeout(() => child.kill('SIGKILL'), 10000);
+		await done; clearTimeout(timer);
+	}
+	t.after(async () => { for (const child of children) await stop(child); fs.rmSync(dir, { recursive: true, force: true }); });
+	const key = randomBytes(32).toString('hex'), token = randomBytes(32).toString('hex');
+	const home = path.join(dir, 'home'); fs.mkdirSync(home);
+	function start(args, input = '') {
+		const child = spawn(process.execPath, [cli, ...args], { env: { ...process.env, HOME: home, JOPLIN_HEADLESS: '1', JOPLIN_HEADLESS_PROFILE: path.join(dir, 'profile'), JOPLIN_HEADLESS_KEY_FD: '3' }, stdio: ['pipe', 'pipe', 'pipe', 'pipe'] });
+		children.add(child); child.out = ''; child.err = '';
+		child.stdout.on('data', b => { child.out += b; }); child.stderr.on('data', b => { child.err += b; });
+		child.stdio[3].end(key+'\n'); child.stdin.end(input); return child;
+	}
+	async function until(check, message, ms = 45000) { const end = Date.now()+ms; while (Date.now()<end) { if(await check())return; await new Promise(r=>setTimeout(r,100)); } assert.fail(message); }
+	const listener = net.createServer(); listener.listen(0,'127.0.0.1');await once(listener,'listening');const port=listener.address().port;await new Promise(r=>listener.close(r));
+	const setup=start(['config','--import'],JSON.stringify({'api.port':port,'api.token':token,'sync.target':0})); assert.equal((await once(setup,'exit'))[0],0);
+	const daemon=start(['serve']);await until(()=>daemon.out.includes('headless: private API ready'),'core unready');
+	const baseUrl=`http://127.0.0.1:${port}`;
+	async function raw(route, method='GET', body) { const url=new URL(route,baseUrl);url.searchParams.set('token',token);const res=await fetch(url,{method,headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined});assert.ok(res.ok,`Setup API ${res.status}`);const text=await res.text();return text?JSON.parse(text):null; }
+	const folder=await raw('/folders','POST',{title:'Synthetic semantic test'});
+	const note=await raw('/notes','POST',{parent_id:folder.id,title:'Cats',body:'Protected feline topic fixture',markup_language:1});
+	await raw('/notes','POST',{parent_id:folder.id,title:'Garden',body:'Plants and flowers',markup_language:1});
+	let fail=false, documentRequests=0;
+	const embeddingUrl=await server(t,async(req,res)=> {
+		assert.equal(req.url,'/v1/embeddings');const input=await readJson(req);assert.equal(input.model,'test-only-topic-router');
+		if(fail) {res.writeHead(429,{'retry-after':'1'});res.end('Synthetic quota error');return;}
+		if(input.input.some(s=>s.includes('\n\n')))documentRequests++;
+		const data=input.input.map((text,index)=>({index,embedding:/cat|feline/i.test(text)?[1,0,0]:/dog|canine/i.test(text)?[0,1,0]:[0,0,1]}));
+		res.end(JSON.stringify({data:data.reverse(),usage:{prompt_tokens:input.input.length*4}}));
+	});
+	const tokenFile=path.join(dir,'token'),keyFile=path.join(dir,'index-key'),databasePath=path.join(dir,'semantic.db');
+	fs.writeFileSync(tokenFile,token,{mode:0o600});fs.writeFileSync(keyFile,randomBytes(32).toString('hex'),{mode:0o600});
+	const configFile=path.join(dir,'mcp.json');
+	fs.writeFileSync(configFile,JSON.stringify({accountId:'acceptance',baseUrl,apiTokenFile:tokenFile,allowWrites:false,semanticDatabasePath:databasePath,semantic:{enabled:true,keyFile,sqliteModule,pollMs:100,rescanMs:10000,embedding:{protocol:'openai-embeddings',baseUrl:embeddingUrl+'/v1',model:'test-only-topic-router',remoteProcessing:false,space:{id:'synthetic-v1',revision:'fixture-not-a-model',dimensions:3,preprocessingVersion:'title-body-v1'}}}}));
+	let client=new StdioTestClient(configFile);t.after(()=>client.close());await client.initialize();
+	await until(async()=> (await client.call('get_status')).structuredContent.semantic.state==='ready','semantic not ready');
+	assert.ok(documentRequests>0);
+	let result=await client.call('search_notes',{query:'feline',mode:'semantic'});
+	assert.equal(result.isError,false);assert.equal(result.structuredContent.executedMode,'semantic');assert.equal(result.structuredContent.items[0].id,note.id);
+	assert.ok(result.structuredContent.items[0].semanticExcerpt);assert.equal(result.structuredContent.items[0].chunk.offsetUnit,'utf8-byte');
+	result=await client.call('search_notes',{query:'feline',mode:'hybrid',notebookId:folder.id});assert.equal(result.structuredContent.executedMode,'hybrid');assert.equal(result.structuredContent.items[0].id,note.id);
+	assert.equal((await client.request('tools/list')).tools.length,5);
+	t.diagnostic('PASS native core, common HTTP batch response reordering, separate encrypted index, semantic/hybrid MCP read-only search');
+	fail=true;await raw(`/notes/${note.id}`,'PUT',{title:'Dogs',body:'Canine replacement fixture'});
+	await until(async()=> (await client.call('get_status')).structuredContent.semantic.state==='degraded','provider failure not reported');
+	result=await client.call('search_notes',{query:'Dogs',mode:'hybrid'});assert.equal(result.structuredContent.executedMode,'keyword');
+	assert.ok((await client.call('get_note',{id:note.id})).structuredContent.body.includes('Canine'));
+	fail=false;await until(async()=> (await client.call('get_status')).structuredContent.semantic.state==='ready','provider recovery failed');
+	assert.equal((await client.call('search_notes',{query:'canine',mode:'semantic'})).structuredContent.items[0].id,note.id);
+	await client.close();assert.equal(client.child.exitCode,0);
+	assert.ok(!fs.readFileSync(databasePath).includes(Buffer.from('Canine replacement fixture')));
+	async function script(name, args) {
+		const child = spawn(process.execPath, [fileURLToPath(new URL(`../scripts/${name}`, import.meta.url)), ...args], { stdio: ['ignore','pipe','pipe'] });
+		children.add(child); let text=''; child.stdout.on('data', b=>{text+=b;}); child.stderr.resume();
+		assert.equal((await once(child,'exit'))[0],0,`Acceptance script ${name} failed`); return text;
+	}
+	assert.ok((await script('check-embedding.mjs',[configFile])).includes('PASS embedding-http-shape'));
+	const relevanceFile=path.join(dir,'relevance.json');fs.writeFileSync(relevanceFile,JSON.stringify({cases:[{query:'canine',expectedNoteIds:[note.id]}]}));
+	assert.ok((await script('check-semantic.mjs',[configFile,relevanceFile])).includes('PASS semantic-retrieval-check'));
+	t.diagnostic('PASS acceptance scripts exercised with real core/storage and fixture HTTP provider (not a live-model pass)');
+	client=new StdioTestClient(configFile);await client.initialize();
+	await until(async()=> (await client.call('get_status')).structuredContent.semantic.state==='ready','restart failed');
+	assert.equal((await client.call('search_notes',{query:'canine',mode:'semantic'})).structuredContent.items[0].id,note.id);
+	await raw(`/notes/${note.id}`,'DELETE');
+	result=await client.call('search_notes',{query:'canine',mode:'semantic'});assert.ok(!result.structuredContent.items.some(n=>n.id===note.id));
+	await client.close();assert.equal(client.child.exitCode,0);await stop(daemon);assert.equal(daemon.exitCode,0);
+	t.diagnostic('PASS changed-note indexing, quota fallback/recovery, semantic owner restart/key reopen and immediate deleted-result suppression');
+	t.diagnostic('Embedding endpoint was a deterministic HTTP fixture, NOT BGE-M3 or a measured language model. No live provider/relevance claim.');
+});

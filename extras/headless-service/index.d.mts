@@ -1,4 +1,4 @@
-export class ServiceError extends Error { constructor(code: string, outcomeUnknown?: boolean); readonly code: string; readonly outcomeUnknown: boolean; }
+export class ServiceError extends Error { constructor(code: string, outcomeUnknown?: boolean); readonly code: string; readonly outcomeUnknown: boolean; retryAfterMs?: number; }
 export type EmbeddingPurpose = 'document' | 'query';
 export interface EmbeddingSpace {
     id: string;
@@ -69,13 +69,27 @@ export interface Change { id: number; itemId: string; itemType?: number; type: n
 export interface JoplinBackend {
     listNotebooks(options?: PageOptions, signal?: AbortSignal): Promise<Page<Notebook>>;
     listNotes(options?: PageOptions, signal?: AbortSignal): Promise<Page<Note>>;
+    listIndexNotes?(options?: PageOptions, signal?: AbortSignal): Promise<Page<Note>>;
     getNote(id: string, signal?: AbortSignal): Promise<Note>;
     createNote(input: NewNote, signal?: AbortSignal): Promise<Note>;
     updateNote(id: string, input: NoteUpdate, signal?: AbortSignal): Promise<Note>;
     search(query: string, options?: PageOptions, signal?: AbortSignal): Promise<Page<Note>>;
     changes(cursor?: string, signal?: AbortSignal): Promise<Page<Change> & { cursor: string }>;
 }
-export interface SemanticStatus { state: 'unavailable'; reason: 'not_implemented'; embeddingSpaceId?: string; }
+export interface SemanticStatus {
+    state: 'unavailable' | 'indexing' | 'ready' | 'degraded'; reason?: string; embeddingSpaceId?: string;
+    generation?: number; initialScanComplete?: boolean; pendingNotes?: number; indexedNotes?: number; failedNotes?: number;
+    lastReconciledAt?: number | null; providerRetryAt?: number | null;
+    usage?: { inputTokens: number; preparedBytes: number; successfulRequests: number };
+}
+export interface SearchInput extends PageOptions { query: string; mode?: 'keyword' | 'semantic' | 'hybrid'; notebookId?: string; }
+export interface SearchResult {
+    accountId: string; requestedMode: 'keyword' | 'semantic' | 'hybrid'; executedMode: 'keyword' | 'semantic' | 'hybrid' | null;
+    semantic: SemanticStatus; items: (AccountNote & { provenance: 'keyword' | 'semantic' | 'hybrid'; score?: number; semanticExcerpt?: string; chunk?: { ordinal: number; start: number; end: number; offsetUnit: 'utf8-byte' } })[];
+    hasMore: boolean; candidateWindow?: number; truncated?: boolean; notebookId?: string;
+}
+export interface SemanticBackend { readonly accountId: string; status(): SemanticStatus; search(input: SearchInput, signal?: AbortSignal): Promise<SearchResult>; }
+
 export type AccountNote = Note & { accountId: string };
 export interface AccountService {
     readonly accountId: string;
@@ -86,18 +100,12 @@ export interface AccountService {
     createNote(input: NewNote, signal?: AbortSignal): Promise<AccountNote>;
     updateNote(id: string, input: NoteUpdate, signal?: AbortSignal): Promise<AccountNote>;
     changes(cursor?: string, signal?: AbortSignal): Promise<Page<Change> & { accountId: string; cursor: string }>;
-    search(input: PageOptions & { query: string; mode?: 'keyword' | 'semantic' | 'hybrid' }, signal?: AbortSignal): Promise<{
-        accountId: string;
-        requestedMode: 'keyword' | 'semantic' | 'hybrid';
-        executedMode: 'keyword' | null;
-        semantic: SemanticStatus;
-        items: (AccountNote & { provenance: 'keyword' })[];
-        hasMore: boolean;
-    }>;
+    search(input: SearchInput, signal?: AbortSignal): Promise<SearchResult>;
     embed(texts: string[], purpose: EmbeddingPurpose, signal?: AbortSignal): Promise<EmbeddingResponse & { accountId: string }>;
 }
 export interface AccountRegistry { forPrincipal(verifiedSubject: string, accountId: string): AccountService; }
 export function createAccountRegistry(configurations: AccountConfiguration[], factories?: {
+    makeSemanticBackend?: (configuration: AccountConfiguration) => SemanticBackend | null;
     makeBackend?: (configuration: AccountConfiguration) => JoplinBackend;
     makeEmbeddingTransport?: (configuration: AccountConfiguration) => EmbeddingTransport | undefined;
 }): AccountRegistry;
