@@ -1,0 +1,6 @@
+{
+  "accountId": "personal",
+  "baseUrl": "http://127.0.0.1:41190",
+  "apiTokenFile": "/run/secrets/joplin-personal-api-token",
+  "allowWrites": false
+}

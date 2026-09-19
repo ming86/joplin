@@ -77,3 +77,7 @@ node extras/headless-service/scripts/check-account.mjs /private/account-smoke.js
 This makes **GET requests only** to the running Data API: notebook listing, read, keyword search and cursor lookup. It also verifies explicit semantic unavailability and a synthetic in-memory fake-provider call. It does not create notes, touch the database, reconfigure sync/E2EE, create an index or contact an embedding host. Only sanitized step names and a small result are printed; retain the normal exit code this time if convenient.
 
 A successful `PASS phase15-account-smoke` against the real compiled core completes the outstanding Phase 1.5 integration observation. Share only that output and the source ID, not the private JSON/token/profile. The same script is self-tested here against a fake Data API; that is harness evidence only.
+
+## Phase 2A: MCP entry point
+
+`mcp.mjs` exposes this account-bound service over stdio, read-only by default, with optional bounded Markdown create/update tools. See [MCP.md](MCP.md) for the configuration, tool contract, transport scope, native integration test and remaining selected-host check. This adds no package dependencies, public HTTP listener or semantic indexer, and does not change the Joplin CLI core.
