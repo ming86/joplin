@@ -1,0 +1,10 @@
+{
+  "name": "@ming86/joplin-headless-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "index.mjs",
+  "types": "index.d.mts",
+  "engines": { "node": ">=22.12" },
+  "scripts": { "test": "node --test tests/*.test.mjs" }
+}

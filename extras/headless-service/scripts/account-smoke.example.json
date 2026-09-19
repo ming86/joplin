@@ -1,0 +1,11 @@
+{
+  "confirmRealCore": true,
+  "accountId": "ming-test",
+  "subject": "operator-test-subject",
+  "baseUrl": "http://127.0.0.1:41184/",
+  "apiTokenFile": "/private/existing-api-token.txt",
+  "expectedNoteId": "REPLACE_WITH_EXISTING_32_HEX_TEST_NOTE_ID",
+  "searchQuery": "REPLACE_WITH_SEARCH_FOR_THAT_EXISTING_TEST_NOTE",
+  "semanticDatabasePath": "/private/semantic-ming-test.db",
+  "semanticKeyRef": "ming-test/semantic-key"
+}
