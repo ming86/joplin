@@ -10,6 +10,18 @@ if (compareVersion(nodeVersion, '10.0.0') < 0) {
 	process.exit(1);
 }
 
+const { readHeadlessConfig } = require('./headless/config');
+let headlessConfig;
+try {
+	headlessConfig = readHeadlessConfig(process.env);
+} catch (error) {
+	console.error(error.message);
+	process.exit(1);
+}
+
+const Setting = require('@joplin/lib/models/Setting').default;
+Setting.setConstant('isHeadless', !!headlessConfig);
+
 const app = require('./app').default;
 const Folder = require('@joplin/lib/models/Folder').default;
 const Resource = require('@joplin/lib/models/Resource').default;
@@ -18,7 +30,6 @@ const Note = require('@joplin/lib/models/Note').default;
 const Tag = require('@joplin/lib/models/Tag').default;
 const NoteTag = require('@joplin/lib/models/NoteTag').default;
 const MasterKey = require('@joplin/lib/models/MasterKey').default;
-const Setting = require('@joplin/lib/models/Setting').default;
 const Revision = require('@joplin/lib/models/Revision').default;
 const Logger = require('@joplin/utils/Logger').default;
 const FsDriverNode = require('@joplin/lib/fs-driver-node').default;
@@ -28,7 +39,7 @@ const { _ } = require('@joplin/lib/locale');
 const FileApiDriverLocal = require('@joplin/lib/file-api-driver-local').default;
 const EncryptionService = require('@joplin/lib/services/e2ee/EncryptionService').default;
 const envFromArgs = require('@joplin/lib/envFromArgs').default;
-const nodeSqlite = require('sqlite3');
+const nodeSqlite = require(headlessConfig ? headlessConfig.sqliteModule : 'sqlite3');
 const initLib = require('@joplin/lib/initLib').default;
 
 let sharp = null;
@@ -39,7 +50,7 @@ try {
 	// be printed in app.ts
 }
 
-const env = envFromArgs(process.argv);
+const env = headlessConfig ? 'prod' : envFromArgs(process.argv);
 
 const fsDriver = new FsDriverNode();
 Logger.fsDriver_ = fsDriver;
@@ -62,7 +73,7 @@ Setting.setConstant('appType', 'cli');
 
 let keytar;
 try {
-	keytar = shim.platformSupportsKeyChain() ? require('keytar') : null;
+	keytar = !headlessConfig && shim.platformSupportsKeyChain() ? require('keytar') : null;
 } catch (error) {
 	console.error('Cannot load keytar - keychain support will be disabled', error);
 	keytar = null;
@@ -76,6 +87,7 @@ function appVersion() {
 shimInitCli({ sharp, keytar, appVersion, nodeSqlite });
 
 const logger = new Logger();
+if (headlessConfig) logger.setLevel(Logger.LEVEL_NONE);
 Logger.initializeGlobalLogger(logger);
 initLib(logger);
 
@@ -99,7 +111,15 @@ process.stdout.on('error', (error) => {
 	}
 });
 
-application.start(process.argv).catch(error => {
+const startup = headlessConfig ? application.startHeadless(process.argv, headlessConfig) : application.start(process.argv);
+startup.then(() => {
+	if (headlessConfig) process.exit(0);
+}).catch(error => {
+	if (headlessConfig) {
+		headlessConfig.databaseKey.fill(0);
+		console.error('Headless client failed. Check the key, SQLCipher build, dedicated profile, API port and configuration. No payload diagnostics were logged.');
+		process.exit(1);
+	}
 	if (error.code === 'flagError') {
 		console.error(error.message);
 		console.error(_('Type `joplin help` for usage information.'));

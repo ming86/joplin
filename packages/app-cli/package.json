@@ -6,6 +6,8 @@
   "private": true,
   "scripts": {
     "test": "jest --verbose=false --config=jest.config.js --bail --forceExit",
+    "test-headless": "node --test tests/headless/*.test.cjs",
+    "test-headless-native": "JOPLIN_TEST_SQLITE_MODULE=sqlite3 node --test tests/headless/native.test.cjs",
     "test-one": "jest --verbose=false --config=jest.config.js --bail --forceExit",
     "test-ci": "jest --config=jest.config.js --forceExit --testPathIgnorePatterns=cli-integration-tests.test",
     "build": "gulp build",

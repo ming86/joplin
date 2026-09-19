@@ -130,6 +130,7 @@ export default class BaseApplication {
 		await ResourceService.instance().cancelTimers();
 		await EmbeddingIndexer.instance().stopRunInBackground();
 		await reg.cancelTimers();
+		await this.onServicesStopped();
 
 		this.eventEmitter_.removeAllListeners();
 		KvStore.destroyInstance();
@@ -151,6 +152,18 @@ export default class BaseApplication {
 		appLogger.info('Base application terminated...');
 		this.eventEmitter_ = null;
 		this.decryptionWorker_resourceMetadataButNotBlobDecrypted = null;
+	}
+
+	protected async onServicesStopped() {
+		// Subclasses can flush persistent state after workers stop, before model reset.
+	}
+
+	protected createDatabaseDriver() {
+		return new DatabaseDriverNode();
+	}
+
+	protected backgroundServicesEnabled() {
+		return this.hasGui();
 	}
 
 	public logger(): LoggerWrapper {
@@ -425,7 +438,7 @@ export default class BaseApplication {
 					ids: loadedMasterKeyIds,
 				});
 
-				if (this.hasGui()) {
+				if (this.backgroundServicesEnabled()) {
 					void DecryptionWorker.instance().scheduleStart();
 
 					// Schedule a sync operation so that items that need to be encrypted
@@ -435,7 +448,7 @@ export default class BaseApplication {
 			},
 
 			'sync.interval': async () => {
-				if (this.hasGui()) reg.setupRecurrentSync();
+				if (this.backgroundServicesEnabled()) reg.setupRecurrentSync();
 			},
 
 			'ai.enabled': async () => {
@@ -488,7 +501,7 @@ export default class BaseApplication {
 		await reduxSharedMiddleware(store, next, action, ((action: any) => { this.dispatch(action); }) as any);
 		const newState = store.getState() as State;
 
-		if (this.hasGui() && ['NOTE_UPDATE_ONE', 'NOTE_DELETE', 'FOLDER_UPDATE_ONE', 'FOLDER_DELETE'].indexOf(action.type) >= 0) {
+		if (this.backgroundServicesEnabled() && ['NOTE_UPDATE_ONE', 'NOTE_DELETE', 'FOLDER_UPDATE_ONE', 'FOLDER_DELETE'].indexOf(action.type) >= 0) {
 			if (!(await reg.syncTarget().syncStarted())) void reg.scheduleSync(reg.syncAsYouTypeInterval(), { syncSteps: Synchronizer.partialSyncSteps });
 			SearchEngine.instance().scheduleSyncTables();
 		}
@@ -612,11 +625,11 @@ export default class BaseApplication {
 			doRefreshFolders = 'now';
 		}
 
-		if (this.hasGui() && action.type === 'SYNC_GOT_ENCRYPTED_ITEM') {
+		if (this.backgroundServicesEnabled() && action.type === 'SYNC_GOT_ENCRYPTED_ITEM') {
 			void DecryptionWorker.instance().scheduleStart();
 		}
 
-		if (this.hasGui() && action.type === 'SYNC_CREATED_OR_UPDATED_RESOURCE') {
+		if (this.backgroundServicesEnabled() && action.type === 'SYNC_CREATED_OR_UPDATED_RESOURCE') {
 			void ResourceFetcher.instance().autoAddResources();
 		}
 
@@ -811,7 +824,7 @@ export default class BaseApplication {
 		appLogger.info(`Profile directory: ${profileDir}`);
 		appLogger.info(`Root profile directory: ${rootProfileDir}`);
 
-		this.database_ = new JoplinDatabase(new DatabaseDriverNode());
+		this.database_ = new JoplinDatabase(this.createDatabaseDriver());
 		this.database_.setLogExcludedQueryTypes(['SELECT']);
 		this.database_.setLogger(globalLogger);
 
@@ -900,12 +913,16 @@ export default class BaseApplication {
 		if (isSubProfile) Setting.setValue('welcome.enabled', false);
 
 		if (!Setting.value('api.token')) {
-			void EncryptionService.instance()
-				.generateApiToken()
-			// eslint-disable-next-line promise/prefer-await-to-then -- Old code before rule was applied
-				.then((token: string) => {
-					Setting.setValue('api.token', token);
-				});
+			if (Setting.value('isHeadless')) {
+				Setting.setValue('api.token', await EncryptionService.instance().generateApiToken());
+			} else {
+				void EncryptionService.instance()
+					.generateApiToken()
+				// eslint-disable-next-line promise/prefer-await-to-then -- Old code before rule was applied
+					.then((token: string) => {
+						Setting.setValue('api.token', token);
+					});
+			}
 		}
 
 		time.setDateFormat(Setting.value('dateFormat'));

@@ -141,7 +141,7 @@ export default class ClipperServer {
 		return inUse ? port : 0;
 	}
 
-	public async start() {
+	public async start(options: { returnWhenListening?: boolean } = {}) {
 		if (!this.enabled()) throw new Error('Cannot start clipper server because it is disabled');
 
 		this.setPort(null);
@@ -156,6 +156,7 @@ export default class ClipperServer {
 		} catch (error) {
 			this.setStartState(StartState.Idle);
 			this.logger().error(error);
+			if (options.returnWhenListening) throw error;
 			return null;
 		}
 
@@ -220,6 +221,11 @@ export default class ClipperServer {
 
 			const url = urlParser.parse(request.url, true);
 
+			if (Setting.value('isHeadless') && isPairingPath(url.pathname)) {
+				writeResponse(403, { error: 'Pairing is disabled for headless profiles. Provision the private API token out of band.' });
+				return;
+			}
+
 			if (request.method !== 'OPTIONS' && isPairingPath(url.pathname) && !isAllowedPairingOrigin(request.headers.origin)) {
 				this.logger().warn(`Rejected pairing request from disallowed origin: ${request.headers.origin}`);
 				writeResponse(403, { error: 'This endpoint cannot be called from a web page' });
@@ -281,18 +287,37 @@ export default class ClipperServer {
 
 		this.logger().info(`Starting Clipper server on port ${this.port_}`);
 
-		this.server_.listen(this.port_, '127.0.0.1');
+		try {
+			await new Promise<void>((resolve, reject) => {
+				this.server_.once('error', reject);
+				this.server_.listen(this.port_, '127.0.0.1', () => {
+					this.server_.removeListener('error', reject);
+					resolve();
+				});
+			});
+		} catch (error) {
+			this.setStartState(StartState.Idle);
+			this.setPort(null);
+			throw error;
+		}
 
 		this.setStartState(StartState.Started);
+		if (options.returnWhenListening) return;
 
 		// We return an empty promise that never resolves so that it's possible to `await` the server indefinitely.
 		// This is used only in command-server.js
 		return new Promise(() => {});
 	}
 
-	public async stop() {
+	public async stop(options: { graceful?: boolean } = {}) {
 		if (this.server_) {
-			this.server_.destroy();
+			if (options.graceful && this.server_.listening) {
+				await new Promise<void>((resolve, reject) => {
+					this.server_.close(error => error ? reject(error) : resolve());
+				});
+			} else {
+				this.server_.destroy();
+			}
 			this.server_ = null;
 		}
 

@@ -2121,8 +2121,9 @@ const builtInMetadata = (Setting: typeof SettingType) => {
 			value: null as string|null,
 			type: SettingItemType.String,
 			public: false,
-			storage: SettingStorage.File,
-			isGlobal: true,
+			storage: Setting.value('isHeadless') ? SettingStorage.Database : SettingStorage.File,
+			isGlobal: !Setting.value('isHeadless'),
+			secure: Setting.value('isHeadless'),
 		},
 		'api.port': {
 			value: null as number|null,

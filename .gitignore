@@ -118,6 +118,7 @@ packages/app-cli/app/command-rmbook.js
 packages/app-cli/app/command-rmnote.test.js
 packages/app-cli/app/command-rmnote.js
 packages/app-cli/app/command-search.js
+packages/app-cli/app/command-serve.js
 packages/app-cli/app/command-server.js
 packages/app-cli/app/command-set.test.js
 packages/app-cli/app/command-set.js
@@ -140,6 +141,11 @@ packages/app-cli/app/gui/NoteListWidget.js
 packages/app-cli/app/gui/NoteMetadataWidget.js
 packages/app-cli/app/gui/NoteWidget.js
 packages/app-cli/app/gui/StatusBarWidget.js
+packages/app-cli/app/headless/DatabaseDriver.js
+packages/app-cli/app/headless/config.js
+packages/app-cli/app/headless/profile.js
+packages/app-cli/app/headless/runService.js
+packages/app-cli/app/headless/sqlCipher.js
 packages/app-cli/app/help-utils.js
 packages/app-cli/app/services/plugins/PluginRunner.js
 packages/app-cli/app/setupCommand.js

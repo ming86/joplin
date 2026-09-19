@@ -19,6 +19,15 @@ import { FolderEntity, NoteEntity } from '@joplin/lib/services/database/types';
 import initializeCommandService from './utils/initializeCommandService';
 import { cliUtils } from './cli-utils';
 import Cache from '@joplin/lib/Cache';
+import * as locker from 'proper-lockfile';
+import Logger from '@joplin/utils/Logger';
+import ClipperServer from '@joplin/lib/ClipperServer';
+import DecryptionWorker from '@joplin/lib/services/DecryptionWorker';
+import SearchEngine from '@joplin/lib/services/search/SearchEngine';
+import { HeadlessConfig, headlessArgv } from './headless/config';
+import HeadlessDatabaseDriver from './headless/DatabaseDriver';
+import { createProfileDirectory, prepareProfile } from './headless/profile';
+import { runService } from './headless/runService';
 
 type FolderOrNoteType = ModelType.Note | ModelType.Folder | 'folderOrNote';
 
@@ -34,6 +43,75 @@ export class Application extends BaseApplication {
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Dynamic GUI type with many optional methods
 	private gui_: any = null;
 	private cache_ = new Cache();
+	private headlessConfig_: HeadlessConfig | null = null;
+	private headlessInitialized_ = false;
+	private headlessBackground_ = false;
+	private headlessStop_: Promise<void> | null = null;
+
+	protected override createDatabaseDriver() {
+		return this.headlessConfig_ ? new HeadlessDatabaseDriver(this.headlessConfig_.databaseKey) : super.createDatabaseDriver();
+	}
+
+	protected override backgroundServicesEnabled() {
+		return this.headlessBackground_ || super.backgroundServicesEnabled();
+	}
+
+	protected override async onServicesStopped() {
+		if (!this.headlessConfig_) return;
+		await Setting.saveAll();
+		Setting.cancelScheduleSave();
+		await this.database_.close();
+	}
+
+	private async stopHeadless() {
+		if (!this.headlessInitialized_) return;
+		if (!this.headlessStop_) {
+			this.headlessStop_ = (async () => {
+				this.headlessBackground_ = false;
+				await ClipperServer.instance().stop({ graceful: true });
+				const syncTimersStopped = reg.cancelTimers();
+				if (await reg.syncTarget().syncStarted()) {
+					const synchronizer = await reg.syncTarget().synchronizer();
+					await synchronizer.cancel();
+					await synchronizer.waitForSyncToFinish();
+				}
+				await syncTimersStopped;
+				this.deinitRedux();
+				await super.destroy();
+				this.headlessInitialized_ = false;
+			})();
+		}
+		await this.headlessStop_;
+	}
+
+	public async runHeadlessService() {
+		if (!this.headlessConfig_) throw new Error('serve requires JOPLIN_HEADLESS=1 and an encrypted profile.');
+		const clipper = ClipperServer.instance();
+		const logger = new Logger();
+		logger.setLevel(Logger.LEVEL_NONE);
+		clipper.setLogger(logger);
+		clipper.initialize();
+		clipper.setDispatch(action => this.dispatch(action));
+		await runService({
+			start: async () => {
+				this.headlessBackground_ = true;
+				await this.applySettingsSideEffects();
+				await DecryptionWorker.instance().scheduleStart();
+				await SearchEngine.instance().syncTables();
+				ResourceService.runInBackground();
+				RevisionService.instance().runInBackground();
+				await Setting.saveAll();
+				await clipper.start({ returnWhenListening: true });
+				void reg.scheduleSync(0).catch(() => { this.stdout('headless: sync scheduling failed'); });
+			},
+			stop: () => this.stopHeadless(),
+			ready: () => this.stdout('headless: private API ready; synchronization and decryption may still be pending'),
+			timedOut: () => {
+				this.stdout('headless: shutdown timed out; exiting without claiming a clean checkpoint');
+				process.exit(1);
+			},
+		});
+	}
 
 	public gui() {
 		return this.gui_;
@@ -383,14 +461,50 @@ export class Application extends BaseApplication {
 		return argv.indexOf('version') < 0;
 	}
 
+	public async startHeadless(argv: string[], config: HeadlessConfig) {
+		this.headlessConfig_ = config;
+		await this.start(argv);
+	}
+
 	public async start(argv: string[]) {
+		const headlessConfig = this.headlessConfig_;
+		let release: (()=> Promise<void>) | undefined;
+		let completed = false;
+		try {
+			if (headlessConfig) {
+				process.umask(0o077);
+				headlessConfig.profileDir = await createProfileDirectory(headlessConfig.profileDir);
+				release = await locker.lock(headlessConfig.profileDir, {
+					retries: 0,
+					stale: 30000,
+					update: 10000,
+					onCompromised: () => {
+						console.error('Headless profile lease lost; stopping immediately.');
+						process.exit(1);
+					},
+				});
+				await prepareProfile(headlessConfig.profileDir);
+				argv = headlessArgv(argv, headlessConfig);
+			}
+			await this.startImpl(argv);
+			completed = true;
+		} finally {
+			headlessConfig?.databaseKey.fill(0);
+			await this.stopHeadless();
+			// A partially initialized application exits in main.js; keep its lease until exit.
+			if (release && (completed || !this.database_)) await release();
+		}
+	}
+
+	private async startImpl(argv: string[]) {
 		// TODO: Currently, `pluginAssetDir` needs to be set differently for each platform and requires
 		// a call to Setting.setConstant. Ideally, this would be done in a way that requires users to
 		// set this constant on startup.
 		Setting.setConstant('pluginAssetDir', `${dirname(require.resolve('@joplin/renderer'))}/assets`);
 
-		const keychainEnabled = this.checkIfKeychainEnabled(argv);
-		argv = await super.start(argv, { keychainEnabled });
+		const keychainEnabled = !this.headlessConfig_ && this.checkIfKeychainEnabled(argv);
+		argv = await super.start(argv, { keychainEnabled, setupGlobalLogger: !this.headlessConfig_ });
+		this.headlessInitialized_ = !!this.headlessConfig_;
 
 		cliUtils.setStdout((object: string) => {
 			return this.stdout(object);
@@ -419,6 +533,7 @@ export class Application extends BaseApplication {
 			try {
 				await this.execCommand(argv);
 			} catch (error) {
+				if (this.headlessConfig_) throw error;
 				if (this.showStackTraces_) {
 					console.error(error);
 				} else {
@@ -427,6 +542,8 @@ export class Application extends BaseApplication {
 				}
 				process.exit(1);
 			}
+
+			if (this.headlessConfig_) return;
 
 			await Setting.saveAll();
 			await this.database_.close();
