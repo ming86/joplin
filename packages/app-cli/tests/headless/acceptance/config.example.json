@@ -1,0 +1,14 @@
+{
+  "headlessCli": "/work/joplin/packages/app-cli/build/main.js",
+  "stockCli": "/work/joplin-stock/packages/app-cli/build/main.js",
+  "sqliteModule": "/opt/headless-native/node_modules/sqlite3",
+  "headlessProfile": "/private/stopped-headless-test-profile",
+  "stockProfile": "/private/stopped-stock-test-profile",
+  "databaseKeyFile": "/run/secrets/existing-headless-database-key.hex",
+  "expectedServerUrl": "https://YOUR-TEST-JOPLIN-SERVER",
+  "expectedUsername": "YOUR-EXISTING-TEST-ACCOUNT",
+  "workDir": "/private/new-acceptance-run",
+  "allowTestAccountWrites": true,
+  "sourcesStopped": true,
+  "timeoutMs": 900000
+}

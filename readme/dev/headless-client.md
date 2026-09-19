@@ -142,3 +142,11 @@ On 2026-09-19, Linux/Node 22.16.0 ran 25 isolated tests: **24 passed, 1 explicit
 The sandbox could not resolve the npm registry. An immutable Yarn install completed resolution but stalled during fetching and was stopped. Therefore the selected workspace dependencies, its pinned TypeScript 5.9.3 compiler, the native SQLCipher binding and actual Joplin runtime were not available. Full build/lint, SQLCipher positive operation, live E2EE sync, actual API authorization and actual `proper-lockfile` multi-process integration were **not run**. The ordinary-SQLite refusal test does not establish that the SQLCipher-positive path works.
 
 `yarn updateIgnored` was attempted but could not run without Yarn's installed-workspace state. The six new generated-JavaScript paths were added narrowly to both generated ignore blocks; regenerate and check those blocks in the normal build environment. No compiled Joplin files or dependencies are shipped by this commit.
+
+## Follow-up: supplied build evidence and autonomous acceptance
+
+The subsequent `chatgpt-phase1-unblock.zip` report supplies a passing Linux ARM64 SQLCipher 4.10.0/native gate, a full workspace/CLI build after two compiler corrections, real private API/restart/token-persistence tests, and a two-way E2EE round trip with the stock CLI. These are builder-supplied results, not additional sandbox reruns. The two exact compiler corrections are incorporated in this continuation.
+
+The supplied E2EE round trip used one-shot headless `sync` and `e2ee decrypt` with `serve` stopped. It does not establish autonomous background operation. The remaining executable gate is documented in [the acceptance runner](../../packages/app-cli/tests/headless/acceptance/README.md). It keeps `serve` running, injects a server outage, and restores a complete profile containing an unsynchronized canary. It reuses copies of the existing test profiles and does not reset their encryption keys.
+
+A cancellation regression test also exposed a shared registry timer that remained active after cancellation completed. The continuation clears that polling interval on completion; the test demonstrates the original failure and the corrected behavior. This is a shutdown resource fix, not a claim that a live continuous-service test has passed.
