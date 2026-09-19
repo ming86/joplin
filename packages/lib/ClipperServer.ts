@@ -302,7 +302,7 @@ export default class ClipperServer {
 		}
 
 		this.setStartState(StartState.Started);
-		if (options.returnWhenListening) return;
+		if (options.returnWhenListening) return undefined;
 
 		// We return an empty promise that never resolves so that it's possible to `await` the server indefinitely.
 		// This is used only in command-server.js

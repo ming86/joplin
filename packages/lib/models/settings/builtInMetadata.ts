@@ -57,6 +57,7 @@ export enum SurveyProgress {
 const builtInMetadata = (Setting: typeof SettingType) => {
 	const platform = shim.platformName();
 	const mobilePlatform = shim.mobilePlatform();
+	const isHeadless = Setting.constants_.isHeadless;
 
 	let wysiwygYes = '';
 	let wysiwygNo = '';
@@ -2121,9 +2122,9 @@ const builtInMetadata = (Setting: typeof SettingType) => {
 			value: null as string|null,
 			type: SettingItemType.String,
 			public: false,
-			storage: Setting.value('isHeadless') ? SettingStorage.Database : SettingStorage.File,
-			isGlobal: !Setting.value('isHeadless'),
-			secure: Setting.value('isHeadless'),
+			storage: isHeadless ? SettingStorage.Database : SettingStorage.File,
+			isGlobal: !isHeadless,
+			secure: isHeadless,
 		},
 		'api.port': {
 			value: null as number|null,
