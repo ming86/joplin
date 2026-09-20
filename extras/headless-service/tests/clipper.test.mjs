@@ -124,3 +124,15 @@ test('browser client binds immutable operation fields and uses no cookies or aut
 	}); assert.deepEqual(sent, value); assert.equal(result.noteId, op);
 	await assert.rejects(request('https://remote.test/', token, 'v1/clips', value, async () => new Response('failure', { status: 503 })));
 });
+
+test('a failed verification read after an ambiguous create still reports outcome unknown', async () => {
+	const s = setup();
+	let attempted = false;
+	const oldRead = s.backend.getClipRecord;
+	s.backend.getClipRecord = async (...args) => {
+		if (attempted) throw new ServiceError('backend_unavailable');
+		return oldRead(...args);
+	};
+	s.backend.createClipRecord = async () => { attempted = true; throw new ServiceError('write_outcome_unknown', true); };
+	await assert.rejects(s.service.submit(input()), { code: 'clip_outcome_unknown', outcomeUnknown: true });
+});

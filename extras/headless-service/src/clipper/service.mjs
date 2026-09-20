@@ -62,8 +62,13 @@ export function createClipService({ accountId, namespace, notebookIds, backend }
 					await backend.createClipRecord({ id, parent_id: input.notebookId, title: input.title, body, source: receipt, source_url: input.sourceUrl }, signal);
 				} catch (error) {
 					if (!signal?.aborted) {
-						const observed = await existing(id, receipt, input.notebookId, signal);
-						if (observed) return observed;
+						try {
+							const observed = await existing(id, receipt, input.notebookId, signal);
+							if (observed) return observed;
+						} catch (verificationError) {
+							if (verificationError?.code === 'clip_operation_conflict') throw verificationError;
+							// The create may have committed. A failed read cannot establish absence.
+						}
 					}
 					throw new ServiceError('clip_outcome_unknown', true);
 				}

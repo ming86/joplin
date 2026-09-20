@@ -49,6 +49,8 @@ Content-Type: application/json
 
 The service derives a note ID from account ID, stable namespace and operation ID, and writes an input fingerprint in the note's `source` property in the **same Joplin POST**. Joplin's pinned POST path with an explicit ID uses `isNew=true`, so a collision is not a PUT/update. No extra plaintext receipt database is introduced. The `source_url` property records the reviewed HTTP(S) URL; the page is never fetched by the service.
 
+A failed verification read after a possibly committed create reports an unknown outcome; it is not treated as proof that no note was created.
+
 A normal response is HTTP 201; replay is HTTP 200 with `replayed: true`. Both report `saved: local` and `synchronization: not_confirmed`, not that every other client has received it. After a lost response, retry the exact operation. The service looks up the existing receipt and returns its note ID without changing its body. Same-operation concurrent calls coalesce locally. Other processes/late commits can produce a retryable unknown result; uniqueness is anchored by the explicit note ID, not a distributed exactly-once promise.
 
 A reused operation with different content, altered receipt, moved note, trash state, locked or encrypted-unavailable note returns conflict. It does not resurrect or overwrite that note. **Permanently purging the note also removes its receipt**; a later replay can recreate that ID. Receipts are not irrevocable audit records. Treat replay after permanent deletion or namespace changes as outside the deduplication guarantee. Stop/restart retains receipts because they live in Joplin's database.
