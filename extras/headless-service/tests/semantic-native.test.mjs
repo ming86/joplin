@@ -10,6 +10,8 @@ import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { StdioTestClient } from '../scripts/lib/stdio-client.mjs';
 import { server, readJson } from './fixtures.mjs';
+import { openMcpRuntime } from '../src/semantic/runtime.mjs';
+import { prepareSemanticCheck } from '../scripts/lib/prepare-semantic-check.mjs';
 const cli = process.env.JOPLIN_MCP_TEST_CLI;
 const sqliteModule = process.env.JOPLIN_HEADLESS_SQLITE_MODULE;
 
@@ -79,6 +81,19 @@ test('actual SQLCipher Joplin core -> HTTP fixture embeddings -> encrypted seman
 	const relevanceFile=path.join(dir,'relevance.json');fs.writeFileSync(relevanceFile,JSON.stringify({cases:[{query:'canine',expectedNoteIds:[note.id]}]}));
 	assert.ok((await script('check-semantic.mjs',[configFile,relevanceFile])).includes('PASS semantic-retrieval-check'));
 	t.diagnostic('PASS acceptance scripts exercised with real core/storage and fixture HTTP provider (not a live-model pass)');
+	const appended = await raw('/notes','POST',{parent_id:folder.id,title:'New Japanese note',body:'新しい植物の記録',markup_language:1});
+	const prep = await openMcpRuntime(configFile,{background:false});
+	try {
+		// This demonstrates why simply accepting persisted ready is insufficient.
+		assert.equal(prep.service.status().semantic.state,'ready');
+		const before = prep.service.status().semantic.indexedNotes;
+		const after = await prepareSemanticCheck(prep,10000);
+		assert.equal(after.indexedNotes,before+1);
+	} finally {await prep.close();}
+	fs.writeFileSync(relevanceFile,JSON.stringify({cases:[{query:'plants',expectedNoteIds:[appended.id],notebookId:folder.id}]}));
+	assert.ok((await script('check-semantic.mjs',[configFile,relevanceFile])).includes('PASS semantic-retrieval-check'));
+	t.diagnostic('PASS persisted-ready index reconciled newly appended note before relevance evaluation');
+
 	client=new StdioTestClient(configFile);await client.initialize();
 	await until(async()=> (await client.call('get_status')).structuredContent.semantic.state==='ready','restart failed');
 	assert.equal((await client.call('search_notes',{query:'canine',mode:'semantic'})).structuredContent.items[0].id,note.id);

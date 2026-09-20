@@ -1,0 +1,12 @@
+{
+  "accountId": "personal",
+  "baseUrl": "http://127.0.0.1:41184",
+  "apiTokenFile": "/private/joplin-api-token",
+  "clipTokenFile": "/private/clipper-token",
+  "namespace": "0123456789abcdef0123456789abcdef",
+  "notebookIds": ["0123456789abcdef0123456789abcdef"],
+  "port": 41190,
+  "publicOrigin": "https://notes.example.invalid",
+  "allowedOrigins": ["chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+  "timeoutMs": 10000
+}

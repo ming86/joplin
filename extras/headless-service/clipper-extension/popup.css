@@ -1,0 +1,5 @@
+body { font: 14px system-ui, sans-serif; width: 380px; padding: 12px; margin: 0; }
+h1 { font-size: 18px; margin-top: 0; } label { display: block; margin: 9px 0; }
+input, select, textarea { box-sizing: border-box; width: 100%; padding: 6px; font: inherit; }
+button { padding: 7px; margin: 4px 0; } .hint { font-size: 12px; overflow-wrap: anywhere; }
+#status { white-space: pre-wrap; } textarea { resize: vertical; }

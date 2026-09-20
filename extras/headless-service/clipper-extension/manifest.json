@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Joplin Headless Text Clipper",
+  "version": "0.1.0",
+  "minimum_chrome_version": "114",
+  "description": "Send selected plain text to your authenticated Joplin clipping service.",
+  "permissions": ["activeTab", "scripting", "storage"],
+  "optional_host_permissions": ["https://*/*", "http://127.0.0.1/*", "http://localhost/*"],
+  "action": { "default_title": "Clip selected text", "default_popup": "popup.html" },
+  "content_security_policy": { "extension_pages": "script-src 'self'; object-src 'none'" }
+}

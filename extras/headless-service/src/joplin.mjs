@@ -99,6 +99,24 @@ export function createJoplinClient(config) {
 	}
 
 	return Object.freeze({
+		// Reserved clipper operations, not exposed as arbitrary MCP/HTTP routes.
+		async getNotebook(id, signal) {
+			const data = await request(`folders/${identifier(id)}`, { fields: 'id,title,deleted_time' }, 'GET', undefined, signal);
+			requireValue(data && data.id === id && typeof data.title === 'string' && !data.deleted_time, 'clip_notebook_unavailable');
+			return { id: data.id, title: data.title };
+		},
+		async getClipRecord(id, signal) {
+			const data = await request(`notes/${identifier(id)}`, { fields: 'id,parent_id,source,deleted_time,encryption_applied,is_locked', include_deleted: 1, include_conflicts: 1 }, 'GET', undefined, signal);
+			requireValue(data && data.id === id && typeof data.parent_id === 'string' && typeof data.source === 'string', 'invalid_backend_response');
+			return { id: data.id, parent_id: data.parent_id, source: data.source, deleted_time: data.deleted_time, encryption_applied: data.encryption_applied, is_locked: data.is_locked };
+		},
+		async createClipRecord(input, signal) {
+			identifier(input.id); identifier(input.parent_id);
+			requireValue(typeof input.source === 'string' && /^joplin-headless-clip\/v1:[a-f0-9]{64}$/.test(input.source), 'invalid_clip_receipt');
+			const data = await request('notes', {}, 'POST', { id: input.id, parent_id: input.parent_id, title: input.title, body: input.body, source: input.source, source_url: input.source_url, markup_language: 1 }, signal);
+			if (data?.id !== input.id) throw new ServiceError('write_outcome_unknown', true);
+			return { id: data.id };
+		},
 		async listNotebooks(options, signal) {
 			return pageResult(await request('folders', { ...pagination(options), fields: 'id,title,parent_id' }, 'GET', undefined, signal), data => {
 				requireValue(data && /^[a-f0-9]{32}$/.test(data.id) && typeof data.title === 'string', 'invalid_backend_response');
