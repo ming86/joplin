@@ -5,7 +5,9 @@
 import { readFile } from '../src/mcp/config.mjs';
 import { ServiceError, requireValue, identifier } from '../src/errors.mjs';
 import { StdioTestClient } from './lib/stdio-client.mjs';
-let client;
+import { openMcpRuntime } from '../src/semantic/runtime.mjs';
+import { prepareSemanticCheck } from './lib/prepare-semantic-check.mjs';
+let client; let preparation;
 try {
 	if (process.argv.length!==4) throw new ServiceError('usage_node_check_semantic_mjs_mcp_config_relevance_cases');
 	const cases = JSON.parse(readFile(process.argv[3],65536,false));
@@ -15,15 +17,10 @@ try {
 		c.expectedNoteIds.forEach(identifier);if(c.notebookId)identifier(c.notebookId);
 	}
 	const waitMs=cases.waitMs??120000;requireValue(Number.isSafeInteger(waitMs)&&waitMs>0&&waitMs<=3600000,'invalid_wait_limit');
+	preparation = await openMcpRuntime(process.argv[2], { background: false });
+	const state = await prepareSemanticCheck(preparation, waitMs);
+	await preparation.close(); preparation = undefined;
 	client=new StdioTestClient(process.argv[2],undefined,{timeoutMs:120000});await client.initialize();
-	const end=Date.now()+waitMs;let state;
-	while(Date.now()<end) {
-		const r=await client.call('get_status');requireValue(!r.isError,'semantic_status_failed');state=r.structuredContent.semantic;
-		if(state.state==='unavailable')throw new ServiceError('semantic_unavailable');
-		if(state.state==='ready')break;
-		await new Promise(r=>setTimeout(r,500));
-	}
-	requireValue(state?.state==='ready','index_not_ready_before_deadline');
 	const results=[];
 	for(const [i,c] of cases.cases.entries()) {
 		const start=Date.now();const r=await client.call('search_notes',{query:c.query,mode:'semantic',limit:10,...(c.notebookId?{notebookId:c.notebookId}:{})});
@@ -36,4 +33,4 @@ try {
 	await client.close();requireValue(client.child.exitCode===0,'mcp_shutdown_failed');
 	console.log('PASS semantic-retrieval-check');
 } catch(error) { console.error(error instanceof ServiceError?error.code:'semantic_check_failed');process.exitCode=1; }
-finally {await client?.close();}
+finally {await client?.close(); await preparation?.close();}
