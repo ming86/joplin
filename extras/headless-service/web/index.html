@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#173c47"><title>Joplin Web</title>
+<link rel="manifest" href="/manifest.webmanifest"><link rel="icon" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/icon-192.png"><link rel="stylesheet" href="/app.css">
+<script type="module" src="/app.mjs"></script>
+</head>
+<body>
+<header><div><strong>Joplin <span>Web</span></strong><small>A thin client for your notes</small></div><div class="header-actions"><span id="connection" role="status">Connecting…</span><button id="install" hidden>Install</button><button id="logout" hidden>Sign out</button></div></header>
+<p id="offline" class="notice" hidden>You are offline. Keep this page open to retain unsaved work; nothing is queued for background saving.</p>
+<section id="login-panel" class="login-card" hidden>
+<p class="eyebrow">PRIVATE NOTE ACCESS</p><h1>Your notebooks, on demand.</h1>
+<p>Sign in with the separate web access key. Do not enter your Joplin password or API token.</p>
+<form id="login-form"><label for="access-key">Web access key</label><input id="access-key" type="password" autocomplete="off" required maxlength="256"><button type="submit" class="primary">Sign in</button></form>
+<p id="login-message" role="status"></p><p class="muted">Notes and drafts are not saved to browser storage. Reopening this page requires a connection.</p>
+</section>
+<main id="workspace" hidden>
+<aside class="notebooks"><div class="section-heading"><h2>Notebooks</h2><button id="refresh" title="Refresh notebooks, note list and status">Refresh</button></div><label for="notebook">Browse notebook</label><select id="notebook"><option value="">All notebooks</option></select><button id="more-notebooks" hidden>More notebooks</button><button id="new-note" class="primary">New Markdown note</button><p class="muted">Only the selected note is loaded in full. Images and attachments are not fetched by this reader.</p><p id="service-status" class="muted"></p></aside>
+<section class="note-list"><h2>Notes</h2><form id="search-form"><label for="query">Search</label><input id="query" type="search" maxlength="10000" placeholder="Keywords or a description"><div class="row"><select id="mode" aria-label="Search mode"><option value="keyword">Keyword</option><option value="hybrid">Hybrid</option><option value="semantic">Semantic</option></select><button type="submit">Search</button><button type="button" id="clear-search">Clear</button></div></form><p id="search-status" class="muted" role="status"></p><div id="notes" aria-label="Note results"></div><div class="row pagination"><button id="previous" disabled>Previous</button><span id="page-number">Page 1</span><button id="next" disabled>Next</button></div></section>
+<section class="reader"><div id="empty" class="empty"><h1>Choose a note.</h1><p>Browse a notebook or search across your collection.</p></div><div id="document" hidden>
+<div class="section-heading"><p id="format" class="eyebrow"></p><span id="draft-status" class="muted"></span></div><label for="title">Title</label><input id="title" maxlength="1024"><div class="toolbar"><button id="save" class="primary">Save</button><button id="preview-button">Refresh preview</button><button id="compare">Compare latest</button><button id="reload">Reload note</button><button id="copy-draft">Copy draft</button><button id="discard">Discard draft</button></div>
+<p id="save-status" class="notice" role="status"></p>
+<label for="body">Source</label><textarea id="body" spellcheck="false" aria-describedby="retention"></textarea>
+<p id="retention" class="muted">Unsaved work stays in this page only. Closing, reloading or a browser crash can lose it. A local save does not confirm synchronization.</p>
+<details id="comparison" hidden><summary>Latest saved version — your draft is unchanged</summary><h3 id="latest-title"></h3><pre id="latest-body"></pre><button id="rebase">Use this revision as the draft’s new base</button></details>
+<details open class="preview"><summary>Read preview</summary><iframe id="preview" title="Inert note preview" sandbox="" referrerpolicy="no-referrer"></iframe></details>
+</div></section>
+</main>
+<footer>Online, server-backed access · No full notebook download · No automatic retry</footer>
+</body></html>

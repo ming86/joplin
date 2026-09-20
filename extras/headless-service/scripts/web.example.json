@@ -1,0 +1,9 @@
+{
+  "accountConfigFile": "/private/mcp-account.json",
+  "webTokenFile": "/private/web-token",
+  "namespace": "REPLACE_WITH_ONE_STABLE_RANDOM_32_HEX_VALUE",
+  "port": 4120,
+  "publicOrigin": "http://127.0.0.1:4120",
+  "stdio": false,
+  "sessionMs": 3600000
+}

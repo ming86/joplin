@@ -99,6 +99,20 @@ export function createJoplinClient(config) {
 	}
 
 	return Object.freeze({
+		// Metadata-only browser enumeration. Body retrieval remains an explicit operation.
+		async listNoteSummaries(options = {}, signal) {
+			const { notebookId, ...page } = options;
+			const route = notebookId ? `folders/${identifier(notebookId)}/notes` : 'notes';
+			return pageResult(await request(route, { ...pagination(page), order_by: 'id', order_dir: 'ASC', fields: noteFields.split(',').filter(f => f !== 'body').join(',') }, 'GET', undefined, signal), noteResult);
+		},
+		async createWebPlaceholder(input, signal) {
+			identifier(input.id); identifier(input.parentId);
+			requireValue(/^joplin-headless-web\/v1:[a-f0-9]{64}$/.test(input.receipt), 'invalid_web_receipt');
+			// POST /notes can download media. Never submit user Markdown to that route.
+			const data = await request('notes', {}, 'POST', { id: input.id, parent_id: input.parentId, title: '[Pending web note]', body: '', source: input.receipt, markup_language: 1 }, signal);
+			if (data?.id !== input.id) throw new ServiceError('write_outcome_unknown', true);
+			return { id: data.id };
+		},
 		// Reserved clipper operations, not exposed as arbitrary MCP/HTTP routes.
 		async getNotebook(id, signal) {
 			const data = await request(`folders/${identifier(id)}`, { fields: 'id,title,deleted_time' }, 'GET', undefined, signal);

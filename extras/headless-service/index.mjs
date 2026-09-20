@@ -101,6 +101,13 @@ export function createAccountRegistry(configurations, factories = {}) {
 					permit('read'); const result = await backend().listNotes(options, signal);
 					return { ...result, items: result.items.filter(eligible).map(identity) };
 				},
+				async listNoteSummaries(options, signal) {
+					permit('read'); const result = await backend().listNoteSummaries(options, signal);
+					return { ...result, items: result.items.filter(eligible).map(identity) };
+				},
+				async getNotebook(id, signal) { permit('read'); return backend().getNotebook(id, signal); },
+				async getWebCreationRecord(id, signal) { permit('write'); return backend().getClipRecord(id, signal); },
+				async createWebPlaceholder(input, signal) { permit('write'); return backend().createWebPlaceholder(input, signal); },
 				async getNote(id, signal) { permit('read'); return readable(await backend().getNote(id, signal)); },
 				async createNote(input, signal) { permit('write'); return identity(await backend().createNote(input, signal)); },
 				async updateNote(id, input, signal) {

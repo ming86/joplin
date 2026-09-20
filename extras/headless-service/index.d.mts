@@ -61,6 +61,8 @@ export interface Note {
     is_locked?: number;
 }
 export interface Notebook { id: string; title: string; parent_id: string; }
+export interface WebCreationRecord { id: string; parent_id: string; source: string; deleted_time?: number; encryption_applied?: number; is_locked?: number; }
+export interface WebPlaceholder { id: string; parentId: string; receipt: string; }
 export interface PageOptions { page?: number; limit?: number; }
 export interface Page<T> { items: T[]; hasMore: boolean; }
 export interface NewNote { parentId: string; title: string; body: string; }
@@ -69,6 +71,10 @@ export interface Change { id: number; itemId: string; itemType?: number; type: n
 export interface JoplinBackend {
     listNotebooks(options?: PageOptions, signal?: AbortSignal): Promise<Page<Notebook>>;
     listNotes(options?: PageOptions, signal?: AbortSignal): Promise<Page<Note>>;
+    listNoteSummaries?(options?: PageOptions & { notebookId?: string }, signal?: AbortSignal): Promise<Page<Note>>;
+    getNotebook?(id: string, signal?: AbortSignal): Promise<{ id: string; title: string }>;
+    getClipRecord?(id: string, signal?: AbortSignal): Promise<WebCreationRecord>;
+    createWebPlaceholder?(input: WebPlaceholder, signal?: AbortSignal): Promise<{ id: string }>;
     listIndexNotes?(options?: PageOptions, signal?: AbortSignal): Promise<Page<Note>>;
     getNote(id: string, signal?: AbortSignal): Promise<Note>;
     createNote(input: NewNote, signal?: AbortSignal): Promise<Note>;
@@ -96,6 +102,10 @@ export interface AccountService {
     status(): { accountId: string; semantic: SemanticStatus };
     listNotebooks(options?: PageOptions, signal?: AbortSignal): Promise<Page<Notebook & { accountId: string }>>;
     listNotes(options?: PageOptions, signal?: AbortSignal): Promise<Page<AccountNote>>;
+    listNoteSummaries(options?: PageOptions & { notebookId?: string }, signal?: AbortSignal): Promise<Page<AccountNote>>;
+    getNotebook(id: string, signal?: AbortSignal): Promise<{ id: string; title: string }>;
+    getWebCreationRecord(id: string, signal?: AbortSignal): Promise<WebCreationRecord>;
+    createWebPlaceholder(input: WebPlaceholder, signal?: AbortSignal): Promise<{ id: string }>;
     getNote(id: string, signal?: AbortSignal): Promise<AccountNote>;
     createNote(input: NewNote, signal?: AbortSignal): Promise<AccountNote>;
     updateNote(id: string, input: NoteUpdate, signal?: AbortSignal): Promise<AccountNote>;

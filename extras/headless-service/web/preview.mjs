@@ -1,0 +1,4 @@
+// Fixed preview styling is shared with the HTTP CSP hash. Note content never
+// contributes styles; the renderer disables raw HTML and active links/images.
+export const PREVIEW_STYLE = "body{font:15px/1.6 system-ui,sans-serif;color:#253c3e;margin:20px;overflow-wrap:anywhere}pre{white-space:pre-wrap;background:#f3f5f1;padding:12px}code{font-family:monospace}table{border-collapse:collapse}td,th{padding:6px;border:1px solid #ccd8d0}.link{text-decoration:underline}.omitted{color:#677a70}blockquote{border-left:3px solid #b5c9be;margin-left:0;padding-left:15px}";
+export const previewDocument = html => `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><style>${PREVIEW_STYLE}</style></head><body>${html}</body></html>`;
