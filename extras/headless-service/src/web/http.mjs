@@ -45,7 +45,7 @@ const errorStatus = code => ({ operation_not_permitted: 403, stale_note: 409, we
 
 /** Host/Origin binding is explicit; forwarding headers never establish trust.
  * A TLS proxy must preserve Host and Origin. No API token, keys or routes are forwarded to the browser. */
-export async function startWebServer({ service, token, port = 0, publicOrigin, sessionMs = 3600000, now = Date.now }) {
+export async function startWebServer({ service, token, port = 0, publicOrigin, sessionMs = 3600000, now = Date.now, cookieScope }) {
 	requireValue(/^[A-Za-z0-9_-]{32,256}$/.test(token), 'invalid_web_token');
 	requireValue(Number.isSafeInteger(port) && port >= 0 && port <= 65535, 'invalid_web_port');
 	requireValue(Number.isSafeInteger(sessionMs) && sessionMs >= 1000 && sessionMs <= 86400000, 'invalid_session_duration');
@@ -53,8 +53,10 @@ export async function startWebServer({ service, token, port = 0, publicOrigin, s
 	const sessions = new Map(), controllers = new Set();
 	let closing = false, attempts = 0, loginWindow = now(), requests = 0, requestWindow = now();
 	const tokenHash = digest(token);
+	requireValue(cookieScope === undefined || /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(cookieScope), 'invalid_cookie_scope');
+	const suffix = cookieScope === undefined ? '' : `_${cookieScope}`;
 	// Session cookie has no Domain and no persistent expiry. Server TTL is authoritative.
-	const cookieName = () => origin.protocol === 'https:' ? '__Host-joplin_web' : 'joplin_web_loopback';
+	const cookieName = () => (origin.protocol === 'https:' ? '__Host-joplin_web' : 'joplin_web_loopback') + suffix;
 	const cookie = value => `${cookieName()}=${value}; Path=/; HttpOnly; SameSite=Strict${origin.protocol === 'https:' ? '; Secure' : ''}${value ? '' : '; Max-Age=0'}`;
 	function session(req) {
 		const cookies = String(req.headers.cookie ?? '').split(';').map(c => c.trim()).filter(c => c.startsWith(cookieName() + '='));

@@ -1,0 +1,29 @@
+{
+  "id": "alice",
+  "accountConfigFile": "/private/alice-backend.json",
+  "core": {
+    "cliPath": "/opt/joplin/packages/app-cli/build/main.js",
+    "profilePath": "/var/lib/joplin-profiles/alice",
+    "databaseKeyFile": "/run/secrets/alice-db",
+    "sqliteModule": "/opt/joplin/packages/lib/node_modules/sqlite3"
+  },
+  "web": {
+    "webTokenFile": "/run/secrets/alice-web",
+    "namespace": "REPLACE_WITH_A_STABLE_RANDOM_32_HEX_NAMESPACE",
+    "port": 4120,
+    "publicOrigin": "http://127.0.0.1:4120",
+    "sessionMs": 3600000
+  },
+  "clipper": {
+    "clipTokenFile": "/run/secrets/alice-clip",
+    "namespace": "REPLACE_WITH_A_DIFFERENT_STABLE_32_HEX_NAMESPACE",
+    "notebookIds": ["REPLACE_WITH_AN_EXISTING_NOTEBOOK_ID"],
+    "port": 4130,
+    "allowedOrigins": []
+  },
+  "mcp": {
+    "socketPath": "/run/joplin-accounts/alice/mcp.sock",
+    "tokenFile": "/run/secrets/alice-mcp"
+  },
+  "startupTimeoutMs": 120000
+}

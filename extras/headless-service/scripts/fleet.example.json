@@ -1,0 +1,6 @@
+{
+  "runtimeDir": "/run/joplin-fleet",
+  "stateDir": "/var/lib/joplin-fleet-control",
+  "accounts": ["/private/alice.json", "/private/bob.json"],
+  "restartLimit": 3
+}

@@ -86,3 +86,13 @@ A successful `PASS phase15-account-smoke` against the real compiled core complet
 ## Phase 2B semantic retrieval
 
 Optional semantic indexing and hybrid retrieval are implemented outside the core. See [SEMANTIC.md](SEMANTIC.md) for configuration, separate encrypted storage, runtime ownership, limits and real-provider acceptance. Existing account/keyword behavior remains available without enabling it. The new native integration uses a real encrypted core and store with a fixture HTTP embedding endpoint; it does not establish model quality.
+
+## Phase 5 — managed accounts
+
+[Multi-user operation](MULTI-USER.md) adds a small Linux supervisor, separate
+account workers, a restricted core-setup wrapper, durable disable/re-enable and
+an authenticated local MCP bridge sharing the existing semantic owner. Legacy
+single-account entries remain usable. Start with `scripts/fleet.example.json`
+and `scripts/fleet-account.example.json`; use [the focused acceptance guide](CODEX-PHASE5-VALIDATION.md).
+The four user-deferred Phase 4 observations are tracked in [BACKLOG.md](BACKLOG.md),
+not treated as Phase 5 prerequisites or passed tests.

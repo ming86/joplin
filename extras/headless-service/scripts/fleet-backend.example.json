@@ -1,0 +1,8 @@
+{
+  "accountId": "alice",
+  "baseUrl": "http://127.0.0.1:41190/",
+  "apiTokenFile": "/run/secrets/alice-api",
+  "allowWrites": true,
+  "semanticDatabasePath": "/var/lib/joplin-indexes/alice/semantic.db",
+  "semanticKeyRef": "alice/semantic"
+}
