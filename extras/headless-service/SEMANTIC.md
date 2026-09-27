@@ -6,13 +6,15 @@ This increment adds a separate encrypted derived index, an OpenAI-compatible HTT
 
 ## Operational setup
 
-Start with the existing encrypted core and its private API. Copy `scripts/semantic.example.json` to a private absolute path and set the account, endpoint, existing API token file, semantic database location, SQLCipher binding and embedding deployment. The example's `bge-m3` is an operator-selected local endpoint model alias, not a downloaded model, measured winner or guarantee that a server is running. Its model revision placeholder must be replaced with the deployed revision or a deliberately versioned operator configuration when exact weights are unavailable.
+Start with the existing encrypted core and its private API. Copy `scripts/semantic.example.json` to a private absolute path and set the account, existing API token file, semantic database location, SQLCipher binding and secrets. The sample illustrates an OVMS `granite-embedding-311m-multilingual-r2` endpoint at `http://embedding-service:9000/v1` and declares a fixed 384-dimensional embedding space. Its `space.revision` is an operator version label, not a verified weights hash; change it when the served model or embedding behavior changes. The sample's `apiKeyFile` is a placeholder path for a private file containing only the raw token, without a `Bearer ` prefix. No live token is included.
+
+The sample describes one account. For multiple accounts, retain a distinct core profile, API token, semantic database path and semantic key for each account. Keep each account's index in its own derived database.
 
 Generate **a separate 32-byte random semantic DB key** as 64 hexadecimal characters plus an optional newline, and deliver it as an owner-only file (`0600`) through your existing secret-delivery mechanism. Keep this key/recovery copy separate from index backups; file permissions alone do not protect a copied key beside its DB. Do not reuse, regenerate or reset the existing Joplin E2EE identity or core database key. The MCP process needs its semantic DB key and the core API token, not the core's database or E2EE key.
 
 Set the archive's `LD_LIBRARY_PATH` as described in its `README-run.txt`. Use `semantic.sqliteModule`, or the existing `JOPLIN_HEADLESS_SQLITE_MODULE`, to identify the complete compatible SQLCipher-enabled sqlite3 Node package. There is no plaintext/native-binding fallback and no `yarn install` step.
 
-For remote inference set the desired common-API `baseUrl`, `model`, `remoteProcessing: true`, and (where needed) an `apiKeyFile` inside `semantic.embedding`. Token files are owner-only. Only explicit trusted startup configuration chooses destinations; MCP arguments cannot supply backend URLs, keys or account identities. A non-loopback endpoint requires explicit remote consent; an insecure private HTTP address additionally requires `allowInsecureHttp: true`. A loopback proxy can itself forward remotely: these declarations are operator policy, not proof of where inference happens.
+For remote inference set the desired common-API `baseUrl`, `model`, `remoteProcessing: true`, and (where needed) an `apiKeyFile` inside `semantic.embedding`. Token files are owner-only; the transport trims the file contents and sends the token as a Bearer credential. The sample opts into remote processing and insecure HTTP for its private OVMS endpoint. Only explicit trusted startup configuration chooses destinations; MCP arguments cannot supply backend URLs, keys or account identities. A non-loopback endpoint requires explicit remote consent; an insecure private HTTP address additionally requires `allowInsecureHttp: true`. A loopback proxy can itself forward remotely: these declarations are operator policy, not proof of where inference happens.
 
 Run as before:
 
@@ -32,7 +34,7 @@ The common request is `POST <baseUrl>/embeddings` with `model`, string-array `in
 
 Transport has timeouts, cancellation, bounded responses and redirect refusal. It makes one attempt per request. The indexer persists pending work and retry deadlines; provider rate-limit/outage failures pause further document work with bounded backoff and respect bounded `Retry-After`. Hybrid requests fall back to keyword search with explicit status. No query vector from an unrelated model is substituted.
 
-Endpoint hosting/credentials are operational configuration. Index identity includes the embedding space fingerprint, operator revision, dimensions, preparation/normalization, chunker settings and requested model alias. Changing one of these incompatibly requires explicit `semantic.rebuild: true`. That acknowledges replacement of this **derived index only**; Joplin notes and core DB are not touched. Once the fingerprint matches, keeping this flag true does not repeatedly rebuild on every restart. A new generation clears the old chunks/checkpoints and scans again; FTS stays available. Indexes from same-name local/cloud implementations are not asserted interchangeable.
+Endpoint hosting/credentials are operational configuration. Index identity includes the embedding space fingerprint, operator revision, dimensions, preparation/normalization, chunker settings and requested model alias. Changing one of these incompatibly requires rebuilding or replacing the derived index. An in-place rebuild uses explicit `semantic.rebuild: true` and requires the account's core API to remain available while no semantic owner uses that database. Managed fleet configs reject `rebuild: true`; a separately managed migration can use the account database while the fleet keeps the core running with that account's semantic feature disabled. Alternatively, stop the fleet and replace only the derived semantic database, as in the two-account Granite switch. Keep each account's database path and key, and migrate accounts separately. Joplin profiles, notes, core databases and E2EE identities are unchanged. Once the fingerprint matches, keeping the flag true does not repeatedly rebuild on every restart. A new generation clears the old chunks/checkpoints and scans again; FTS stays available. Indexes from same-name local/cloud implementations are not asserted interchangeable.
 
 Remote endpoints receive the prepared note chunks and queries. Local index encryption does not hide inputs from the inference service. Configure a deliberately trusted provider; do not send real notes during initial public-text transport testing.
 
@@ -66,7 +68,9 @@ Status distinguishes unavailable, indexing, ready and degraded, and includes pen
 
 ## Tests and real-provider acceptance
 
-The native tests use the real encrypted Joplin core and real SQLCipher storage, but a deterministic HTTP embedding fixture. They validate wiring/consistency/encryption, **not BGE-M3 quality or any live vendor deployment**. Existing core/MCP tests remain regressions.
+The native tests use the real encrypted Joplin core and real SQLCipher storage, but a deterministic HTTP embedding fixture. They validate wiring/consistency/encryption, not live model quality. Existing core/MCP tests remain regressions.
+
+Targeted live validation passed on base `2ba0ff820` with disposable Phase 5 fleet accounts `acct-a` and `acct-b`, using OVMS `granite-embedding-311m-multilingual-r2` at fixed 384 dimensions. The public probe returned 384-dimensional vectors for 8 requests, with synthetic top-1 results at 4/4. Indexing reached ready with 36 notes and 0 failures for `acct-a`, and 2 notes and 0 failures for `acct-b`. A known synthetic web note ranked first in semantic and hybrid search for both accounts; keyword ranked each target second, and cross-account targets were absent. Both old BGE derived databases were removed while the fleet was stopped; core profiles and keys were untouched. These results cover the tested synthetic data and account separation only, not broader model quality, production-corpus relevance or endpoint durability.
 
 First use public text only:
 
@@ -90,15 +94,14 @@ This **starts the indexer and transmits eligible configured-account notes to the
 
 Alternatively `node extras/headless-service/semantic-index.mjs /private/mcp-semantic.json` executes one bounded indexing cycle without stdio hosting. Exit 0 means ready, 2 means more indexing/degraded work, 1 is setup/runtime failure, and 130 means interrupted. Repeat only as the persisted retry timing permits, or use the normal MCP background owner. It shares the same exclusive store ownership.
 
-Finally exercise semantic/hybrid search in the chosen real MCP host. Phase 2A's already-passed read-only protocol check need not be repeated wholesale. The remaining acceptance is a live embedding deployment, representative notes/languages/long input, measured token/latency/lag, and operational semantic retrieval—not another native dependency pack. No live provider credentials or model weights were supplied for this implementation session.
+Phase 2A's already-passed read-only protocol check need not be repeated wholesale. The targeted two-account run exercised real semantic/hybrid search and indexing, but did not measure retrieval on production notes, long-input behavior, sustained latency/lag or endpoint durability.
 
 ## Primary interface references
 
-Checked 2026-09-20. Implementation uses the pinned supplied native package; it does not switch to a newly advertised release.
+Checked 2026-09-27. Implementation uses the pinned supplied native package; it does not switch to a newly advertised release.
 
 - SQLCipher keying/version/compatibility: https://www.zetetic.net/sqlcipher/sqlcipher-api/
+- OVMS embedding deployment: https://github.com/openvinotoolkit/model_server/blob/main/demos/embeddings/README.md
 - Ollama common embedding endpoint: https://docs.ollama.com/api/openai-compatibility
 - Cloudflare common API: https://developers.cloudflare.com/workers-ai/configuration/open-ai-compatibility/
-- BGE-M3 publisher's model card (dense candidate and query preparation): https://huggingface.co/BAAI/bge-m3
-
-These references establish interfaces/model documentation, not results from a model run here.
+These references establish interfaces, not results from a model run here.
