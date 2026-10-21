@@ -30,6 +30,7 @@ function configuredAccount(config) {
 	result.permissions = permissions.slice();
 	result.joplin.baseUrl = endpoint(result.joplin.baseUrl, result.joplin.allowInsecureHttp);
 	requireValue(typeof result.joplin.token === 'string' && result.joplin.token.length > 0);
+	if (result.defaultNotebookId !== undefined) requireValue(typeof result.defaultNotebookId === 'string' && /^[a-f0-9]{32}$/.test(result.defaultNotebookId));
 	result.semantic.databasePath = canonicalPlannedPath(result.semantic.databasePath);
 	if (result.embedding) {
 		result.embedding.space = embeddingSpace(result.embedding.space);
@@ -44,8 +45,15 @@ function configuredAccount(config) {
 	return result;
 }
 
+/** Notes with incomplete encryption metadata are ineligible as well. */
 function eligible(note) {
 	return note.encryption_applied === 0 && !note.deleted_time && !note.is_locked;
+}
+
+/** Return whether a value is a plain input record supplied to an account operation. */
+function inputRecord(value, code = 'invalid_input') {
+	requireValue(value && typeof value === 'object' && !Array.isArray(value), code);
+	return value;
 }
 
 /** Resolve only subjects verified by your authentication layer, never request-provided identities.
@@ -80,6 +88,14 @@ export function createAccountRegistry(configurations, factories = {}) {
 			};
 			const identity = note => ({ ...note, accountId });
 			const readable = note => { if (!eligible(note)) throw new ServiceError('note_unavailable'); return identity(note); };
+			// A missing or hidden parent folder does not make an otherwise readable note unreadable.
+			const readableNotebookTitle = async (id, signal) => {
+				try { return (await backend().getNotebook(id, signal)).title; }
+				catch (error) {
+					if (error?.code === 'not_found' || error?.code === 'clip_notebook_unavailable') return null;
+					throw error;
+				}
+			};
 			const semantic = () => {
 				if (!factories.makeSemanticBackend) return null;
 				if (!semanticBackends.has(accountId)) {
@@ -105,18 +121,174 @@ export function createAccountRegistry(configurations, factories = {}) {
 					permit('read'); const result = await backend().listNoteSummaries(options, signal);
 					return { ...result, items: result.items.filter(eligible).map(identity) };
 				},
+				/** List every readable notebook with counts from eligible note summaries. */
+				async listAllNotebooks(signal) {
+					permit('read');
+					const folders = await backend().listAllNotebooks(signal);
+					const counts = new Map(folders.map(folder => [folder.id, 0]));
+					let page = 1;
+					let hasMore = true;
+					// Count from note metadata so hidden, deleted, and encrypted items never affect output.
+					while (hasMore && page <= 50) {
+						const result = await backend().listNoteSummaries({ page, limit: 100 }, signal);
+						for (const note of result.items) {
+							if (eligible(note) && counts.has(note.parent_id)) counts.set(note.parent_id, counts.get(note.parent_id) + 1);
+						}
+						hasMore = result.hasMore;
+						page++;
+					}
+					if (hasMore) throw new ServiceError('notebook_count_incomplete');
+					return {
+						accountId,
+						notebooks: folders.map(folder => ({
+							id: folder.id,
+							title: folder.title,
+							parent_id: folder.parent_id || null,
+							note_count: counts.get(folder.id) ?? 0,
+						})),
+					};
+				},
 				async getNotebook(id, signal) { permit('read'); return backend().getNotebook(id, signal); },
+				/** Create a notebook under a verified readable parent when one is supplied. */
+				async createNotebook(input, signal) {
+					permit('write'); inputRecord(input, 'invalid_notebook_input');
+					requireValue(Object.keys(input).every(key => ['title', 'parent_id'].includes(key)), 'unsupported_notebook_property');
+					requireValue(typeof input.title === 'string' && input.title.trim().length > 0, 'invalid_notebook_input');
+					if (input.parent_id !== undefined) {
+						requireValue(typeof input.parent_id === 'string', 'invalid_notebook_input');
+						await backend().getNotebook(input.parent_id, signal);
+					}
+					return backend().createNotebook({ title: input.title.trim(), ...(input.parent_id ? { parentId: input.parent_id } : {}) }, signal);
+				},
 				async getWebCreationRecord(id, signal) { permit('write'); return backend().getClipRecord(id, signal); },
 				async createWebPlaceholder(input, signal) { permit('write'); return backend().createWebPlaceholder(input, signal); },
 				async getNote(id, signal) { permit('read'); return readable(await backend().getNote(id, signal)); },
-				async createNote(input, signal) { permit('write'); return identity(await backend().createNote(input, signal)); },
+				/** Read an eligible note with its readable notebook title and tag titles. */
+				async readNote(id, signal) {
+					permit('read');
+					const note = readable(await backend().getNote(id, signal));
+					const notebook_title = note.parent_id ? await readableNotebookTitle(note.parent_id, signal) : null;
+					const tags = await backend().getNoteTags(id, signal);
+					return { ...note, notebook_title, tags: tags.map(tag => tag.title) };
+				},
+				/** Create a note in a verified notebook, accepting both Desktop and legacy web inputs. */
+				async createNote(input, signal) {
+					permit('write'); inputRecord(input, 'invalid_note_input');
+					requireValue(Object.keys(input).every(key => ['title', 'body', 'notebook_id', 'parentId', 'is_todo'].includes(key)), 'unsupported_note_property');
+					requireValue(typeof input.title === 'string', 'invalid_note_input');
+					requireValue(input.title.trim().length > 0, 'invalid_note_input');
+					if (input.body !== undefined) requireValue(typeof input.body === 'string', 'invalid_note_input');
+					if (input.notebook_id !== undefined) requireValue(typeof input.notebook_id === 'string', 'invalid_note_input');
+					if (input.parentId !== undefined) requireValue(typeof input.parentId === 'string', 'invalid_note_input');
+					if (input.is_todo !== undefined) requireValue(typeof input.is_todo === 'boolean', 'invalid_note_input');
+					let parentId = input.notebook_id ?? input.parentId ?? config.defaultNotebookId;
+					if (parentId === undefined) {
+						const result = await backend().listNotebooks({ page: 1, limit: 2 }, signal);
+						if (result.items.length !== 1 || result.hasMore) throw new ServiceError('notebook_id_required');
+						parentId = result.items[0].id;
+					}
+					await backend().getNotebook(parentId, signal);
+					const created = await backend().createNote({
+						title: input.title,
+						body: input.body ?? '',
+						parentId,
+						is_todo: input.is_todo ? 1 : 0,
+					}, signal);
+					return { ...identity(created), notebook_id: created.parent_id };
+				},
 				async updateNote(id, input, signal) {
 					permit('write');
+					inputRecord(input, 'invalid_note_input');
+					requireValue(Object.keys(input).every(key => ['title', 'body', 'append', 'prepend', 'replace_text', 'notebook_id', 'todo_completed'].includes(key)), 'unsupported_note_property');
+					for (const key of ['title', 'body', 'append', 'prepend']) {
+						if (input[key] !== undefined) requireValue(typeof input[key] === 'string', 'invalid_note_input');
+					}
+					if (input.notebook_id !== undefined) requireValue(typeof input.notebook_id === 'string', 'invalid_note_input');
+					if (input.todo_completed !== undefined) requireValue(typeof input.todo_completed === 'boolean', 'invalid_note_input');
 					// Best-effort eligibility check, NOT a compare-and-swap or lost-update guarantee.
 					const current = await backend().getNote(id, signal);
 					if (!eligible(current)) throw new ServiceError('note_unavailable');
 					if (current.markup_language !== 1) throw new ServiceError('unsupported_note_format');
-					return identity(await backend().updateNote(id, input, signal));
+					if (input.notebook_id !== undefined) await backend().getNotebook(input.notebook_id, signal);
+					let nextBody = current.body ?? '';
+					let bodyChanged = false;
+					if (input.body !== undefined) {
+						nextBody = input.body;
+						bodyChanged = true;
+					} else {
+						if (input.prepend) { nextBody = `${input.prepend}${nextBody}`; bodyChanged = true; }
+						if (input.append) { nextBody = `${nextBody}${input.append}`; bodyChanged = true; }
+						if (input.replace_text !== undefined) {
+							inputRecord(input.replace_text, 'invalid_note_input');
+							requireValue(Object.keys(input.replace_text).every(key => ['find', 'replace'].includes(key)), 'unsupported_note_property');
+							const { find, replace } = input.replace_text;
+							requireValue(typeof find === 'string' && typeof replace === 'string', 'invalid_note_input');
+							if (!find) throw new ServiceError('replace_text_empty_find');
+							const firstIdx = nextBody.indexOf(find);
+							if (firstIdx < 0) throw new ServiceError('replace_text_not_found');
+							if (nextBody.indexOf(find, firstIdx + 1) >= 0) throw new ServiceError('replace_text_ambiguous');
+							nextBody = `${nextBody.slice(0, firstIdx)}${replace}${nextBody.slice(firstIdx + find.length)}`;
+							bodyChanged = true;
+						}
+					}
+					const patch = {
+						...(input.title !== undefined ? { title: input.title } : {}),
+						...(bodyChanged ? { body: nextBody } : {}),
+						...(input.notebook_id !== undefined ? { parentId: input.notebook_id } : {}),
+						...(input.todo_completed !== undefined ? { todo_completed: input.todo_completed ? Date.now() : 0 } : {}),
+					};
+					return identity(await backend().updateNote(id, patch, signal));
+				},
+				/** Move an eligible note to Trash after checking its current state. */
+				async deleteNote(id, signal) {
+					permit('write');
+					const current = await backend().getNote(id, signal);
+					if (!eligible(current)) throw new ServiceError('note_unavailable');
+					await backend().deleteNote(id, signal);
+					return { id, trashed: true, accountId };
+				},
+				/** Create or list safe tag assignments for one eligible note. */
+				async manageTags(input, signal) {
+					permit('write'); inputRecord(input, 'invalid_tag_input');
+					requireValue(Object.keys(input).every(key => ['note_id', 'add', 'remove'].includes(key)), 'unsupported_tag_property');
+					const noteId = input.note_id;
+					requireValue(typeof noteId === 'string', 'invalid_tag_input');
+					const add = input.add ?? [];
+					const remove = input.remove ?? [];
+					requireValue(Array.isArray(add) && add.every(value => typeof value === 'string') && Array.isArray(remove) && remove.every(value => typeof value === 'string'), 'invalid_tag_input');
+					if (!add.length && !remove.length) throw new ServiceError('tag_change_required');
+					const current = await backend().getNote(noteId, signal);
+					if (!eligible(current)) throw new ServiceError('note_unavailable');
+					const knownTags = new Map((await backend().listAllTags(signal)).map(tag => [tag.title.trim().toLowerCase(), tag]));
+					const added = [];
+					for (const title of add) {
+						const trimmed = title.trim();
+						if (!trimmed) continue;
+						const key = trimmed.toLowerCase();
+						let tag = knownTags.get(key);
+						if (!tag) {
+							tag = await backend().createTag(trimmed, signal);
+							knownTags.set(tag.title.trim().toLowerCase(), tag);
+						}
+						await backend().addTagToNote(tag.id, noteId, signal);
+						added.push(trimmed);
+					}
+					const removed = [];
+					for (const title of remove) {
+						const trimmed = title.trim();
+						if (!trimmed) continue;
+						const tag = knownTags.get(trimmed.toLowerCase());
+						if (tag) {
+							await backend().removeTagFromNote(tag.id, noteId, signal);
+							removed.push(trimmed);
+						}
+					}
+					const tags = await backend().getNoteTags(noteId, signal);
+					return { note_id: noteId, added, removed, tags: tags.map(tag => tag.title) };
+				},
+				async listTags(signal) {
+					permit('read');
+					return { tags: await backend().listAllTags(signal) };
 				},
 				async search({ query, mode = 'keyword', ...options }, signal) {
 					permit('read');
@@ -128,7 +300,16 @@ export function createAccountRegistry(configurations, factories = {}) {
 					requireValue(!options.notebookId, 'notebook_filter_requires_semantic_engine');
 					if (mode === 'semantic') return { accountId, requestedMode: mode, executedMode: null, semantic: semanticStatus, items: [], hasMore: false };
 					const result = await backend().search(query, options, signal);
-					return { accountId, requestedMode: mode, executedMode: 'keyword', semantic: semanticStatus, items: result.items.filter(eligible).map(note => ({ ...identity(note), provenance: 'keyword' })), hasMore: result.hasMore };
+					const total = backend().countSearchResults ? await backend().countSearchResults(query, signal) : undefined;
+					return {
+						accountId,
+						requestedMode: mode,
+						executedMode: 'keyword',
+						semantic: semanticStatus,
+						items: result.items.filter(eligible).map(note => ({ ...identity(note), provenance: 'keyword' })),
+						hasMore: result.hasMore,
+						...(total === undefined ? {} : { total }),
+					};
 				},
 				async changes(cursor, signal) { permit('read'); return { ...await backend().changes(cursor, signal), accountId }; },
 				async embed(texts, purpose, signal) {
