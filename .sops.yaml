@@ -1,0 +1,3 @@
+creation_rules:
+  - path_regex: '^extras/cloudflare-mcp-worker/\.sops\.env$'
+    age: age15spfhqw89pcyzysude6x3ml35vqty36d7qaae288apvfrpkww95s0n9567
