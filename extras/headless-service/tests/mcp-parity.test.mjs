@@ -379,3 +379,160 @@ test('keyword search returns an exact eligible total without changing the reques
 		assert.ok(metadataPages.every(({ fields }) => !fields.split(',').includes('body')));
 	} finally { session.close(); }
 });
+
+test('real Data API tag associations accept empty success and continue duplicate, create, and remove operations', async t => {
+	const existingTag = { id: workTagId, title: 'Already attached', encryption_applied: 0 };
+	const removedTag = { id: oldTagId, title: 'Remove me', encryption_applied: 0 };
+	const tags = [existingTag, removedTag];
+	let assigned = [existingTag, removedTag];
+	let emptyCreateResponse = false;
+	const associations = [];
+	const removals = [];
+	const url = await server(t, async (req, res) => {
+		const target = new URL(req.url, 'http://localhost');
+		assert.equal(target.searchParams.get('token'), 'alice-private-token');
+		res.setHeader('Content-Type', 'application/json');
+		if (req.method === 'GET' && target.pathname === `/notes/${noteId}`) return res.end(JSON.stringify(note));
+		if (req.method === 'GET' && target.pathname === '/tags') return res.end(JSON.stringify({ items: tags, has_more: false }));
+		if (req.method === 'GET' && target.pathname === `/notes/${noteId}/tags`) {
+			return res.end(JSON.stringify({ items: assigned, has_more: false }));
+		}
+		if (req.method === 'POST' && target.pathname === '/tags') {
+			const body = await readJson(req);
+			if (emptyCreateResponse) return res.end();
+			const tag = { id: newTagId, title: body.title, encryption_applied: 0 };
+			tags.push(tag);
+			return res.end(JSON.stringify(tag));
+		}
+		const association = target.pathname.match(/^\/tags\/([a-f0-9]{32})\/notes$/);
+		if (req.method === 'POST' && association) {
+			const body = await readJson(req);
+			assert.equal(body.id, noteId);
+			associations.push(association[1]);
+			const tag = tags.find(item => item.id === association[1]);
+			if (!assigned.some(item => item.id === tag.id)) assigned = [...assigned, tag];
+			return res.end(); // Joplin returns an empty 200 for an idempotent association.
+		}
+		const removal = target.pathname.match(/^\/tags\/([a-f0-9]{32})\/notes\/([a-f0-9]{32})$/);
+		if (req.method === 'DELETE' && removal) {
+			removals.push(removal[1]);
+			assigned = assigned.filter(item => item.id !== removal[1]);
+			return res.end();
+		}
+		res.writeHead(404); return res.end('{}');
+	});
+	const config = account(); config.joplin.baseUrl = url;
+	const service = createAccountRegistry([config]).forPrincipal(config.id, config.id);
+	const session = createMcpSession(service, { allowWrites: true });
+	await ready(session);
+	try {
+		const result = (await invoke(session, 'manage_tags', {
+			note_id: noteId,
+			add: ['Already attached', 'New tag', 'New tag'],
+			remove: ['Remove me'],
+		})).structuredContent;
+		assert.deepEqual(associations, [workTagId, newTagId, newTagId]);
+		assert.deepEqual(removals, [oldTagId], 'the removal still runs after empty association responses');
+		assert.deepEqual(result.added, ['Already attached', 'New tag', 'New tag']);
+		assert.deepEqual(result.removed, ['Remove me']);
+		assert.deepEqual(result.tags, ['Already attached', 'New tag']);
+
+		emptyCreateResponse = true;
+		const failed = await invoke(session, 'manage_tags', { note_id: noteId, add: ['Tag with empty entity response'] }, 3);
+		assertToolError(failed, 'write_outcome_unknown');
+		assert.deepEqual(associations, [workTagId, newTagId, newTagId], 'an empty tag-creation entity is still an unknown write outcome');
+		assert.deepEqual(removals, [oldTagId]);
+	} finally { session.close(); }
+});
+
+test('notebook note counts include page 50 when the complete 5000-note page reports more', async () => {
+	const b = backend();
+	const pages = [];
+	b.listAllNotebooks = async () => [{ id: folderId, title: 'Large notebook', parent_id: null }];
+	b.listNoteSummaries = async ({ page, limit }) => {
+		pages.push({ page, limit });
+		const items = page <= 50
+			? Array.from({ length: 100 }, (_, index) => ({
+				...note,
+				id: (page * 100 + index).toString(16).padStart(32, '0'),
+				parent_id: folderId,
+			}))
+			: [];
+		return { items, hasMore: page <= 50 };
+	};
+	const session = createSession(b, account(), { allowWrites: false });
+	await ready(session);
+	try {
+		const notebooks = (await invoke(session, 'list_notebooks')).structuredContent.notebooks;
+		assert.equal(notebooks[0].note_count, 5000);
+		assert.deepEqual(pages[49], { page: 50, limit: 100 });
+		assert.deepEqual(pages[50], { page: 51, limit: 100 });
+		assert.equal(pages.length, 51, 'the empty final page ends the scan after the full 5000-note page');
+	} finally { session.close(); }
+});
+
+test('title-only note creation scans past filtered notebooks and rejects multiple readable choices', async t => {
+	const encryptedId = '1'.repeat(32);
+	const deletedId = '2'.repeat(32);
+	const safeId = '3'.repeat(32);
+	const secondSafeId = '4'.repeat(32);
+	let ambiguous = false;
+	const folderPages = [];
+	const createdBodies = [];
+	const url = await server(t, async (req, res) => {
+		const target = new URL(req.url, 'http://localhost');
+		assert.equal(target.searchParams.get('token'), 'alice-private-token');
+		res.setHeader('Content-Type', 'application/json');
+		if (req.method === 'GET' && target.pathname === '/folders') {
+			const page = Number(target.searchParams.get('page'));
+			assert.equal(Number(target.searchParams.get('limit')), 2);
+			folderPages.push({ page, ambiguous });
+			if (ambiguous) {
+				return res.end(JSON.stringify({ items: [
+					{ id: safeId, title: 'First readable', parent_id: '', encryption_applied: 0, deleted_time: 0 },
+					{ id: secondSafeId, title: 'Second readable', parent_id: '', encryption_applied: 0, deleted_time: 0 },
+				], has_more: false }));
+			}
+			if (page === 1) {
+				return res.end(JSON.stringify({ items: [
+					{ id: encryptedId, title: 'Encrypted', parent_id: '', encryption_applied: 1, deleted_time: 0 },
+					{ id: deletedId, title: 'Deleted', parent_id: '', encryption_applied: 0, deleted_time: 1 },
+				], has_more: true }));
+			}
+			return res.end(JSON.stringify({ items: [
+				{ id: safeId, title: 'Only readable', parent_id: '', encryption_applied: 0, deleted_time: 0 },
+			], has_more: false }));
+		}
+		if (req.method === 'GET' && target.pathname === `/folders/${safeId}`) {
+			return res.end(JSON.stringify({ id: safeId, title: 'Only readable', parent_id: '', encryption_applied: 0, deleted_time: 0 }));
+		}
+		if (req.method === 'POST' && target.pathname === '/notes') {
+			const body = await readJson(req);
+			createdBodies.push(body);
+			return res.end(JSON.stringify({
+				...note,
+				parent_id: body.parent_id,
+				title: body.title,
+				body: body.body,
+				is_todo: body.is_todo,
+			}));
+		}
+		res.writeHead(404); return res.end('{}');
+	});
+	const config = account(); config.joplin.baseUrl = url;
+	const service = createAccountRegistry([config]).forPrincipal(config.id, config.id);
+	const session = createMcpSession(service, { allowWrites: true });
+	await ready(session);
+	try {
+		const created = (await invoke(session, 'create_note', { title: 'Find the only readable notebook' })).structuredContent;
+		assert.equal(created.notebook_id, safeId);
+		assert.equal(createdBodies[0].parent_id, safeId);
+		assert.deepEqual(folderPages.slice(0, 2), [{ page: 1, ambiguous: false }, { page: 2, ambiguous: false }]);
+
+		ambiguous = true;
+		const rejected = await invoke(session, 'create_note', { title: 'Two readable notebooks' }, 3);
+		assertToolError(rejected, 'notebook_id_required');
+		assert.equal(createdBodies.length, 1, 'ambiguous fallback does not create a note');
+		assert.deepEqual(folderPages.at(-1), { page: 1, ambiguous: true });
+	} finally { session.close(); }
+});
