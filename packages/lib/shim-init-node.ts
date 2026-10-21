@@ -742,10 +742,14 @@ function shimInit(options: ShimInitOptions = null) {
 	}
 
 	shim.httpAgents = () => {
+		// shimInit runs before settings are loaded, so read the connection limit when the agent is used.
+		const Setting = require('./models/Setting').default;
+		const maxSockets = Setting.value('isHeadless') ? Setting.value('sync.maxConcurrentConnections') : 1;
+
 		if (!shim.httpAgent_) {
 			const AgentSettings = {
 				keepAlive: true,
-				maxSockets: 1,
+				maxSockets,
 				keepAliveMsecs: 5000,
 				ecdhCurve: tlsEcdhCurve,
 			};
@@ -753,6 +757,10 @@ function shimInit(options: ShimInitOptions = null) {
 				http: new http.Agent(AgentSettings),
 				https: new https.Agent(AgentSettings),
 			};
+		} else {
+			// Fetch requests reuse these agents, so keep their limits current after settings change.
+			shim.httpAgent_.http.maxSockets = maxSockets;
+			shim.httpAgent_.https.maxSockets = maxSockets;
 		}
 		return shim.httpAgent_;
 	};
