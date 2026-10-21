@@ -59,6 +59,10 @@ docs/**/*.mustache
 *_LOCAL_*.js
 *_REMOTE_*.js
 
+# Local working artifacts; keep the Desktop MCP parity handoff in version control.
+/chatgpt-work/*
+!/chatgpt-work/DESKTOP-MCP-PARITY-HANDOFF.md
+
 # Yarn stuff
 # https://yarnpkg.com/getting-started/qa#which-files-should-be-gitignored
 
