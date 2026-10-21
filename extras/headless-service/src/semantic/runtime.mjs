@@ -10,8 +10,14 @@ import { chunkSettings } from './chunks.mjs';
 
 // Optional semantic ownership is in the surrounding application, not the CLI.
 // A configured but locked/missing store reports unavailable; FTS remains usable.
-export async function openMcpRuntime(filename, { background = true } = {}) {
-	const loaded = loadMcpConfig(filename);
+/**
+ * Open the configured MCP service and optional semantic engine.
+ * @param {string} filename Absolute path to the JSON configuration file.
+ * @param {{background?: boolean, transport?: 'stdio'|'http'}} [options]
+ * @returns {Promise<object>} Loaded service, runtime engine state and close function.
+ */
+export async function openMcpRuntime(filename, { background = true, transport = 'stdio' } = {}) {
+	const loaded = loadMcpConfig(filename, { transport });
 	const config = loaded.semanticConfig;
 	if (config === undefined || config.enabled === false) return { ...loaded, close: async () => {} };
 	requireValue(config && config.enabled === true && Object.keys(config).every(key => ['enabled', 'sqliteModule', 'keyFile', 'embedding', 'chunks', 'pollMs', 'rescanMs', 'batchSize', 'rebuild'].includes(key)), 'invalid_semantic_configuration');
