@@ -129,7 +129,7 @@ export function createAccountRegistry(configurations, factories = {}) {
 					let page = 1;
 					let hasMore = true;
 					// Count from note metadata so hidden, deleted, and encrypted items never affect output.
-					while (hasMore && page <= 50) {
+					while (hasMore) {
 						const result = await backend().listNoteSummaries({ page, limit: 100 }, signal);
 						for (const note of result.items) {
 							if (eligible(note) && counts.has(note.parent_id)) counts.set(note.parent_id, counts.get(note.parent_id) + 1);
@@ -137,7 +137,6 @@ export function createAccountRegistry(configurations, factories = {}) {
 						hasMore = result.hasMore;
 						page++;
 					}
-					if (hasMore) throw new ServiceError('notebook_count_incomplete');
 					return {
 						accountId,
 						notebooks: folders.map(folder => ({
@@ -183,9 +182,22 @@ export function createAccountRegistry(configurations, factories = {}) {
 					if (input.is_todo !== undefined) requireValue(typeof input.is_todo === 'boolean', 'invalid_note_input');
 					let parentId = input.notebook_id ?? input.parentId ?? config.defaultNotebookId;
 					if (parentId === undefined) {
-						const result = await backend().listNotebooks({ page: 1, limit: 2 }, signal);
-						if (result.items.length !== 1 || result.hasMore) throw new ServiceError('notebook_id_required');
-						parentId = result.items[0].id;
+						// hasMore tracks raw folders, including folders filtered as unreadable.
+						let onlyNotebookId;
+						let notebookCount = 0;
+						let page = 1;
+						while (true) {
+							const result = await backend().listNotebooks({ page, limit: 2 }, signal);
+							for (const notebook of result.items) {
+								notebookCount++;
+								if (notebookCount > 1) throw new ServiceError('notebook_id_required');
+								onlyNotebookId = notebook.id;
+							}
+							if (!result.hasMore) break;
+							page++;
+						}
+						if (notebookCount !== 1) throw new ServiceError('notebook_id_required');
+						parentId = onlyNotebookId;
 					}
 					await backend().getNotebook(parentId, signal);
 					const created = await backend().createNote({
