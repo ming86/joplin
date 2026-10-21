@@ -1,6 +1,9 @@
 import { ServiceError, requireValue, identifier, pagination } from './errors.mjs';
 
-const noteFields = 'id,parent_id,title,body,updated_time,markup_language,encryption_applied,deleted_time,is_locked';
+/** Fields used by note reads and metadata scans. */
+const noteFields = 'id,parent_id,title,body,created_time,updated_time,is_todo,todo_completed,markup_language,encryption_applied,deleted_time,is_locked';
+/** Prevents an unexpectedly large account collection from becoming an unbounded scan. */
+const maximumPages = 50;
 
 export function endpoint(value, allowInsecureHttp = false) {
 	let url;
@@ -12,6 +15,7 @@ export function endpoint(value, allowInsecureHttp = false) {
 	return url.href;
 }
 
+/** Validates note fields and returns only the fields this adapter exposes. */
 function noteResult(data) {
 	requireValue(data && typeof data === 'object' && typeof data.id === 'string' && /^[a-f0-9]{32}$/.test(data.id), 'invalid_backend_response');
 	for (const key of noteFields.split(',')) {
@@ -28,19 +32,25 @@ function pageResult(data, map) {
 	return { items: data.items.map(map), hasMore: data.has_more };
 }
 
+/** Maps the supported note patch fields to the private Data API request shape. */
 function noteInput(input, creating) {
 	requireValue(input && typeof input === 'object' && !Array.isArray(input), 'invalid_note_input');
-	const allowed = creating ? ['title', 'body', 'parentId'] : ['title', 'body'];
+	const allowed = ['title', 'body', 'parentId', 'is_todo', 'todo_completed'];
 	requireValue(Object.keys(input).every(key => allowed.includes(key)), 'unsupported_note_property');
-	if (creating) identifier(input.parentId);
+	if (creating || Object.hasOwn(input, 'parentId')) identifier(input.parentId);
 	for (const key of ['title', 'body']) {
 		if (creating || Object.hasOwn(input, key)) requireValue(typeof input[key] === 'string', 'invalid_note_input');
 	}
 	requireValue(creating || Object.keys(input).length > 0, 'empty_note_update');
+	if (Object.hasOwn(input, 'is_todo')) requireValue(input.is_todo === 0 || input.is_todo === 1, 'invalid_note_input');
+	if (Object.hasOwn(input, 'todo_completed')) requireValue(Number.isSafeInteger(input.todo_completed) && input.todo_completed >= 0, 'invalid_note_input');
 	const result = {};
 	if ('title' in input) result.title = input.title;
 	if ('body' in input) result.body = input.body;
-	if (creating) { result.parent_id = input.parentId; result.markup_language = 1; }
+	if ('parentId' in input) result.parent_id = input.parentId;
+	if ('is_todo' in input) result.is_todo = input.is_todo;
+	if ('todo_completed' in input) result.todo_completed = input.todo_completed;
+	if (creating) { result.is_todo ??= 0; result.markup_language = 1; }
 	return result;
 }
 
@@ -54,6 +64,7 @@ export function createJoplinClient(config) {
 	requireValue(Number.isSafeInteger(timeoutMs) && timeoutMs > 0 && timeoutMs <= 120000);
 	requireValue(Number.isSafeInteger(maxResponseBytes) && maxResponseBytes > 0 && maxResponseBytes <= 128 * 1024 * 1024);
 
+	/** Sends one authenticated Data API request and preserves uncertain write outcomes. */
 	async function request(route, params = {}, method = 'GET', body, signal) {
 		const url = new URL(route, baseUrl);
 		for (const [key, value] of Object.entries(params)) url.searchParams.set(key, String(value));
@@ -90,12 +101,57 @@ export function createJoplinClient(config) {
 					}
 				} finally { reader.releaseLock(); }
 			}
+			// Joplin returns an empty 200 response for successful DELETE requests.
+			if (method === 'DELETE' && size === 0) return null;
 			return JSON.parse(Buffer.concat(parts).toString('utf8'));
 		} catch (error) {
 			if (error instanceof ServiceError) throw error;
 			// POST/PUT may have committed before transport/response parsing failed. Never retry automatically.
 			throw new ServiceError(writing ? 'write_outcome_unknown' : signal?.aborted ? 'request_cancelled' : 'backend_unavailable', writing);
 		}
+	}
+
+	/** Fetches every page of a bounded collection, failing if the page cap is reached. */
+	async function fetchAllPages(route, params, map, signal) {
+		const items = [];
+		for (let page = 1; page <= maximumPages; page++) {
+			const result = pageResult(await request(route, { ...params, limit: 100, page }, 'GET', undefined, signal), map);
+			items.push(...result.items);
+			if (!result.hasMore) return items;
+		}
+		throw new ServiceError('backend_response_truncated');
+	}
+
+	/** Validates folder fields returned by the private Data API. */
+	function notebookResult(data) {
+		requireValue(data && typeof data === 'object' && typeof data.id === 'string' && /^[a-f0-9]{32}$/.test(data.id) && typeof data.title === 'string', 'invalid_backend_response');
+		for (const key of ['parent_id', 'encryption_applied', 'deleted_time']) {
+			if (!Object.hasOwn(data, key)) continue;
+			const valid = key === 'parent_id' ? typeof data[key] === 'string' : typeof data[key] === 'number' && Number.isFinite(data[key]);
+			requireValue(valid, 'invalid_backend_response');
+		}
+		return {
+			id: data.id,
+			title: data.title,
+			parent_id: data.parent_id ?? '',
+			encryption_applied: data.encryption_applied,
+			deleted_time: data.deleted_time,
+		};
+	}
+
+	/** Validates a tag and retains its encryption state only for internal filtering. */
+	function tagResult(data) {
+		requireValue(data && typeof data === 'object' && typeof data.id === 'string' && /^[a-f0-9]{32}$/.test(data.id) && typeof data.title === 'string', 'invalid_backend_response');
+		if (Object.hasOwn(data, 'encryption_applied')) {
+			requireValue(typeof data.encryption_applied === 'number' && Number.isFinite(data.encryption_applied), 'invalid_backend_response');
+		}
+		return { id: data.id, title: data.title, encryption_applied: data.encryption_applied };
+	}
+
+	/** Includes only folders that are visible to the decrypted account view. */
+	function visibleNotebook(notebook) {
+		// Only an explicit zero proves that an E2EE-backed folder is decrypted.
+		return notebook.encryption_applied === 0 && !(notebook.deleted_time > 0);
 	}
 
 	return Object.freeze({
@@ -114,10 +170,13 @@ export function createJoplinClient(config) {
 			return { id: data.id };
 		},
 		// Reserved clipper operations, not exposed as arbitrary MCP/HTTP routes.
+		/** Reads an available notebook, retaining the legacy clipper error for unsafe folders. */
 		async getNotebook(id, signal) {
-			const data = await request(`folders/${identifier(id)}`, { fields: 'id,title,deleted_time' }, 'GET', undefined, signal);
-			requireValue(data && data.id === id && typeof data.title === 'string' && !data.deleted_time, 'clip_notebook_unavailable');
-			return { id: data.id, title: data.title };
+			const data = await request(`folders/${identifier(id)}`, { fields: 'id,title,parent_id,encryption_applied,deleted_time' }, 'GET', undefined, signal);
+			let notebook;
+			try { notebook = notebookResult(data); } catch { throw new ServiceError('clip_notebook_unavailable'); }
+			requireValue(notebook.id === id && visibleNotebook(notebook), 'clip_notebook_unavailable');
+			return { id: notebook.id, title: notebook.title, parent_id: notebook.parent_id || null };
 		},
 		async getClipRecord(id, signal) {
 			const data = await request(`notes/${identifier(id)}`, { fields: 'id,parent_id,source,deleted_time,encryption_applied,is_locked', include_deleted: 1, include_conflicts: 1 }, 'GET', undefined, signal);
@@ -131,14 +190,20 @@ export function createJoplinClient(config) {
 			if (data?.id !== input.id) throw new ServiceError('write_outcome_unknown', true);
 			return { id: data.id };
 		},
+		/** Lists one page of available notebooks, omitting encrypted and deleted folders. */
 		async listNotebooks(options, signal) {
-			return pageResult(await request('folders', { ...pagination(options), fields: 'id,title,parent_id' }, 'GET', undefined, signal), data => {
-				requireValue(data && /^[a-f0-9]{32}$/.test(data.id) && typeof data.title === 'string', 'invalid_backend_response');
-				return { id: data.id, title: data.title, parent_id: data.parent_id ?? '' };
-			});
+			const result = pageResult(await request('folders', { ...pagination(options), fields: 'id,title,parent_id,encryption_applied,deleted_time' }, 'GET', undefined, signal), notebookResult);
+			return { ...result, items: result.items.filter(visibleNotebook).map(({ id, title, parent_id }) => ({ id, title, parent_id })) };
 		},
-		async listNotes(options, signal) {
-			return pageResult(await request('notes', { ...pagination(options), order_by: 'id', order_dir: 'ASC', fields: noteFields }, 'GET', undefined, signal), noteResult);
+		/** Lists all visible notebooks without exposing encryption or deletion metadata. */
+		async listAllNotebooks(signal) {
+			const notebooks = await fetchAllPages('folders', { fields: 'id,title,parent_id,encryption_applied,deleted_time' }, notebookResult, signal);
+			return notebooks.filter(visibleNotebook).map(({ id, title, parent_id }) => ({ id, title, parent_id: parent_id || null }));
+		},
+		async listNotes(options = {}, signal) {
+			const { notebookId, ...page } = options;
+			const route = notebookId ? `folders/${identifier(notebookId)}/notes` : 'notes';
+			return pageResult(await request(route, { ...pagination(page), order_by: 'id', order_dir: 'ASC', fields: noteFields }, 'GET', undefined, signal), noteResult);
 		},
 		async listIndexNotes(options, signal) {
 			// Metadata-only enumeration avoids accumulating many large bodies in one response.
@@ -147,17 +212,95 @@ export function createJoplinClient(config) {
 		async getNote(id, signal) {
 			return noteResult(await request(`notes/${identifier(id)}`, { fields: noteFields }, 'GET', undefined, signal));
 		},
+		/** Creates a note without passing user Markdown through the media-extracting POST route. */
 		async createNote(input, signal) {
-			const data = await request('notes', {}, 'POST', noteInput(input, true), signal);
-			try { return noteResult(data); } catch { throw new ServiceError('write_outcome_unknown', true); }
+			const postBody = noteInput(input, true);
+			const body = postBody.body;
+			if (body) postBody.body = '';
+			const created = await request('notes', {}, 'POST', postBody, signal);
+			try {
+				identifier(created?.id);
+				const data = body ? await request(`notes/${created.id}`, {}, 'PUT', { body }, signal) : created;
+				return noteResult(data);
+			} catch {
+				// A successful POST may already have created the note; never conceal that uncertain outcome.
+				throw new ServiceError('write_outcome_unknown', true);
+			}
 		},
+		/** Applies a partial note update, including notebook moves and todo fields. */
 		async updateNote(id, input, signal) {
 			const data = await request(`notes/${identifier(id)}`, {}, 'PUT', noteInput(input, false), signal);
 			try { return noteResult(data); } catch { throw new ServiceError('write_outcome_unknown', true); }
 		},
+		/** Moves a note to Joplin Trash without permanently deleting it. */
+		async deleteNote(id, signal) {
+			await request(`notes/${identifier(id)}`, {}, 'DELETE', undefined, signal);
+		},
+		/** Lists every decrypted tag attached to a note. */
+		async getNoteTags(noteId, signal) {
+			const tags = await fetchAllPages(`notes/${identifier(noteId)}/tags`, { fields: 'id,title,encryption_applied' }, tagResult, signal);
+			return tags.filter(tag => tag.encryption_applied === 0).map(({ id, title }) => ({ id, title }));
+		},
+		/** Lists every decrypted tag. */
+		async listAllTags(signal) {
+			const tags = await fetchAllPages('tags', { fields: 'id,title,encryption_applied' }, tagResult, signal);
+			return tags.filter(tag => tag.encryption_applied === 0).map(({ id, title }) => ({ id, title }));
+		},
+		/** Creates a tag and returns only its stable identity and title. */
+		async createTag(title, signal) {
+			requireValue(typeof title === 'string' && title.trim().length > 0, 'invalid_tag_input');
+			const data = await request('tags', {}, 'POST', { title }, signal);
+			try {
+				const tag = tagResult(data);
+				return { id: tag.id, title: tag.title };
+			} catch { throw new ServiceError('write_outcome_unknown', true); }
+		},
+		/** Attaches a tag to a note using Joplin's tag-to-note API route. */
+		async addTagToNote(tagId, noteId, signal) {
+			const tag = identifier(tagId);
+			const note = identifier(noteId);
+			await request(`tags/${tag}/notes`, {}, 'POST', { id: note }, signal);
+		},
+		/** Removes a tag from a note. */
+		async removeTagFromNote(tagId, noteId, signal) {
+			await request(`tags/${identifier(tagId)}/notes/${identifier(noteId)}`, {}, 'DELETE', undefined, signal);
+		},
+		/** Creates a notebook after validating its title and optional parent. */
+		async createNotebook({ title, parentId }, signal) {
+			requireValue(typeof title === 'string' && title.trim().length > 0 && title.length <= 1024, 'invalid_notebook_input');
+			if (parentId !== undefined) identifier(parentId);
+			const data = await request('folders', {}, 'POST', { title, ...(parentId ? { parent_id: parentId } : {}) }, signal);
+			try {
+				requireValue(data && typeof data.id === 'string' && /^[a-f0-9]{32}$/.test(data.id) && typeof data.title === 'string', 'invalid_backend_response');
+				if (Object.hasOwn(data, 'parent_id')) requireValue(typeof data.parent_id === 'string', 'invalid_backend_response');
+				return { id: data.id, title: data.title, parent_id: data.parent_id || null };
+			} catch { throw new ServiceError('write_outcome_unknown', true); }
+		},
 		async search(query, options, signal) {
 			requireValue(typeof query === 'string' && query.trim().length > 0 && query.length <= 10000, 'invalid_query');
 			return pageResult(await request('search', { query, ...pagination(options), type: 'note', fields: noteFields }, 'GET', undefined, signal), noteResult);
+		},
+		/** Counts all eligible keyword matches using metadata-only search pages. */
+		async countSearchResults(query, signal) {
+			requireValue(typeof query === 'string' && query.trim().length > 0 && query.length <= 10000, 'invalid_query');
+			let count = 0;
+			let page = 1;
+			let hasMore = true;
+			while (hasMore) {
+				const result = pageResult(await request('search', {
+					query,
+					type: 'note',
+					fields: 'id,encryption_applied,deleted_time,is_locked',
+					limit: 100,
+					page,
+				}, 'GET', undefined, signal), noteResult);
+				for (const note of result.items) {
+					if (note.encryption_applied === 0 && !note.deleted_time && !note.is_locked) count++;
+				}
+				hasMore = result.hasMore;
+				page++;
+			}
+			return count;
 		},
 		async changes(cursor, signal) {
 			requireValue(cursor === undefined || (typeof cursor === 'string' && /^\d+$/.test(cursor)), 'invalid_cursor');
