@@ -24,6 +24,7 @@ export async function newFileApi(id: number, options: FileApiOptions) {
 		username: () => options.username(),
 		password: () => options.password(),
 		apiKey: () => options.apiKey(),
+		hostHeader: () => id === 9 && Setting.value('isHeadless') ? Setting.value('sync.9.headlessHost') : '',
 		session: (): Session => null,
 		env: Setting.value('env'),
 	};

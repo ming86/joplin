@@ -354,6 +354,13 @@ const builtInMetadata = (Setting: typeof SettingType) => {
 			public: false,
 			storage: SettingStorage.Database,
 		},
+		// Headless private connections retain the canonical Host expected by Joplin Server.
+		'sync.9.headlessHost': {
+			value: '',
+			type: SettingItemType.String,
+			public: isHeadless,
+			storage: SettingStorage.Database,
+		},
 		'sync.9.username': {
 			value: '',
 			type: SettingItemType.String,

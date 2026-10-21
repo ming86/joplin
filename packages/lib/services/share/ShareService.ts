@@ -92,6 +92,7 @@ export default class ShareService {
 			username: () => Setting.value(`sync.${syncTargetId}.username`),
 			password: () => Setting.value(`sync.${syncTargetId}.password`),
 			apiKey: () => Setting.value(`sync.${syncTargetId}.apiKey`),
+			hostHeader: () => syncTargetId === 9 && Setting.value('isHeadless') ? Setting.value('sync.9.headlessHost') : '',
 			session: () => {
 				if (syncTargetId === 11) {
 					return {

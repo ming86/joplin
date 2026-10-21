@@ -17,6 +17,8 @@ interface Options {
 	username(): string;
 	password(): string;
 	apiKey(): string;
+	/** Optional HTTP Host for a private connection to the server's canonical host. Does not change the destination URL. */
+	hostHeader?(): string;
 	session(): Session | null;
 	env?: Env;
 }
@@ -182,6 +184,8 @@ export default class JoplinServerApi {
 
 		if (sessionId) headers['X-API-AUTH'] = sessionId;
 		headers['X-API-MIN-VERSION'] = '2.6.0'; // Need server 2.6 for new lock support
+		const hostHeader = this.options_.hostHeader?.();
+		if (hostHeader) headers.Host = hostHeader;
 
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any -- See exec_.body above
 		type FetchOptions = { headers: Record<string, string>; method: string; path?: string; body?: any; signal?: AbortSignal };
