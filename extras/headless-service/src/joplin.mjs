@@ -65,7 +65,7 @@ export function createJoplinClient(config) {
 	requireValue(Number.isSafeInteger(maxResponseBytes) && maxResponseBytes > 0 && maxResponseBytes <= 128 * 1024 * 1024);
 
 	/** Sends one authenticated Data API request and preserves uncertain write outcomes. */
-	async function request(route, params = {}, method = 'GET', body, signal) {
+	async function request(route, params = {}, method = 'GET', body, signal, { allowEmptyPost = false } = {}) {
 		const url = new URL(route, baseUrl);
 		for (const [key, value] of Object.entries(params)) url.searchParams.set(key, String(value));
 		url.searchParams.set('token', token);
@@ -101,8 +101,8 @@ export function createJoplinClient(config) {
 					}
 				} finally { reader.releaseLock(); }
 			}
-			// Joplin returns an empty 200 response for successful DELETE requests.
-			if (method === 'DELETE' && size === 0) return null;
+			// Joplin returns an empty 200 for DELETE and for duplicate tag associations.
+			if (size === 0 && (method === 'DELETE' || (method === 'POST' && allowEmptyPost))) return null;
 			return JSON.parse(Buffer.concat(parts).toString('utf8'));
 		} catch (error) {
 			if (error instanceof ServiceError) throw error;
@@ -259,7 +259,7 @@ export function createJoplinClient(config) {
 		async addTagToNote(tagId, noteId, signal) {
 			const tag = identifier(tagId);
 			const note = identifier(noteId);
-			await request(`tags/${tag}/notes`, {}, 'POST', { id: note }, signal);
+			await request(`tags/${tag}/notes`, {}, 'POST', { id: note }, signal, { allowEmptyPost: true });
 		},
 		/** Removes a tag from a note. */
 		async removeTagFromNote(tagId, noteId, signal) {
