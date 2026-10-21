@@ -15,21 +15,19 @@ The image runs as UID 1000 under `tini`. Its entrypoint selects one of two roles
 | `core [command ...]` | Runs the Joplin CLI with the persistent profile. With no command it runs `serve`; commands such as `config`, `sync`, and `e2ee` are passed to the CLI. |
 | `mcp [config-path]` | Runs the stateless HTTP MCP adapter. The default config path is `/etc/joplin-headless/mcp-http.json`. |
 
-The core and MCP adapter are separate containers in production, sharing a Podman pod and network namespace. The Data API is bound to loopback, so this lets MCP reach it at `127.0.0.1` while keeping the API private. Publish only the MCP listener; the later Quadlets will define the actual port publication and ingress.
+The core and MCP adapter run as separate containers in one rootless Podman pod and share its network namespace. The core Data API listens on port `41190`; MCP connects to `http://127.0.0.1:41190`. Keep that API private to the pod. MCP listens on port `41191` inside the pod, and the VPS publishes it only at `127.0.0.1:41191`. The existing Cloudflare Tunnel can then reach that loopback listener for the Workers VPC Service without a public sidecar hostname, tunnel ingress rule, or reverse-proxy route.
 
 This image builds the CLI dependency set for the headless API and synchronization path. It does not compile the optional Rust-based OneNote importer.
 
 ## Core profile and key
 
-Mount durable storage at `/data`; the core profile defaults to `/data/profile`. The mounted `/data` directory must be owned by container UID 1000 with mode `0700`: Joplin creates its profile lock beside the profile, so that parent directory must also be writable. This local profile contains the SQLCipher-encrypted Joplin database and is separate from the PostgreSQL data used by a Joplin Server. Other profile files, including resource files, are not necessarily covered by SQLCipher encryption. Protect and back up the whole profile as sensitive data.
+Mount durable storage at `/data`; the core profile defaults to `/data/profile`. The native Quadlet setup maps the host directory `~/.local/share/joplin-headless` to `/data`. It must be owned by container UID 1000 with mode `0700`: Joplin creates its profile lock beside the profile, so the parent directory must also be writable. This local profile contains the SQLCipher-encrypted Joplin database and is separate from the PostgreSQL data used by a Joplin Server. Other profile files, including resource files, are not necessarily covered by SQLCipher encryption. Protect and back up the whole profile as sensitive data.
 
-The core defaults to `/opt/headless-native/node_modules/sqlite3` for its native SQLite module. Supply its existing database key through `JOPLIN_HEADLESS_KEY_FILE`, which defaults to `/run/secrets/database-key`. The file must contain exactly 64 hexadecimal characters and may end with a newline. Keep it in a mode `0600` file owned by the service user, with ownership mapped to container UID 1000 for rootless Podman. The entrypoint opens it on file descriptor 3, removes the file path from its environment, and sets `JOPLIN_HEADLESS_KEY_FD=3`; the raw key is not passed in argv or an environment variable. The core needs the same key whenever it starts.
-
-SOPS with age remains the planned secret-delivery mechanism for the later deployment bootstrap. Commit real secret values only in the SOPS-encrypted `.sops.env`; never commit plaintext keys or tokens. Quadlets and the secret bootstrap are not included yet.
+The core defaults to `/opt/headless-native/node_modules/sqlite3` for its native SQLite module. Supply its database key through `JOPLIN_HEADLESS_KEY_FILE`, which defaults to `/run/secrets/database-key`. The file must contain exactly 64 hexadecimal characters and may end with a newline. Keep it in a mode `0600` file owned by the service user, with ownership mapped to container UID 1000 for rootless Podman. The entrypoint opens it on file descriptor 3, removes the file path from its environment, and sets `JOPLIN_HEADLESS_KEY_FD=3`; the raw key is not passed in argv or an environment variable. The core needs the same key whenever it starts. Retain the original key in the encrypted SOPS source and include it in protected backups; losing it makes the local database unreadable.
 
 ## MCP configuration
 
-Provide the MCP container with a private JSON config and private files for the core API token and MCP bearer token. Mount the config and token files owned by container UID 1000. The config must be readable by the process, and both token files must be regular files with no group or other permissions, such as mode `0600`; the MCP loader checks these token-file permissions. The config file itself can use this minimal HTTP setup:
+Provide the MCP container with a private JSON config and separate private files for the core API token and MCP bearer token. The config and token files are mounted read-only from `~/.config/joplin-headless` and owned by container UID 1000. The config must be readable by the process, and both token files must be regular files with no group or other permissions, such as mode `0600`; the MCP loader checks these token-file permissions. The config file uses this HTTP setup:
 
 ```json
 {
@@ -44,10 +42,10 @@ Provide the MCP container with a private JSON config and private files for the c
 }
 ```
 
-Set the core profile's `api.port` to a fixed port and set `baseUrl` to the same loopback port; this example uses 41190. If `api.port` is omitted, Joplin's normal port-selection behavior applies, so the example value must not be assumed to match. The MCP listener defaults to loopback, so use `0.0.0.0` inside the shared pod when the pod publishes its port. `allowedOrigins` is an exact allowlist for requests that include an `Origin` header; it does not authenticate clients. `allowWrites` defaults to false. No semantic-search configuration is required for this initial deployment path. See [MCP.md](../MCP.md) for the full transport and configuration behavior.
+Set the core profile's `api.port` to `41190` so it matches the MCP `baseUrl`. The MCP listener uses `0.0.0.0` inside the shared pod so Podman can publish its port on the VPS loopback interface. `allowedOrigins` is an exact allowlist for requests that include an `Origin` header; it does not authenticate clients. `allowWrites` is false in the generated config. No semantic-search configuration is required for this deployment. See [MCP.md](../MCP.md) for the full transport and configuration behavior.
 
 ## Health and deployment scope
 
 `GET /healthz` is an unauthenticated liveness check: HTTP 200 means the MCP listener is running. `GET /readyz` probes the configured core account and returns 503 if the API cannot respond. A ready response does not show that synchronization or decryption has completed. The image has no supervisor; each container runs one selected role.
 
-This README documents the image and role contract. Podman Quadlets, secret bootstrap, and production ingress are a later deployment phase and are not provided here.
+The container package documents the image contract. Configure service units, secret files and backups for the deployment environment.
