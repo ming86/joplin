@@ -37,6 +37,16 @@ test('requires valid initialization and ready notification; rejects second initi
 	assert.equal((await s.handle(request(3, 'initialize'))).error.code, -32600);
 	assert.equal((await s.handle(call(4, 'get_status'))).result.structuredContent.accountId, 'alice');
 });
+test('stateless sessions serve tools without a handshake and accept independent initialization requests', async () => {
+	const s = session({ stateless: true });
+	assert.equal((await s.handle(request(2, 'tools/list'))).result.tools.length, 7);
+	assert.equal((await s.handle(call(3, 'get_status'))).result.structuredContent.accountId, 'alice');
+	assert.equal((await s.handle(initialize('2025-11-25'))).result.protocolVersion, '2025-11-25');
+	assert.equal((await s.handle(initialize('2025-06-18'))).result.protocolVersion, '2025-06-18');
+	assert.equal((await s.handle(request(4, 'initialize', {}))).error.code, -32602);
+	s.close();
+	assert.equal((await s.handle(request(5, 'tools/list'))).error.code, -32000);
+});
 test('invalid envelopes and ids; unknown methods; no response or tool execution for notifications', async () => {
 	let writes = 0; const b = backend(); b.createNote = async () => { writes++; };
 	const s = session({ allowWrites: true }, b); await ready(s);
