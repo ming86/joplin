@@ -1,0 +1,106 @@
+# Build from the repository root with this file's adjacent dockerignore.
+ARG NODE_VERSION=26.11.1
+
+FROM node:${NODE_VERSION}-trixie AS native
+
+ARG SQLCIPHER_VERSION=4.19.0
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential ca-certificates curl libssl-dev pkg-config python3 tcl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /tmp/sqlcipher
+RUN curl --fail --location --silent --show-error \
+        "https://github.com/sqlcipher/sqlcipher/archive/refs/tags/v${SQLCIPHER_VERSION}.tar.gz" \
+        | tar --extract --gzip --strip-components=1 \
+    && CFLAGS="-O2 -DSQLITE_HAS_CODEC -DSQLITE_ENABLE_FTS4 -DSQLITE_EXTRA_INIT=sqlcipher_extra_init -DSQLITE_EXTRA_SHUTDOWN=sqlcipher_extra_shutdown -DSQLCIPHER_CRYPTO_OPENSSL" \
+       LDFLAGS="-lcrypto" \
+       ./configure --prefix=/opt/sqlcipher --with-tempstore=yes \
+    && make -j2 \
+    && make install \
+    # SQLCipher 4.7+ installs libsqlite3; node-sqlite3 expects the requested library name.
+    && ln -s libsqlite3.so /opt/sqlcipher/lib/libsqlcipher.so
+
+ENV LD_LIBRARY_PATH=/opt/sqlcipher/lib
+# npm's install-script approval can skip addon hooks. Invoke this required native build explicitly.
+RUN npm install --global --no-audit --no-fund node-gyp@12.4.0 \
+    && npm install --prefix /opt/headless-native --no-audit --no-fund --ignore-scripts sqlite3@5.1.6 \
+    && cd /opt/headless-native/node_modules/sqlite3 \
+    && CPPFLAGS="-I/opt/sqlcipher/include" \
+       CXXFLAGS="-I/opt/sqlcipher/include" \
+       LDFLAGS="-L/opt/sqlcipher/lib -Wl,-rpath,/opt/sqlcipher/lib" \
+       npm_config_node_gyp=/usr/local/lib/node_modules/node-gyp/bin/node-gyp.js \
+       node ../@mapbox/node-pre-gyp/bin/node-pre-gyp rebuild \
+           --build-from-source --sqlite_libname=sqlcipher --sqlite=/opt/sqlcipher
+
+FROM native AS builder
+
+# The normal CLI dependency set includes keytar even though headless mode does not use it.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libsecret-1-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY package.json yarn.lock .yarnrc.yml tsconfig.json LICENSE ./
+COPY .yarn/releases ./.yarn/releases
+COPY .yarn/patches ./.yarn/patches
+COPY .yarn/joplin-empty-package ./.yarn/joplin-empty-package
+COPY packages/app-cli ./packages/app-cli
+COPY packages/lib ./packages/lib
+COPY packages/renderer ./packages/renderer
+COPY packages/utils ./packages/utils
+COPY packages/htmlpack ./packages/htmlpack
+COPY packages/onenote-converter ./packages/onenote-converter
+COPY packages/fork-htmlparser2 ./packages/fork-htmlparser2
+COPY packages/fork-sax ./packages/fork-sax
+COPY packages/fork-uslug ./packages/fork-uslug
+COPY packages/turndown ./packages/turndown
+COPY packages/turndown-plugin-gfm ./packages/turndown-plugin-gfm
+COPY packages/tools ./packages/tools
+
+# Some existing resolutions use the builder HOME. Keep the repository patches at that path too.
+# Disable only the root postinstall in staging so the selected workspace build is explicit.
+RUN mkdir -p /root/.yarn node_modules \
+    && cp -a .yarn/patches /root/.yarn/patches \
+    && node -e 'const fs = require("node:fs"); const p = JSON.parse(fs.readFileSync("package.json", "utf8")); delete p.scripts.postinstall; fs.writeFileSync("package.json", JSON.stringify(p, null, 2));' \
+    && ln -sf /app/.yarn/releases/yarn-4.16.0.cjs /usr/local/bin/yarn
+
+# Focus uses the committed lock without rewriting it, and installs workspace-local dependencies.
+RUN node .yarn/releases/yarn-4.16.0.cjs workspaces focus joplin @joplin/tools
+
+# The CLI's gulp copy step uses rsync on Linux.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends rsync \
+    && rm -rf /var/lib/apt/lists/*
+
+# OneNote import is outside this headless runtime; its optional Rust/Wasm build is omitted.
+RUN node .yarn/releases/yarn-4.16.0.cjs workspaces foreach --all --exclude @joplin/onenote-converter --topological-dev run build \
+    && node .yarn/releases/yarn-4.16.0.cjs workspaces foreach --all --exclude root --topological-dev run tsc \
+    # The CLI copies generated JavaScript into build/, so copy it again after TypeScript emits it.
+    && node .yarn/releases/yarn-4.16.0.cjs workspace joplin build \
+    && JOPLIN_TEST_SQLITE_MODULE=/opt/headless-native/node_modules/sqlite3 \
+       node --test packages/app-cli/tests/headless/native.test.cjs \
+    && YARN_ENABLE_SCRIPTS=false node .yarn/releases/yarn-4.16.0.cjs workspaces focus --production joplin \
+    && rm -rf .yarn/cache .yarn/berry
+
+FROM node:${NODE_VERSION}-trixie-slim AS runtime
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates libsecret-1-0 libssl3t64 tini \
+    && rm -rf /var/lib/apt/lists/* \
+    && install -d -o node -g node -m 0700 /data /data/profile /data/semantic
+
+WORKDIR /app
+COPY --from=builder /app /app
+COPY extras/headless-service ./extras/headless-service
+COPY --from=native /opt/sqlcipher /opt/sqlcipher
+COPY --from=native /tmp/sqlcipher/LICENSE.md /opt/sqlcipher/share/licenses/sqlcipher/LICENSE.md
+COPY --from=native /opt/headless-native /opt/headless-native
+COPY --chmod=0755 extras/headless-service/deploy/entrypoint.sh /usr/local/bin/joplin-headless
+
+ENV NODE_ENV=production \
+    LD_LIBRARY_PATH=/opt/sqlcipher/lib \
+    JOPLIN_HEADLESS_SQLITE_MODULE=/opt/headless-native/node_modules/sqlite3
+
+USER node
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/joplin-headless"]
+CMD ["core", "serve"]
