@@ -22,14 +22,16 @@ export function readFile(filename, maxBytes, privateMode) {
 export function loadMcpConfig(filename) {
 	const input = JSON.parse(readFile(filename, 65536, false));
 	check(input && typeof input === 'object' && !Array.isArray(input));
-	const allowed = ['accountId', 'baseUrl', 'apiTokenFile', 'allowWrites', 'semanticDatabasePath', 'semanticKeyRef', 'allowInsecureHttp', 'timeoutMs', 'semantic'];
+	const allowed = ['accountId', 'baseUrl', 'apiTokenFile', 'allowWrites', 'defaultNotebookId', 'semanticDatabasePath', 'semanticKeyRef', 'allowInsecureHttp', 'timeoutMs', 'semantic'];
 	check(Object.keys(input).every(key => allowed.includes(key)));
 	check(input.allowWrites === undefined || typeof input.allowWrites === 'boolean');
+	check(input.defaultNotebookId === undefined || (typeof input.defaultNotebookId === 'string' && /^[a-f0-9]{32}$/.test(input.defaultNotebookId)));
 	const token = readFile(input.apiTokenFile, 4096, true).trim();
 	check(token.length > 0 && !/\s/.test(token), 'invalid_api_token');
 	const config = {
 		id: input.accountId, subjects: ['local-stdio'], permissions: input.allowWrites ? ['read', 'write'] : ['read'],
 		joplin: { baseUrl: input.baseUrl, token, allowInsecureHttp: input.allowInsecureHttp, timeoutMs: input.timeoutMs },
+		...(input.defaultNotebookId ? { defaultNotebookId: input.defaultNotebookId } : {}),
 		// Reserved names only: Phase 2A neither opens this DB nor obtains its key.
 		semantic: { databasePath: input.semanticDatabasePath ?? path.join(path.dirname(filename), `${input.accountId}.semantic.sqlite`), keyRef: input.semanticKeyRef ?? `${input.accountId}/semantic` },
 	};
