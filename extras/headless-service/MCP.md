@@ -17,7 +17,7 @@ Copy `scripts/mcp.example.json` to an absolute local configuration path and chan
 }
 ```
 
-`apiTokenFile` must be an absolute path to a regular file readable by the process with no group/other permissions, for example mode `0600`. It contains the existing API token with an optional trailing newline. Supply it from an appropriate runtime secret source; a permission-protected plaintext file is not itself encryption. Keep it outside published artifacts/backups. The JSON contains no raw token and need not be encrypted. Optional settings: `timeoutMs` (default 10,000, up to 120,000), `allowInsecureHttp` for a deliberately trusted private HTTP route, and the reserved `semanticDatabasePath`/`semanticKeyRef`. Phase 2A never opens that semantic path or obtains its key.
+`apiTokenFile` must be an absolute path to a regular file readable by the process with no group/other permissions, for example mode `0600`. It contains the existing API token with an optional trailing newline. Supply it from an appropriate runtime secret source; a permission-protected plaintext file is not itself encryption. Keep it outside published artifacts/backups. The JSON contains no raw token and need not be encrypted. Optional settings: `timeoutMs` (default 10,000, up to 120,000), `allowInsecureHttp` for a deliberately trusted private HTTP route, `defaultNotebookId` (a notebook ID used by `create_note` when none is supplied), and the reserved `semanticDatabasePath`/`semanticKeyRef`. Phase 2A never opens that semantic path or obtains its key.
 
 ```sh
 node /absolute/repo/extras/headless-service/mcp.mjs /absolute/private/mcp.json
@@ -39,14 +39,22 @@ Then inspect `/mcp` in Codex and ask it to list notebooks, search for a known sy
 | Tool | Behavior |
 | --- | --- |
 | `get_status` | Account ID and semantic availability. Does not claim backend health or sync completion. |
-| `list_notebooks` | Paged notebook metadata. |
+| `list_notebooks` | The complete safe notebook list, with note counts. Legacy `page`/`limit` inputs and `items`/`hasMore` output fields remain available for existing callers. |
 | `list_notes` | Paged readable notes with short previews. |
-| `search_notes` | Existing Joplin query syntax; keyword results with provenance. Semantic requests report unavailable; hybrid reports keyword fallback. |
-| `get_note` | Note metadata and a body segment. `offset`/`length` use UTF-16 code units; follow `nextOffset`. Surrogate pairs are kept intact. |
-| `create_note` | Only with `allowWrites: true`: Markdown creation in an existing notebook. |
-| `update_note` | Only with `allowWrites: true`: supplied title/body fields of an existing eligible Markdown note. |
+| `search_notes` | Joplin query syntax, including `notebook:`, `tag:`, `title:`, `body:`, `any:`, `type:`, `iscompleted:`, `created:`, `updated:`, `due:`, `sourceurl:`, and `resource:` filters. Combine filters with spaces and prefix a filter with `-` to negate it. Returns a snippet window up to 240 characters around the first non-filter keyword; ellipses mark omitted text. The optional `mode` supports the existing `keyword`, `semantic`, and `hybrid` behavior. |
+| `read_note` (`get_note` alias) | Note body and metadata including `notebook_id`, `notebook_title`, `tags`, `is_todo`, `todo_completed`, `created_time`, `updated_time`, `body_length`, `body_offset`, `body_returned_chars`, and `has_more`. `offset` uses UTF-16 code units. Omitted or `0` `max_chars` defaults to 16,000 code units; legacy `length` remains accepted from 1 to 65,536. Surrogate pairs are kept intact. |
+| `create_note` | Only with `allowWrites: true`: creates a Markdown note, optionally with a body and to-do state. The notebook can come from `notebook_id`, legacy `parentId`, `defaultNotebookId`, or the sole readable notebook when exactly one exists. |
+| `update_note` | Only with `allowWrites: true`: partially edits an eligible Markdown note, including title/body replacement, append, prepend, one unique text replacement, notebook move, or to-do completion change. |
+| `delete_note` | Only with `allowWrites: true`: moves an eligible note to Trash. |
+| `create_notebook` | Only with `allowWrites: true`: creates a notebook, optionally under a readable parent notebook. |
+| `list_tags` | Lists readable tag IDs and titles. |
+| `manage_tags` | Only with `allowWrites: true`: adds or removes tag titles on an eligible note; adding a missing title creates that tag. |
 
-List/search default to 20 notes and accept up to 100 per page. Previews contain up to 320 UTF-16 code units. `get_note` defaults to 16,000 body code units, with a maximum requested segment of 65,536 (one extra code unit may complete a surrogate pair). Writes limit titles to 1,024 Unicode code points and bodies to 131,072, also subject to the transport frame cap. Other note formats can be read, but are not rewritten by the adapter. There are no delete, export, shell, filesystem, arbitrary-URL, plugin or administrative tools.
+The built-in keyword search returns `total` as the exact count of matching readable notes across all search pages, not the number on the returned page. The count scans note metadata and excludes encrypted, deleted, or locked notes. Existing semantic and hybrid behavior is unchanged.
+
+The catalog has nine Desktop non-semantic tools plus the headless utilities `get_status` and `list_notes`. The five write tools are omitted from `tools/list` unless `allowWrites` is true. List/search default to 20 notes and accept up to 100 per page. `list_notes` previews contain up to 320 UTF-16 code units. Writes limit titles to 1,024 Unicode code points and bodies to 131,072, also subject to the transport frame cap. Other note formats can be read, but are not rewritten by the adapter. There are no export, shell, filesystem, arbitrary-URL, plugin or administrative tools.
+
+When `create_note` receives a non-empty body, it first creates an empty note and then writes the body separately, avoiding Joplin's server-side media extraction on note creation. If the body write fails after creation, the result is `write_outcome_unknown`; the adapter does not retry automatically.
 
 The server returns JSON both in MCP text content and `structuredContent`. Tool input rejects extra fields, including `accountId`, `baseUrl`, `token` and arbitrary Joplin properties. No tool changes which account is bound. Annotations describe reads/writes but are hints, not the permission boundary.
 
@@ -62,7 +70,7 @@ Successful mutations mean **locally saved**, with `synchronization: "not_confirm
 
 The implemented subset is explicitly pinned to **2025-11-25** and **2025-06-18**: initialize/version negotiation, ready notification, ping, tools/list, tools/call, cancellation and stdio termination. An unsupported requested version receives a supported version; a client that cannot use it must disconnect. No 2026 protocol features, tasks, resources, sampling, prompts or full-spec conformance are claimed.
 
-The existing Joplin MCP class was inspected. It is tied to the internal singleton tool registry and Joplin's semantic store; importing it would bypass the external account service. The supplied locked/offline runtime also does not contain the official MCP SDK. This increment implements a small tools-only wire layer with Node built-ins rather than modifying the core or dependency baseline. Its schemas are fixed flat objects, not a reusable JSON Schema engine. Before broader protocol/remote transport support, reconsider adopting a pinned official SDK outside the CLI fork rather than expanding this layer into a general framework.
+The existing Joplin MCP class was inspected. It is tied to the internal singleton tool registry and Joplin's semantic store; importing it would bypass the external account service. The supplied locked/offline runtime also does not contain the official MCP SDK. This increment implements a small tools-only wire layer with Node built-ins rather than modifying the core or dependency baseline. Tool inputs use explicit per-tool schemas, including the nested structures currently needed by the catalog; this is not a general JSON Schema engine. Before broader protocol/remote transport support, reconsider adopting a pinned official SDK outside the CLI fork rather than expanding this layer into a general framework.
 
 Frames are bounded to 1 MiB; results to 2 MiB; queued output to 8 MiB; active tool calls to eight. Excess concurrent calls fail explicitly. Cancellation reaches the private API's AbortSignal. EOF/SIGTERM/SIGINT stop dispatch, abort pending calls and drain responses, with a five-second bound. Incomplete/invalid UTF-8 JSON frames fail without echoing input. Limits are deliberately finite; they are not an Internet-service denial-of-service guarantee.
 
