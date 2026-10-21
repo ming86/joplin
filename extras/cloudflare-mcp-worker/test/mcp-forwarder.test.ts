@@ -7,18 +7,24 @@ type RateLimitBinding = {
 };
 
 type ForwarderEnv = {
-	JOPLIN_MCP_ORIGIN_URL: string;
+	JOPLIN_MCP: Fetcher;
 	JOPLIN_MCP_BEARER_TOKEN: string;
 	MCP_RATE_LIMITER: RateLimitBinding;
 };
 
-const originalFetch = globalThis.fetch;
+/** Substitute the private service binding without changing global OAuth HTTP fetches. */
+let sidecarFetch: Fetcher['fetch'] = async () => {
+	throw new Error('Unexpected sidecar request');
+};
 const limiterInput: Array<{ key: string }> = [];
 let rateLimitSuccess = true;
 
 function makeEnv(overrides: Partial<ForwarderEnv> = {}): ForwarderEnv {
 	return {
-		JOPLIN_MCP_ORIGIN_URL: 'https://sidecar.example.test',
+		JOPLIN_MCP: {
+			fetch: (input, init) => sidecarFetch(input, init),
+			connect: () => { throw new Error('Unexpected TCP connection'); },
+		},
 		JOPLIN_MCP_BEARER_TOKEN: 'sidecar-secret',
 		MCP_RATE_LIMITER: {
 			limit: async input => {
@@ -51,7 +57,7 @@ function makeRequest(path = '/mcp', init: RequestInit = {}): Request {
 }
 
 afterEach(() => {
-	globalThis.fetch = originalFetch;
+	sidecarFetch = async () => { throw new Error('Unexpected sidecar request'); };
 	limiterInput.length = 0;
 	rateLimitSuccess = true;
 });
@@ -74,7 +80,7 @@ test('forwards only the fixed MCP request and sidecar response metadata', async 
 		},
 	});
 	const body = request.clone().text();
-	globalThis.fetch = async (input, init) => {
+	sidecarFetch = async (input, init) => {
 		fetchTarget = new URL(String(input));
 		fetchInit = init;
 		return new Response('{"jsonrpc":"2.0","id":1,"result":{}}', {
@@ -93,7 +99,7 @@ test('forwards only the fixed MCP request and sidecar response metadata', async 
 
 	const response = await mcpForwarder(request, makeEnv());
 
-	assert.equal(fetchTarget?.href, 'https://sidecar.example.test/mcp');
+	assert.equal(fetchTarget?.href, 'http://localhost:41191/mcp');
 	assert.equal(fetchInit?.method, 'POST');
 	assert.equal(fetchInit?.redirect, 'manual');
 	assert.equal(await new Response(fetchInit?.body as BodyInit).text(), await body);
@@ -122,7 +128,7 @@ test('forwards only the fixed MCP request and sidecar response metadata', async 
 
 test('rejects other paths and methods without contacting the sidecar', async () => {
 	let calls = 0;
-	globalThis.fetch = async () => {
+	sidecarFetch = async () => {
 		calls += 1;
 		return new Response('unexpected');
 	};
@@ -140,7 +146,7 @@ test('rejects other paths and methods without contacting the sidecar', async () 
 test('returns 429 when the shared account rate limit is exhausted', async () => {
 	rateLimitSuccess = false;
 	let calls = 0;
-	globalThis.fetch = async () => {
+	sidecarFetch = async () => {
 		calls += 1;
 		return new Response('unexpected');
 	};
@@ -156,7 +162,7 @@ test('returns 429 when the shared account rate limit is exhausted', async () => 
 
 test('returns a fixed 502 and does not retry a failed sidecar request', async () => {
 	let calls = 0;
-	globalThis.fetch = async () => {
+	sidecarFetch = async () => {
 		calls += 1;
 		throw new Error('sensitive upstream details');
 	};
@@ -172,7 +178,7 @@ test('returns a fixed 502 and does not retry a failed sidecar request', async ()
 test('returns the sidecar write outcome without cancelling or retrying it', async () => {
 	let calls = 0;
 	let fetchSignal: AbortSignal | undefined;
-	globalThis.fetch = async (_input, init) => {
+	sidecarFetch = async (_input, init) => {
 		calls += 1;
 		fetchSignal = init?.signal ?? undefined;
 		return new Response('{"result":{"written":true}}', { status: 201 });

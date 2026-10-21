@@ -29,12 +29,23 @@ test('runs consent, Google OIDC, OAuth PKCE and authenticated forwarding in work
 	let email = 'allowed@example.com';
 	let sidecarCalls = 0;
 	const variables = { PUBLIC_URL, ALLOWED_GOOGLE_EMAIL: email, GOOGLE_OAUTH_CLIENT_ID: CLIENT_ID,
-		GOOGLE_OAUTH_CLIENT_SECRET: 'test-google-secret', JOPLIN_MCP_ORIGIN_URL: 'https://sidecar.example.test', JOPLIN_MCP_BEARER_TOKEN: 'test-sidecar-secret' };
+		GOOGLE_OAUTH_CLIENT_SECRET: 'test-google-secret', JOPLIN_MCP_BEARER_TOKEN: 'test-sidecar-secret' };
 	const runtime = new Miniflare({ workers: [{
 		config: {
 			name: 'joplin-mcp', compatibilityDate: '2026-10-21', compatibilityFlags: ['nodejs_compat'],
 			manifest: { mainModule: 'index.js', modules: { 'index.js': { type: 'esm', contents: readFileSync('dist/index.js', 'utf8') } } },
 			env: { ...Object.fromEntries(Object.entries(variables).map(([key, value]) => [key, { type: 'text', value }])),
+				// VPC Services require remote connectivity; only this test substitutes a local fetcher.
+				JOPLIN_MCP: { type: 'fetcher', async handler(request) {
+					const url = new URL(request.url);
+					assert.equal(url.href, 'http://localhost:41191/mcp');
+					assert.equal(request.headers.get('Authorization'), 'Bearer test-sidecar-secret');
+					assert.equal(request.headers.get('Mcp-Method'), 'tools/list');
+					assert.equal(request.headers.get('MCP-Protocol-Version'), '2026-07-28');
+					assert.equal(request.headers.has('Cookie'), false);
+					sidecarCalls += 1;
+					return Response.json({ jsonrpc: '2.0', id: 1, result: { tools: [] } });
+				} },
 				OAUTH_KV: { type: 'kv', id: 'OAUTH_KV' }, MCP_RATE_LIMITER: { type: 'rate-limit', namespace: '1001', simple: { limit: 120, period: 60 } } },
 		},
 		dev: { outboundService: { type: 'fetcher', async handler(request) {
@@ -50,13 +61,7 @@ test('runs consent, Google OIDC, OAuth PKCE and authenticated forwarding in work
 					.setAudience(CLIENT_ID).setSubject('test-google-subject').setExpirationTime('5m').sign(privateKey);
 				return Response.json({ id_token: idToken });
 			}
-			assert.equal(url.href, 'https://sidecar.example.test/mcp');
-			assert.equal(request.headers.get('Authorization'), 'Bearer test-sidecar-secret');
-			assert.equal(request.headers.get('Mcp-Method'), 'tools/list');
-			assert.equal(request.headers.get('MCP-Protocol-Version'), '2026-07-28');
-			assert.equal(request.headers.has('Cookie'), false);
-			sidecarCalls += 1;
-			return Response.json({ jsonrpc: '2.0', id: 1, result: { tools: [] } });
+			throw new Error(`Unexpected public HTTP request: ${url.href}`);
 		} } },
 	}] });
 	t.after(() => runtime.dispose());
