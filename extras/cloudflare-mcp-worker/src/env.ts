@@ -6,8 +6,6 @@ export interface Bindings extends Cloudflare.Env {
 	GOOGLE_OAUTH_CLIENT_ID: string;
 	/** Google web application's OAuth client secret. */
 	GOOGLE_OAUTH_CLIENT_SECRET: string;
-	/** Fixed HTTPS origin exposing the private sidecar's /mcp route. */
-	JOPLIN_MCP_ORIGIN_URL: string;
 	/** Credential matching the sidecar HTTP server's bearer token file. */
 	JOPLIN_MCP_BEARER_TOKEN: string;
 }

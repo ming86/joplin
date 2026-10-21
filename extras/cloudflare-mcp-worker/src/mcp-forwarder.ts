@@ -1,5 +1,8 @@
 import type { Env } from './env';
 
+/** Absolute request URL; the VPC Service fixes the actual localhost host and port. */
+const MCP_ENDPOINT = 'http://localhost:41191/mcp';
+
 /** MCP headers the sidecar needs to validate and process a stateless request. */
 const REQUEST_HEADERS = [
 	'accept',
@@ -32,18 +35,6 @@ function errorResponse(status: number, message: string, headers?: HeadersInit): 
 	return new Response(JSON.stringify({ error: message }), { status, headers: responseHeaders });
 }
 
-/** Resolve only a configured HTTPS origin and always target its fixed MCP route. */
-function mcpEndpoint(configuredOrigin: string): URL | null {
-	try {
-		const origin = new URL(configuredOrigin);
-		if (origin.protocol !== 'https:' || origin.username || origin.password
-			|| origin.pathname !== '/' || origin.search || origin.hash) return null;
-		return new URL('/mcp', origin.origin);
-	} catch {
-		return null;
-	}
-}
-
 /** Copy only the MCP response metadata that is useful to its OAuth client. */
 function forwardedResponse(upstream: Response): Response {
 	const headers = new Headers();
@@ -61,7 +52,7 @@ function forwardedResponse(upstream: Response): Response {
 }
 
 /** Forward authenticated MCP POSTs to this account's private Joplin sidecar. */
-export async function mcpForwarder(request: Request, env: Pick<Env, 'MCP_RATE_LIMITER' | 'JOPLIN_MCP_ORIGIN_URL' | 'JOPLIN_MCP_BEARER_TOKEN'>): Promise<Response> {
+export async function mcpForwarder(request: Request, env: Pick<Env, 'MCP_RATE_LIMITER' | 'JOPLIN_MCP' | 'JOPLIN_MCP_BEARER_TOKEN'>): Promise<Response> {
 	const incomingUrl = new URL(request.url);
 	if (incomingUrl.pathname !== '/mcp') return errorResponse(404, 'not_found');
 	if (request.method !== 'POST') return errorResponse(405, 'method_not_allowed', { Allow: 'POST' });
@@ -74,9 +65,6 @@ export async function mcpForwarder(request: Request, env: Pick<Env, 'MCP_RATE_LI
 	}
 	if (!rateLimit.success) return errorResponse(429, 'rate_limited', { 'Retry-After': '60' });
 
-	const endpoint = mcpEndpoint(env.JOPLIN_MCP_ORIGIN_URL);
-	if (!endpoint) return errorResponse(502, 'upstream_unavailable');
-
 	const headers = new Headers();
 	for (const name of REQUEST_HEADERS) {
 		const value = request.headers.get(name);
@@ -86,11 +74,11 @@ export async function mcpForwarder(request: Request, env: Pick<Env, 'MCP_RATE_LI
 	headers.set('Authorization', `Bearer ${env.JOPLIN_MCP_BEARER_TOKEN}`);
 
 	try {
-		const upstream = await fetch(endpoint, {
+		const upstream = await env.JOPLIN_MCP.fetch(MCP_ENDPOINT, {
 			method: 'POST',
 			headers,
 			body: request.body,
-			// Keep the configured sidecar origin fixed even if it sends a redirect.
+			// Keep the private sidecar destination fixed even if it sends a redirect.
 			redirect: 'manual',
 		});
 		return forwardedResponse(upstream);

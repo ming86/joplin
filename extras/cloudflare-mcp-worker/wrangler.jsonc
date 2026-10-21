@@ -1,6 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "joplin-mcp",
+  "workers_dev": true,
   "main": "src/index.ts",
   "compatibility_date": "2026-10-21",
   "compatibility_flags": ["nodejs_compat"],
@@ -10,6 +11,9 @@
   },
   // Replace this placeholder with this Worker's own namespace before deployment.
   "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "00000000000000000000000000000000" }],
+  // Replace with the HTTP VPC Service registered for localhost:41191 through tunnel
+  // 00000000-0000-0000-0000-000000000000 before deployment.
+  "vpc_services": [{ "binding": "JOPLIN_MCP", "service_id": "00000000-0000-0000-0000-000000000000", "remote": true }],
   "ratelimits": [{ "name": "MCP_RATE_LIMITER", "namespace_id": "1001", "simple": { "limit": 120, "period": 60 } }],
   // OAuth callback URLs carry short-lived codes and state; log fixed events only.
   "observability": { "enabled": true, "head_sampling_rate": 1, "logs": { "enabled": true, "invocation_logs": false } }
