@@ -3,7 +3,7 @@ import { once } from 'node:events';
 export const noteId = 'a'.repeat(32);
 export const folderId = 'b'.repeat(32);
 export const space = { id: 'test-space-v1', revision: 'fake-weights-v1', dimensions: 2, preprocessingVersion: 'title-body-v1' };
-export const note = { id: noteId, parent_id: folderId, title: 'Test', body: 'Unicode 笔记', updated_time: 100, markup_language: 1, encryption_applied: 0, deleted_time: 0, is_locked: 0 };
+export const note = { id: noteId, parent_id: folderId, title: 'Test', body: 'Unicode 笔记', created_time: 50, updated_time: 100, is_todo: 0, todo_completed: 0, markup_language: 1, encryption_applied: 0, deleted_time: 0, is_locked: 0 };
 export function account(id = 'alice') {
 	return {
 		id, subjects: [id], permissions: ['read', 'write'],
@@ -16,10 +16,25 @@ export function backend(id = 'alice') {
 	return {
 		async getNote() { return { ...note, body: id }; },
 		async listNotes() { return { items: [{ ...note, body: id }], hasMore: false }; },
+		async listNoteSummaries() {
+			const summary = { ...note };
+			delete summary.body;
+			return { items: [summary], hasMore: false };
+		},
 		async listNotebooks() { return { items: [{ id: folderId, title: id, parent_id: '' }], hasMore: false }; },
-		async createNote(input) { return { ...note, title: input.title, body: input.body }; },
-		async updateNote(_id, input) { return { ...note, ...input }; },
+		async listAllNotebooks() { return [{ id: folderId, title: id, parent_id: null }]; },
+		async getNotebook(notebookId) { return { id: notebookId, title: notebookId === folderId ? id : 'Moved notebook', parent_id: null }; },
+		async getNoteTags() { return []; },
+		async listAllTags() { return []; },
+		async createNote(input) { return { ...note, parent_id: input.parentId, title: input.title, body: input.body, is_todo: input.is_todo }; },
+		async updateNote(_id, input) { return { ...note, ...input, parent_id: input.parentId ?? note.parent_id, updated_time: 101 }; },
+		async deleteNote() {},
+		async createNotebook(input) { return { id: 'c'.repeat(32), title: input.title, parent_id: input.parentId ?? null }; },
+		async createTag(title) { return { id: 'd'.repeat(32), title }; },
+		async addTagToNote() {},
+		async removeTagFromNote() {},
 		async search() { return { items: [{ ...note, body: id }], hasMore: false }; },
+		async countSearchResults() { return 1; },
 		async changes() { return { cursor: '1', items: [], hasMore: false }; },
 	};
 }

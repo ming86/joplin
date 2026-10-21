@@ -6,17 +6,19 @@ import { account, server, readJson, note, noteId, folderId } from './fixtures.mj
 const code = expected => error => error.code === expected;
 
 test('real loopback transport implements a Joplin-shaped read/write/search/events contract', async t => {
-	let stored = { ...note }; const seen = [];
+	let stored = { ...note }; const writes = [];
 	const url = await server(t, async (req, res) => {
-		const u = new URL(req.url, 'http://local'); seen.push([req.method, u.pathname, u.searchParams.get('token')]);
+		const u = new URL(req.url, 'http://local');
 		assert.equal(u.searchParams.get('token'), 'alice-private-token');
 		res.setHeader('Content-Type', 'application/json');
 		if (req.method === 'POST' || req.method === 'PUT') {
 			const body = await readJson(req);
+			writes.push([req.method, u.pathname, body]);
 			if (req.method === 'PUT') assert.deepEqual(Object.keys(body), ['body']);
 			stored = { ...stored, ...body }; return res.end(JSON.stringify(stored));
 		}
-		if (u.pathname === '/folders') return res.end(JSON.stringify({ items: [{ id: folderId, title: 'Notebook', parent_id: '' }], has_more: false }));
+		if (u.pathname === `/folders/${folderId}`) return res.end(JSON.stringify({ id: folderId, title: 'Notebook', parent_id: '', encryption_applied: 0, deleted_time: 0 }));
+		if (u.pathname === '/folders') return res.end(JSON.stringify({ items: [{ id: folderId, title: 'Notebook', parent_id: '', encryption_applied: 0, deleted_time: 0 }], has_more: false }));
 		if (u.pathname === '/events') return res.end(JSON.stringify({ items: [{ id: 1, item_id: noteId, item_type: 1, type: 1, created_time: 2 }], has_more: false, cursor: '1' }));
 		if (u.pathname === `/notes/${noteId}`) return res.end(JSON.stringify({ ...stored, unexpected_secret: 'not exposed' }));
 		return res.end(JSON.stringify({ items: [stored], has_more: false }));
@@ -30,7 +32,9 @@ test('real loopback transport implements a Joplin-shaped read/write/search/event
 	assert.equal((await svc.search({ query: 'updated', mode: 'hybrid' })).items[0].body, 'updated');
 	assert.equal((await svc.listNotes()).items.length, 1);
 	assert.equal((await svc.changes('0')).cursor, '1');
-	assert.equal(seen.filter(v => v[0] === 'PUT').length, 1);
+	assert.deepEqual(writes.map(([method]) => method), ['POST', 'PUT', 'PUT']);
+	assert.equal(writes[0][2].body, '', 'POST carries no user-supplied Markdown body');
+	assert.deepEqual(writes.slice(1).map(([, , body]) => body), [{ body: 'hello' }, { body: 'updated' }]);
 });
 
 test('path traversal, injected input properties and invalid pagination are rejected before sending', async t => {

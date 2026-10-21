@@ -49,9 +49,12 @@ test('invalid envelopes and ids; unknown methods; no response or tool execution 
 test('default read-only catalog, annotations and disabled-tool enforcement', async () => {
 	const s = session(); await ready(s);
 	const tools = (await s.handle(request(2, 'tools/list'))).result.tools;
-	assert.equal(tools.length, 5); assert.ok(tools.every(t => t.annotations.readOnlyHint));
+	assert.equal(tools.length, 7); assert.ok(tools.every(t => t.annotations.readOnlyHint));
+	assert.ok(tools.some(t => t.name === 'read_note'));
+	assert.ok(tools.some(t => t.name === 'list_tags'));
 	assert.equal((await s.handle(call(3, 'create_note', { parentId: folderId, title: 'x', body: 'y' }))).error.code, -32602);
-	assert.equal((await s.handle(request(4, 'tools/list', { cursor: 'bogus' }))).error.code, -32602);
+	assert.equal((await s.handle(call(4, 'delete_note', { id: noteId }))).error.code, -32602);
+	assert.equal((await s.handle(request(5, 'tools/list', { cursor: 'bogus' }))).error.code, -32602);
 });
 test('tool schemas reject account switching, arbitrary properties and invalid pagination before backend use', async () => {
 	let invoked = 0; const b = backend(); b.getNote = async () => { invoked++; throw Error('should not call'); };
@@ -133,8 +136,14 @@ test('launched MCP process uses real HTTP, survives API failure, and does not re
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-process-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
 	let posts = 0;
 	const url = await server(t, async (req, res) => {
-		assert.equal(new URL(req.url, 'http://example').searchParams.get('token'), 'test-token');
+		const target = new URL(req.url, 'http://example');
+		assert.equal(target.searchParams.get('token'), 'test-token');
 		if (req.method === 'POST') { await readJson(req); posts++; res.destroy(); return; }
+		if (req.method === 'GET' && target.pathname === `/folders/${folderId}`) {
+			res.setHeader('Content-Type', 'application/json');
+			res.end(JSON.stringify({ id: folderId, title: 'Notebook', parent_id: '', encryption_applied: 0, deleted_time: 0 }));
+			return;
+		}
 		res.writeHead(503); res.end('do not leak this private response');
 	});
 	const token = path.join(dir, 'token'); fs.writeFileSync(token, 'test-token', { mode: 0o600 });
