@@ -1,4 +1,4 @@
-import { rpcError } from './session.mjs';
+import { completeResult, modernProtocolVersion, rpcError } from './session.mjs';
 import { toolResult } from './tools.mjs';
 
 // Newline-delimited UTF-8 JSON only. Bounded framing/output and concurrent dispatch
@@ -17,7 +17,11 @@ export function serveStdio(session, { input = process.stdin, output = process.st
 		let line = `${JSON.stringify(response)}\n`;
 		if (Buffer.byteLength(line) > maxOutputBytes) {
 			const unknown = response.result?.structuredContent?.saved === 'local';
-			line = `${JSON.stringify({ jsonrpc: '2.0', id: response.id, result: toolResult({ error: { code: 'tool_response_too_large', outcomeUnknown: unknown } }, true) })}\n`;
+			const fallback = toolResult({ error: { code: 'tool_response_too_large', outcomeUnknown: unknown } }, true);
+			const result = response.result?.resultType === 'complete'
+				? completeResult(fallback, modernProtocolVersion)
+				: fallback;
+			line = `${JSON.stringify({ jsonrpc: '2.0', id: response.id, result })}\n`;
 		}
 		const size = Buffer.byteLength(line);
 		if (queuedBytes + size > maxOutputBytes * 4) { void close(true); return; }
