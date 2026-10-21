@@ -2,6 +2,8 @@
 
 This increment adds a runnable tools-only MCP adapter to the external application. It imports the accepted account interface, not Joplin internals, and does not change `packages/`, root manifests, database formats or `yarn.lock`. No package installation is needed.
 
+This section describes the original stdio transport. Stdio remains available; the stateless HTTP transport is documented below.
+
 ## Run
 
 Start the encrypted headless core using its existing profile, DB key and API token. Run this adapter in a network namespace where that private API is reachable. It does not start or stop the core and does not need the database key or E2EE password.
@@ -68,13 +70,15 @@ Successful mutations mean **locally saved**, with `synchronization: "not_confirm
 
 ## Protocol scope and maintenance
 
-The implemented subset is explicitly pinned to **2025-11-25** and **2025-06-18**: initialize/version negotiation, ready notification, ping, tools/list, tools/call, cancellation and stdio termination. An unsupported requested version receives a supported version; a client that cannot use it must disconnect. No 2026 protocol features, tasks, resources, sampling, prompts or full-spec conformance are claimed.
+The tools-only adapter supports modern **2026-07-28** requests and legacy **2025-11-25** and **2025-06-18** requests. Modern requests have no `initialize` handshake: each request carries `io.modelcontextprotocol/protocolVersion` and `io.modelcontextprotocol/clientCapabilities` in `params._meta`; an empty capabilities object is valid, and `clientInfo` is optional. Modern `server/discover` is required and reports the supported versions. Legacy stdio clients keep the existing `initialize` and `notifications/initialized` lifecycle. Successful modern results include `resultType: "complete"` and server identity in result `_meta`; `server/discover` and `tools/list` also return `ttlMs: 0` and `cacheScope: "private"`. HTTP responses retain `Cache-Control: no-store`; that header is separate from the MCP result cache hints. Modern stdio cancellation uses `notifications/cancelled` without `_meta`, aborts the matching operation and suppresses its response; legacy cancellation remains unchanged.
 
-The existing Joplin MCP class was inspected. It is tied to the internal singleton tool registry and Joplin's semantic store; importing it would bypass the external account service. The supplied locked/offline runtime also does not contain the official MCP SDK. This increment implements a small tools-only wire layer with Node built-ins rather than modifying the core or dependency baseline. Tool inputs use explicit per-tool schemas, including the nested structures currently needed by the catalog; this is not a general JSON Schema engine. Before broader protocol/remote transport support, reconsider adopting a pinned official SDK outside the CLI fork rather than expanding this layer into a general framework.
+The implemented method surface is `server/discover`, `tools/list` and `tools/call` for modern requests. Optional features such as MCP Apps, Tasks, resources, prompts, sampling and OAuth are not implemented. See the official [2026 versioning](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2026-07-28/basic/versioning.mdx), [stdio transport](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/stdio), [discovery](https://modelcontextprotocol.io/specification/2026-07-28/server/discover), [tools](https://modelcontextprotocol.io/specification/2026-07-28/server/tools), [caching](https://modelcontextprotocol.io/specification/2026-07-28/server/utilities/caching) and [Streamable HTTP](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http) pages for the protocol contract.
 
-Frames are bounded to 1 MiB; results to 2 MiB; queued output to 8 MiB; active tool calls to eight. Excess concurrent calls fail explicitly. Cancellation reaches the private API's AbortSignal. EOF/SIGTERM/SIGINT stop dispatch, abort pending calls and drain responses, with a five-second bound. Incomplete/invalid UTF-8 JSON frames fail without echoing input. Limits are deliberately finite; they are not an Internet-service denial-of-service guarantee.
+The existing Joplin MCP class was inspected. It is tied to the internal singleton tool registry and Joplin's semantic store; importing it would bypass the external account service. The supplied locked/offline runtime also does not contain the official MCP SDK. This increment implements a small tools-only wire layer with Node built-ins rather than modifying the core or dependency baseline. Tool inputs use explicit per-tool schemas, including the nested structures currently needed by the catalog; this is not a general JSON Schema engine. Before adding optional extensions or substantially broader transport behavior, reconsider adopting a pinned official SDK outside the CLI fork rather than expanding this layer into a general framework.
 
-**No network MCP listener is opened.** This is not an HTTP/OAuth gateway or a Cloudflare Worker deployment. Remote authentication, origin validation and transport behavior belong to a separately tested remote interface. A stdio configuration alone does not expose the service to hosted web clients.
+For stdio, frames are bounded to 1 MiB; results to 2 MiB; queued output to 8 MiB; active tool calls to eight. Excess concurrent calls fail explicitly. Cancellation reaches the private API's AbortSignal. EOF/SIGTERM/SIGINT stop dispatch, abort pending calls and drain responses, with a five-second bound. Incomplete/invalid UTF-8 JSON frames fail without echoing input. Limits are deliberately finite; they are not an Internet-service denial-of-service guarantee.
+
+The Phase 2A stdio launcher did not open a network MCP listener. The stateless HTTP listener documented below is a separate launcher and configuration. It is not an OAuth gateway or a Cloudflare Worker deployment.
 
 ## Tests and observations
 
@@ -114,4 +118,60 @@ The sources define protocol and host behavior; the repository tests/logs establi
 
 The Phase 2A read-only Codex CLI observation has passed; its exact report is in `evidence/2026-09-20-codex/`. The original instructions above describe the Phase 2A baseline.
 
-A configured `semantic` block now enables meaning-based and hybrid retrieval in `search_notes` and starts a per-account indexer in this process. See [SEMANTIC.md](SEMANTIC.md). This process then owns a separate SQLCipher index and its key; it still never opens the core Joplin DB or needs the core DB/E2EE keys. Unconfigured clients retain explicit semantic-unavailable behavior. No public transport or authentication scheme was added.
+A configured `semantic` block now enables meaning-based and hybrid retrieval in `search_notes` and starts a per-account indexer in this process. See [SEMANTIC.md](SEMANTIC.md). This process then owns a separate SQLCipher index and its key; it still never opens the core Joplin DB or needs the core DB/E2EE keys. Unconfigured clients retain explicit semantic-unavailable behavior. The Phase 2B semantic extension did not add a public transport or authentication scheme; the HTTP transport is documented below.
+
+## Phase 2C: stateless HTTP transport
+
+The HTTP launcher uses the same account-bound service and MCP tools as stdio, including the optional semantic runtime when configured. Each HTTP POST is handled as an independent, stateless MCP exchange; there is no server-side MCP session to resume. Stdio remains available for hosts that launch local processes.
+
+Copy `scripts/mcp-http.example.json` to an absolute private configuration path and set `accountId`, `baseUrl` and `apiTokenFile` for the existing headless core. Keep `allowWrites` false unless the operator intentionally enables mutations. The API token file and `bearerTokenFile` must both be absolute paths to private regular files with no group/other permissions, for example mode `0600`. The bearer file contains a separate MCP bearer credential, not the Joplin API token. Both files may have a trailing newline. Supply them from an appropriate runtime secret source; private plaintext files are not encryption.
+
+`listenHost` defaults to `127.0.0.1` and `listenPort` to `41191`. `allowedOrigins` defaults to `[]`; when a request supplies an `Origin` header, it must exactly match one of the configured HTTP(S) origins. Requests without an `Origin` header are allowed by this check. Origin matching is not authentication. The optional semantic settings are described in [SEMANTIC.md](SEMANTIC.md).
+
+Run the HTTP launcher with the absolute config path:
+
+```sh
+node /absolute/repo/extras/headless-service/mcp-http.mjs /absolute/private/mcp-http.json
+```
+
+### HTTP behavior
+
+| Route | Behavior |
+| --- | --- |
+| `GET /healthz` | Unauthenticated liveness check; returns `200` while the listener is running. |
+| `GET /readyz` | Unauthenticated account probe that lists at most one note summary; returns `503` if the configured account service cannot respond. |
+| `POST /mcp` | Requires `Authorization: Bearer …` and `Content-Type: application/json`. MCP clients must send `Accept: application/json, text/event-stream`. The response is always a single JSON response, never an SSE stream. |
+
+For a modern HTTP request, `params._meta` must contain the full namespaced `io.modelcontextprotocol/protocolVersion` and `io.modelcontextprotocol/clientCapabilities` keys; `{}` is valid for capabilities, and `io.modelcontextprotocol/clientInfo` is optional. `MCP-Protocol-Version` must equal the version in the body. `Mcp-Method` must equal the JSON-RPC `method`; `Mcp-Name` must equal `params.name` on `tools/call` and is omitted for `server/discover` and `tools/list`. Standard `=?base64?...?=` name values are decoded before comparison. Routing headers are also validated for the unsupported standard methods `prompts/get` (`params.name`) and `resources/read` (`params.uri`) before returning method-not-found. Missing or invalid required body metadata returns HTTP `400` with JSON-RPC `-32602`; mismatched headers return `400` with `-32020`; an unsupported version returns `400` with `-32022` and `error.data.supported`/`requested`; an unknown modern method returns `404` with `-32601`.
+
+Use this modern request shape for `server/discover`. Provide the authorization value from the private bearer-token file through the MCP client or secret provider; do not place the token in a command or log:
+
+```http
+POST /mcp
+Authorization: Bearer <contents of bearerTokenFile>
+Content-Type: application/json
+Accept: application/json, text/event-stream
+MCP-Protocol-Version: 2026-07-28
+Mcp-Method: server/discover
+
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "server/discover",
+  "params": {
+    "_meta": {
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "io.modelcontextprotocol/clientCapabilities": {},
+      "io.modelcontextprotocol/clientInfo": { "name": "example-client", "version": "1" }
+    }
+  }
+}
+```
+
+The HTTP endpoint retains the legacy 2025 request path: legacy `initialize` may omit `MCP-Protocol-Version`, while other legacy messages require a supported version header. Valid legacy notifications and JSON-RPC response messages receive HTTP `202` with no body. Modern notifications and client response messages are rejected with HTTP `400`; modern requests do not use `initialize`, `ping`, `notifications/initialized`, or a session ID. With valid bearer authentication, `GET` and `DELETE /mcp` return `405`. The endpoint provides no SSE stream or session resumption, including for legacy requests.
+
+The HTTP transport accepts request bodies up to 256 KiB, emits responses up to 2 MiB, and allows eight active MCP dispatches. A client disconnect does not cancel an already dispatched tool call, and the server does not retry it. An HTTP response lost after a write may leave the outcome unknown; inspect the note before deciding whether to retry. Modern HTTP notifications are rejected, and cancellation cannot cross requests because each POST is independent. Server shutdown aborts active tool calls and bounds draining to five seconds.
+
+The listener speaks plain HTTP and defaults to loopback. Keep the default listener private. For remote access, use an operator-managed protected TLS route; the transport does not implement OAuth or trust proxy identity headers. The bearer credential grants access to one configured operator account and does not identify an end user. Do not expose the Joplin Data API to clients.
+
+Run the focused protocol/HTTP checks with `node --test extras/headless-service/tests/mcp.test.mjs extras/headless-service/tests/mcp-http*.test.mjs extras/headless-service/tests/mcp-modern*.test.mjs`. The HTTP checks use synthetic APIs and loopback networking. No deployment or selected-client interoperability observation for the 2026 protocol is recorded here.

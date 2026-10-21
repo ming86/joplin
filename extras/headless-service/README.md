@@ -87,6 +87,10 @@ A successful `PASS phase15-account-smoke` against the real compiled core complet
 
 Optional semantic indexing and hybrid retrieval are implemented outside the core. See [SEMANTIC.md](SEMANTIC.md) for configuration, separate encrypted storage, runtime ownership, limits and real-provider acceptance. Existing account/keyword behavior remains available without enabling it. The new native integration uses a real encrypted core and store with a fixture HTTP embedding endpoint; it does not establish model quality.
 
+## Stateless HTTP MCP entry point
+
+`mcp-http.mjs` exposes the same account-bound tools through authenticated `POST /mcp`, with separate health and readiness endpoints. It defaults to loopback, requires a private bearer token file, and shares the optional semantic runtime. See [MCP.md](MCP.md#phase-2c-stateless-http-transport) and `scripts/mcp-http.example.json` for configuration and protocol details. The listener does not implement OAuth or deploy a proxy.
+
 ## Phase 5 — managed accounts
 
 [Multi-user operation](MULTI-USER.md) adds a small Linux supervisor, separate
