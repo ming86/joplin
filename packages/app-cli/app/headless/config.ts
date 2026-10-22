@@ -5,7 +5,7 @@ export interface HeadlessConfig {
 	profileDir: string;
 	databaseKey: Buffer;
 	sqliteModule: string;
-	/** Headless inbound sync cadence in seconds, independent of other clients' sync.interval. */
+	/** Headless lightweight remote-poll cadence in seconds; full syncs use a fixed 120-second cadence. */
 	syncIntervalSeconds: number;
 }
 
