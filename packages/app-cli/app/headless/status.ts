@@ -12,6 +12,8 @@ const syncCounterNames = [
 export interface HeadlessStatus {
 	/** Epoch milliseconds when the live state was read. */
 	observedAt: number;
+	/** Configured email for the selected Joplin sync account, or null when unavailable. */
+	accountEmail: string | null;
 	/** Epoch milliseconds when this headless service initialized; reports reset on restart. */
 	serviceStartedAt: number;
 	/** Live scheduler flags and the latest report, without implying overall synchronization progress. */
@@ -52,13 +54,28 @@ export interface HeadlessStatus {
 	};
 }
 
+/** Return the configured email from the selected sync target's local settings. */
+export function getHeadlessAccountEmail(readSetting: (key: string)=> unknown): string | null {
+	const target = readSetting('sync.target');
+	const emailSetting = target === 9 ? 'sync.9.username' : target === 10 ? 'sync.10.userEmail' : null;
+	if (!emailSetting) return null;
+
+	const email = readSetting(emailSetting);
+	return typeof email === 'string' && email.trim() ? email : null;
+}
+
 /** Select a finite, nonnegative number without forwarding arbitrary report values. */
 function safeNumber(value: unknown): number | null {
 	return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
 /** Copy the explicitly supported fields, excluding raw errors and item details. */
-export function summarizeHeadlessState(state: State, disabledItemCount: number, serviceStartedAt: number): HeadlessStatus {
+export function summarizeHeadlessState(
+	state: State,
+	disabledItemCount: number,
+	serviceStartedAt: number,
+	accountEmail: string | null = null,
+): HeadlessStatus {
 	const sourceReport = state.syncReport;
 	const startTime = safeNumber(sourceReport.startTime);
 	const counters: HeadlessStatus['sync']['report']['counters'] = {};
@@ -69,6 +86,7 @@ export function summarizeHeadlessState(state: State, disabledItemCount: number, 
 	const worker = state.decryptionWorker;
 	return {
 		observedAt: Date.now(),
+		accountEmail,
 		serviceStartedAt,
 		sync: {
 			running: state.syncStarted,
@@ -94,6 +112,7 @@ export function summarizeHeadlessState(state: State, disabledItemCount: number, 
 export function createHeadlessActionApi(
 	getState: ()=> State,
 	getDisabledItemCount: ()=> Promise<number>,
+	getAccountEmail: ()=> string | null,
 	extraActions: Record<string, unknown> = Object.create(null),
 ) {
 	const serviceStartedAt = Date.now();
@@ -103,7 +122,7 @@ export function createHeadlessActionApi(
 		status: async () => {
 			try {
 				const disabledItemCount = await getDisabledItemCount();
-				return summarizeHeadlessState(getState(), disabledItemCount, serviceStartedAt);
+				return summarizeHeadlessState(getState(), disabledItemCount, serviceStartedAt, getAccountEmail());
 			} catch {
 				// REST returns exception messages, so acquisition errors must not expose database details.
 				throw new Error('Headless status unavailable.');

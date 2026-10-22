@@ -30,7 +30,7 @@ import Synchronizer from '@joplin/lib/Synchronizer';
 import HeadlessDatabaseDriver from './headless/DatabaseDriver';
 import { createProfileDirectory, prepareProfile } from './headless/profile';
 import { runService } from './headless/runService';
-import { createHeadlessActionApi } from './headless/status';
+import { createHeadlessActionApi, getHeadlessAccountEmail } from './headless/status';
 import { createHeadlessRevisionActions } from './headless/revisions';
 import { createHeadlessMaintenanceActions } from './headless/maintenance';
 import createHeadlessAttachmentActions from './headless/attachments';
@@ -108,6 +108,7 @@ export class Application extends BaseApplication {
 		clipper.initialize(createHeadlessActionApi(
 			() => ({ ...this.store().getState(), syncPending: reg.syncSchedulingPending() ?? this.store().getState().syncPending }),
 			async () => (await DecryptionWorker.instance().decryptionDisabledItems()).length,
+			() => getHeadlessAccountEmail(key => Setting.value(key)),
 			extraActions,
 		));
 		clipper.setDispatch(action => this.dispatch(action));
