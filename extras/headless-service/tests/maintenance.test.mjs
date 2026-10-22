@@ -119,7 +119,7 @@ test('maintenance tool registration exposes only the selected notebook and tag a
 	assert.equal(tools.get('update_notebook').inputSchema.additionalProperties, false);
 	assert.deepEqual(tools.get('update_notebook').inputSchema.anyOf, [{ required: ['title'] }, { required: ['parent_id'] }]);
 	assert.equal(tools.get('update_notebook').inputSchema.properties.parent_id.pattern, '^(?:[a-f0-9]{32})?$');
-	assert.match(tools.get('delete_notebook').description, /Trash/);
+	assert.match(tools.get('delete_notebook').description, /can be restored from the trash\./);
 	assert.equal(tools.has('delete_tag'), false);
 	assert.equal(tools.has('permanently_delete_notebook'), false);
 

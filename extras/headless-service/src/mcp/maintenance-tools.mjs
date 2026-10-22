@@ -21,7 +21,7 @@ export function registerMaintenanceTools(add, service) {
 		...(Object.hasOwn(args, 'parent_id') ? { parent_id: args.parent_id } : {}),
 	}, signal), updateAnnotations);
 
-	add('delete_notebook', 'Move a notebook and its nested notebooks and notes to Joplin Trash. Joplin applies its native subtree trash behavior; this does not permanently delete the contents.', object({
+	add('delete_notebook', 'Move a notebook and its nested notebooks and notes to the trash. It can be restored from the trash.', object({
 		id: { ...id, description: 'The notebook id from list_notebooks.' },
 	}, ['id']), (args, signal) => service.deleteNotebook(args.id, signal), deleteAnnotations);
 
