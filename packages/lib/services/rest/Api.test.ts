@@ -92,6 +92,41 @@ describe('services/rest/Api', () => {
 		expect(f[0].title).toBe('from api');
 	}));
 
+	it('should return model validation failures as bad requests without saving the item', async () => {
+		let error: Error & { httpCode?: number; code?: string } = null;
+		try {
+			await api.route(RequestMethod.POST, 'folders', null, JSON.stringify({
+				title: 'x'.repeat(4097),
+			}));
+		} catch (routeError) {
+			error = routeError;
+		}
+
+		expect(error).toMatchObject({
+			httpCode: 400,
+			code: 'validation_error',
+			message: 'Validation error: title must be 4096 characters or less',
+		});
+		expect(await Folder.all()).toHaveLength(0);
+	});
+
+	it('should keep unrelated route failures as server errors', async () => {
+		const saveSpy = jest.spyOn(Folder, 'save').mockRejectedValueOnce(new Error('database write failed'));
+		try {
+			let error: Error & { httpCode?: number; code?: string } = null;
+			try {
+				await api.route(RequestMethod.POST, 'folders', null, JSON.stringify({ title: 'valid title' }));
+			} catch (routeError) {
+				error = routeError;
+			}
+
+			expect(error).toMatchObject({ httpCode: 500, message: 'database write failed' });
+			expect(error.code).not.toBe('validation_error');
+		} finally {
+			saveSpy.mockRestore();
+		}
+	});
+
 	it('should get one folder', (async () => {
 		const f1 = await Folder.save({ title: 'mon carnet' });
 		const response = await api.route(RequestMethod.GET, `folders/${f1.id}`);

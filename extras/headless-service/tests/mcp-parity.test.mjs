@@ -314,6 +314,60 @@ test('real Data API writes keep Markdown out of POST, preserve unknown PUT outco
 	} finally { session.close(); }
 });
 
+test('MCP reports structured core validation messages and keeps other 400 responses definite', async t => {
+	let failure = 'validation';
+	let writes = 0;
+	const validationMessage = 'The note title is invalid.';
+	const url = await server(t, async (req, res) => {
+		const target = new URL(req.url, 'http://localhost');
+		assert.equal(target.searchParams.get('token'), 'alice-private-token');
+		if (req.method === 'GET' && target.pathname === `/folders/${folderId}`) {
+			return res.end(JSON.stringify({ id: folderId, title: 'Notebook', parent_id: '', encryption_applied: 0, deleted_time: 0 }));
+		}
+		if (req.method === 'GET' && target.pathname === `/notes/${noteId}`) return res.end(JSON.stringify(note));
+		if (req.method === 'POST' && target.pathname === '/notes') {
+			await readJson(req);
+			writes++;
+			res.writeHead(400, { 'Content-Type': 'application/json' });
+			if (failure === 'validation') return res.end(JSON.stringify({ code: 'validation_error', error: validationMessage, stack: 'private stack' }));
+			if (failure === 'generic') return res.end(JSON.stringify({ error: 'private upstream text' }));
+			return res.end('{ malformed');
+		}
+		if (req.method === 'PUT' && target.pathname === `/notes/${noteId}`) {
+			assert.deepEqual(await readJson(req), { title: 'Rejected update' });
+			writes++;
+			res.writeHead(400, { 'Content-Type': 'application/json' });
+			return res.end(JSON.stringify({ code: 'validation_error', error: 'The note update is invalid.', stack: 'private update stack' }));
+		}
+		res.writeHead(404);
+		return res.end('{}');
+	});
+	const config = account(); config.joplin.baseUrl = url;
+	const service = createAccountRegistry([config]).forPrincipal(config.id, config.id);
+	const session = createMcpSession(service, { allowWrites: true });
+	await ready(session);
+	try {
+		const args = { title: 'Rejected note', body: '', notebook_id: folderId };
+		const validation = (await invoke(session, 'create_note', args)).structuredContent.error;
+		assert.deepEqual(validation, { code: 'validation_error', message: validationMessage, outcomeUnknown: false });
+		assert.equal(JSON.stringify(validation).includes('private stack'), false);
+
+		const update = (await invoke(session, 'update_note', { id: noteId, title: 'Rejected update' }, 3)).structuredContent.error;
+		assert.deepEqual(update, { code: 'validation_error', message: 'The note update is invalid.', outcomeUnknown: false });
+		assert.equal(JSON.stringify(update).includes('private update stack'), false);
+
+		failure = 'generic';
+		const generic = (await invoke(session, 'create_note', args, 4)).structuredContent.error;
+		assert.deepEqual(generic, { code: 'backend_request_failed', outcomeUnknown: false });
+		assert.equal(JSON.stringify(generic).includes('private upstream text'), false);
+
+		failure = 'malformed';
+		const malformed = (await invoke(session, 'create_note', args, 5)).structuredContent.error;
+		assert.deepEqual(malformed, { code: 'backend_request_failed', outcomeUnknown: false });
+		assert.equal(writes, 4);
+	} finally { session.close(); }
+});
+
 test('real Data API notebook and tag scans page through results and omit unavailable entries', async t => {
 	const folderPages = []; const tagPages = [];
 	const secondFolderId = '1'.repeat(32);

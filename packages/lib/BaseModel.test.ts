@@ -1,4 +1,4 @@
-import BaseModel from './BaseModel';
+import BaseModel, { UserSideValidationError } from './BaseModel';
 
 describe('BaseModel', () => {
 	test.each([
@@ -42,6 +42,10 @@ describe('BaseModel', () => {
 		} else {
 			expect(run).not.toThrow();
 		}
+	});
+
+	it('should identify failures from user-side validation', () => {
+		expect(() => BaseModel.userSideValidation({ id: 'invalid' })).toThrow(UserSideValidationError);
 	});
 
 	const nul = String.fromCharCode(0);
