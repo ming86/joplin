@@ -309,7 +309,7 @@ export function createAccountRegistry(configurations, factories = {}) {
 				async search({ query, mode = 'keyword', ...options }, signal) {
 					permit('read');
 					requireValue(['keyword', 'semantic', 'hybrid'].includes(mode), 'invalid_search_mode');
-					requireValue(typeof query === 'string' && query.trim().length > 0 && query.length <= 10000, 'invalid_query');
+					requireValue(typeof query === 'string' && query.trim().length > 0, 'invalid_query');
 					pagination(options);
 					if (signal?.aborted) throw new ServiceError('request_cancelled');
 					if (mode !== 'keyword' && semantic()) return semantic().search({ query, mode, ...options }, signal);

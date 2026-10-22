@@ -127,7 +127,7 @@ export function createSemanticEngine({ accountId, backend, provider, store, chun
 		},
 		async search({ query, mode = 'semantic', page = 1, limit = 20, notebookId }, signal) {
 			pagination({ page, limit }); requireValue(page === 1, 'semantic_pagination_not_supported');
-			requireValue(typeof query === 'string' && query.trim().length > 0 && query.length <= 10000, 'invalid_query');
+			requireValue(typeof query === 'string' && query.trim().length > 0, 'invalid_query');
 			// Do not ignore Joplin filters/negations and leak out-of-scope matches.
 			requireValue(!/(?:^|\s)(?:-\S|\w+:|\/)/u.test(query), 'semantic_query_syntax_not_supported');
 			if (notebookId) identifier(notebookId);

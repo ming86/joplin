@@ -38,7 +38,6 @@ export interface AccountConfiguration {
         token: string;
         allowInsecureHttp?: boolean;
         timeoutMs?: number;
-        maxResponseBytes?: number;
     };
     semantic: { databasePath: string; keyRef: string };
     embedding?: {
@@ -212,7 +211,7 @@ export interface JoplinBackend {
     /** Read the fixed in-memory synchronization and decryption summary. */
     status(signal?: AbortSignal): Promise<HeadlessStatusSummary>;
     listNotebooks(options?: PageOptions, signal?: AbortSignal): Promise<Page<Notebook>>;
-    /** Return every safe notebook using the backend's capped pagination. */
+    /** Return every safe notebook reported by the backend. */
     listAllNotebooks?(signal?: AbortSignal): Promise<Notebook[]>;
     listNotes(options?: PageOptions & { notebookId?: string }, signal?: AbortSignal): Promise<Page<Note>>;
     listNoteSummaries?(options?: PageOptions & { notebookId?: string }, signal?: AbortSignal): Promise<Page<Note>>;
@@ -227,7 +226,7 @@ export interface JoplinBackend {
     createNotebook?(input: NewNotebook, signal?: AbortSignal): Promise<Notebook>;
     /** Return safe tag metadata currently attached to a note. */
     getNoteTags?(noteId: string, signal?: AbortSignal): Promise<Tag[]>;
-    /** Return every safe tag using the backend's capped pagination. */
+    /** Return every safe tag reported by the backend. */
     listAllTags?(signal?: AbortSignal): Promise<Tag[]>;
     /** Move a note to Trash through the backend. */
     deleteNote?(id: string, signal?: AbortSignal): Promise<void>;

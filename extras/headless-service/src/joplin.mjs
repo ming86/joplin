@@ -2,8 +2,6 @@ import { ServiceError, requireValue, identifier, pagination } from './errors.mjs
 
 /** Fields used by note reads and metadata scans. */
 const noteFields = 'id,parent_id,title,body,created_time,updated_time,is_todo,todo_completed,markup_language,encryption_applied,deleted_time,is_locked';
-/** Prevents an unexpectedly large account collection from becoming an unbounded scan. */
-const maximumPages = 50;
 /** Status counters exposed by the fixed headless status contract. */
 const statusCounterFields = [
 	'itemConflict', 'noteConflict', 'resourceConflict',
@@ -124,9 +122,7 @@ export function createJoplinClient(config) {
 	const token = config.token;
 	requireValue(typeof token === 'string' && token.length > 0);
 	const timeoutMs = config.timeoutMs ?? 10000;
-	const maxResponseBytes = config.maxResponseBytes ?? 8 * 1024 * 1024;
 	requireValue(Number.isSafeInteger(timeoutMs) && timeoutMs > 0 && timeoutMs <= 120000);
-	requireValue(Number.isSafeInteger(maxResponseBytes) && maxResponseBytes > 0 && maxResponseBytes <= 128 * 1024 * 1024);
 
 	/** Sends one authenticated Data API request and preserves uncertain write outcomes. */
 	async function request(route, params = {}, method = 'GET', body, signal, { allowEmptyPost = false, writeOperation = method !== 'GET' } = {}) {
@@ -148,26 +144,10 @@ export function createJoplinClient(config) {
 				if (writing && response.status >= 500) throw new ServiceError('write_outcome_unknown', true);
 				throw new ServiceError(response.status === 404 ? 'not_found' : response.status === 401 || response.status === 403 ? 'backend_authorization_failed' : 'backend_request_failed');
 			}
-			const parts = [];
-			let size = 0;
-			if (response.body) {
-				const reader = response.body.getReader();
-				try {
-					while (true) {
-						const { done, value } = await reader.read();
-						if (done) break;
-						size += value.byteLength;
-						if (size > maxResponseBytes) {
-							await reader.cancel();
-							throw new ServiceError(writing ? 'write_outcome_unknown' : 'backend_response_too_large', writing);
-						}
-						parts.push(Buffer.from(value));
-					}
-				} finally { reader.releaseLock(); }
-			}
+			const text = await response.text();
 			// Joplin returns an empty 200 for DELETE and for duplicate tag associations.
-			if (size === 0 && (method === 'DELETE' || (method === 'POST' && allowEmptyPost))) return null;
-			return JSON.parse(Buffer.concat(parts).toString('utf8'));
+			if (text.length === 0 && (method === 'DELETE' || (method === 'POST' && allowEmptyPost))) return null;
+			return JSON.parse(text);
 		} catch (error) {
 			if (error instanceof ServiceError) throw error;
 			// POST/PUT may have committed before transport/response parsing failed. Never retry automatically.
@@ -175,15 +155,14 @@ export function createJoplinClient(config) {
 		}
 	}
 
-	/** Fetches every page of a bounded collection, failing if the page cap is reached. */
+	/** Fetches every page until the backend reports that the collection has ended. */
 	async function fetchAllPages(route, params, map, signal) {
 		const items = [];
-		for (let page = 1; page <= maximumPages; page++) {
+		for (let page = 1; ; page++) {
 			const result = pageResult(await request(route, { ...params, limit: 100, page }, 'GET', undefined, signal), map);
 			items.push(...result.items);
 			if (!result.hasMore) return items;
 		}
-		throw new ServiceError('backend_response_truncated');
 	}
 
 	/** Validates folder fields returned by the private Data API. */
@@ -335,7 +314,7 @@ export function createJoplinClient(config) {
 		},
 		/** Creates a notebook after validating its title and optional parent. */
 		async createNotebook({ title, parentId }, signal) {
-			requireValue(typeof title === 'string' && title.trim().length > 0 && title.length <= 1024, 'invalid_notebook_input');
+			requireValue(typeof title === 'string' && title.trim().length > 0, 'invalid_notebook_input');
 			if (parentId !== undefined) identifier(parentId);
 			const data = await request('folders', {}, 'POST', { title, ...(parentId ? { parent_id: parentId } : {}) }, signal);
 			try {
@@ -345,12 +324,12 @@ export function createJoplinClient(config) {
 			} catch { throw new ServiceError('write_outcome_unknown', true); }
 		},
 		async search(query, options, signal) {
-			requireValue(typeof query === 'string' && query.trim().length > 0 && query.length <= 10000, 'invalid_query');
+			requireValue(typeof query === 'string' && query.trim().length > 0, 'invalid_query');
 			return pageResult(await request('search', { query, ...pagination(options), type: 'note', fields: noteFields }, 'GET', undefined, signal), noteResult);
 		},
 		/** Counts all eligible keyword matches using metadata-only search pages. */
 		async countSearchResults(query, signal) {
-			requireValue(typeof query === 'string' && query.trim().length > 0 && query.length <= 10000, 'invalid_query');
+			requireValue(typeof query === 'string' && query.trim().length > 0, 'invalid_query');
 			let count = 0;
 			let page = 1;
 			let hasMore = true;
