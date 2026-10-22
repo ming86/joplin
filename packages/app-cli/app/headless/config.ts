@@ -5,6 +5,8 @@ export interface HeadlessConfig {
 	profileDir: string;
 	databaseKey: Buffer;
 	sqliteModule: string;
+	/** Headless inbound sync cadence in seconds, independent of other clients' sync.interval. */
+	syncIntervalSeconds: number;
 }
 
 export const readDatabaseKey = (fd: number) => {
@@ -44,12 +46,17 @@ export const readHeadlessConfig = (env: NodeJS.ProcessEnv): HeadlessConfig | nul
 	if (sqliteModule !== 'sqlite3' && !isAbsolute(sqliteModule)) {
 		throw new Error('JOPLIN_HEADLESS_SQLITE_MODULE must be an absolute module path, or unset to use the installed sqlite3 binding.');
 	}
+	const syncIntervalText = env.JOPLIN_HEADLESS_SYNC_INTERVAL ?? '10';
+	const syncIntervalSeconds = Number(syncIntervalText);
+	if (!/^\d+$/.test(syncIntervalText) || !Number.isSafeInteger(syncIntervalSeconds) || syncIntervalSeconds < 1 || syncIntervalSeconds > 2147483) {
+		throw new Error('JOPLIN_HEADLESS_SYNC_INTERVAL must be a positive whole number of seconds, at most 2147483.');
+	}
 	const descriptor = env.JOPLIN_HEADLESS_KEY_FD;
 	if (!descriptor || !/^\d+$/.test(descriptor) || Number(descriptor) < 3) {
 		throw new Error('JOPLIN_HEADLESS_KEY_FD must identify an inherited descriptor >= 3. Never put the key in an argument or environment variable.');
 	}
 	delete env.JOPLIN_HEADLESS_KEY_FD;
-	return { profileDir: resolve(profileDir), databaseKey: readDatabaseKey(Number(descriptor)), sqliteModule };
+	return { profileDir: resolve(profileDir), databaseKey: readDatabaseKey(Number(descriptor)), sqliteModule, syncIntervalSeconds };
 };
 
 export const headlessArgv = (argv: string[], config: Pick<HeadlessConfig, 'profileDir'>) => {

@@ -2,6 +2,8 @@ import { UserSideValidationError } from '@joplin/lib/BaseModel';
 import JoplinError from '@joplin/lib/JoplinError';
 import * as mimeUtils from '@joplin/lib/mime-utils';
 import Resource from '@joplin/lib/models/Resource';
+import { reg } from '@joplin/lib/registry';
+import Synchronizer from '@joplin/lib/Synchronizer';
 import Setting from '@joplin/lib/models/Setting';
 import { fileExtension, safeFileExtension } from '@joplin/utils/path';
 import type { ResourceEntity } from '@joplin/lib/services/database/types';
@@ -205,7 +207,18 @@ async function saveAttachment(prepared: PreparedAttachment): Promise<AttachmentM
 		} else if (previousPath !== finalPath) {
 			await shim.fsDriver().move(previousPath, finalPath);
 		}
-		return await attachmentMetadata(resource.id);
+		const metadata = await attachmentMetadata(resource.id);
+		// Resource.save precedes blob persistence, so notify only after the entire native write.
+		if (reg.syncSchedulingPending() !== null) {
+			void (async () => {
+				try {
+					await reg.scheduleSync(reg.syncAsYouTypeInterval(), { syncSteps: Synchronizer.partialSyncSteps });
+				} catch {
+					reg.logger().warn('Headless attachment sync scheduling failed.');
+				}
+			})();
+		}
+		return metadata;
 	} finally {
 		if (tempPath) await shim.fsDriver().remove(tempPath);
 	}

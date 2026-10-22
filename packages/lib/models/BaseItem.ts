@@ -66,6 +66,21 @@ export default class BaseItem extends BaseModel {
 	public static revisionService_: RevisionService = null;
 	public static shareService_: ShareService = null;
 	private static syncShareCache_: ShareState | null = null;
+	/** Optional service notification for completed local writes to exposed syncable models. */
+	private static localChangeHandler_: (()=> void) | null = null;
+
+	/** Install or remove the headless service's local-save notification. */
+	public static setLocalChangeHandler(handler: (()=> void) | null) {
+		BaseItem.localChangeHandler_ = handler;
+	}
+
+	/** Notify after persistence, excluding incoming sync and decryption writes. */
+	private static notifyLocalChange(changeSource: number, itemCount = 1) {
+		if (!itemCount || changeSource === ItemChange.SOURCE_SYNC) return;
+		if (![BaseModel.TYPE_NOTE, BaseModel.TYPE_FOLDER, BaseModel.TYPE_TAG, BaseModel.TYPE_NOTE_TAG, BaseModel.TYPE_RESOURCE].includes(this.modelType())) return;
+		BaseItem.localChangeHandler_?.();
+	}
+
 
 	// Also update:
 	// - itemsThatNeedSync()
@@ -372,6 +387,7 @@ export default class BaseItem extends BaseModel {
 			}
 			await this.db().transactionExecBatch(queries);
 		}
+		this.notifyLocalChange(options.changeSource, ids.length);
 	}
 
 	// Note: Currently, once a deleted_items entry has been processed, it is removed from the database. In practice it means that
@@ -1088,7 +1104,10 @@ export default class BaseItem extends BaseModel {
 			}
 		}
 
-		return super.save(o, options);
+		const saved = await super.save(o, options);
+		// Attachment writes finish their blob work after saving metadata and notify at that boundary.
+		if (this.modelType() !== BaseModel.TYPE_RESOURCE) this.notifyLocalChange(options.changeSource);
+		return saved;
 	}
 
 	public static markdownTag(itemOrId: string | { id?: string; title?: string }) {

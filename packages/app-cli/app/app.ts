@@ -25,6 +25,8 @@ import ClipperServer from '@joplin/lib/ClipperServer';
 import DecryptionWorker from '@joplin/lib/services/DecryptionWorker';
 import SearchEngine from '@joplin/lib/services/search/SearchEngine';
 import { HeadlessConfig, headlessArgv } from './headless/config';
+import HeadlessSyncScheduler from './headless/HeadlessSyncScheduler';
+import Synchronizer from '@joplin/lib/Synchronizer';
 import HeadlessDatabaseDriver from './headless/DatabaseDriver';
 import { createProfileDirectory, prepareProfile } from './headless/profile';
 import { runService } from './headless/runService';
@@ -32,6 +34,7 @@ import { createHeadlessActionApi } from './headless/status';
 import { createHeadlessRevisionActions } from './headless/revisions';
 import { createHeadlessMaintenanceActions } from './headless/maintenance';
 import createHeadlessAttachmentActions from './headless/attachments';
+import createHeadlessConflictActions from './headless/conflicts';
 
 type FolderOrNoteType = ModelType.Note | ModelType.Folder | 'folderOrNote';
 
@@ -72,6 +75,7 @@ export class Application extends BaseApplication {
 		if (!this.headlessStop_) {
 			this.headlessStop_ = (async () => {
 				this.headlessBackground_ = false;
+				BaseItem.setLocalChangeHandler(null);
 				await ClipperServer.instance().stop({ graceful: true });
 				const syncTimersStopped = reg.cancelTimers();
 				if (await reg.syncTarget().syncStarted()) {
@@ -80,6 +84,7 @@ export class Application extends BaseApplication {
 					await synchronizer.waitForSyncToFinish();
 				}
 				await syncTimersStopped;
+				reg.setSyncSchedulingPolicy(null);
 				this.deinitRedux();
 				await super.destroy();
 				this.headlessInitialized_ = false;
@@ -98,15 +103,20 @@ export class Application extends BaseApplication {
 			createHeadlessRevisionActions(),
 			createHeadlessMaintenanceActions(),
 			createHeadlessAttachmentActions(),
+			createHeadlessConflictActions(),
 		);
 		clipper.initialize(createHeadlessActionApi(
-			() => this.store().getState(),
+			() => ({ ...this.store().getState(), syncPending: reg.syncSchedulingPending() ?? this.store().getState().syncPending }),
 			async () => (await DecryptionWorker.instance().decryptionDisabledItems()).length,
 			extraActions,
 		));
 		clipper.setDispatch(action => this.dispatch(action));
 		await runService({
 			start: async () => {
+				reg.setSyncSchedulingPolicy((run, pendingChanged) => new HeadlessSyncScheduler(run, pendingChanged, this.headlessConfig_.syncIntervalSeconds * 1000, () => this.stdout('headless: sync scheduling failed')));
+				BaseItem.setLocalChangeHandler(() => {
+					void reg.scheduleSync(reg.syncAsYouTypeInterval(), { syncSteps: Synchronizer.partialSyncSteps }).catch(() => { this.stdout('headless: sync scheduling failed'); });
+				});
 				this.headlessBackground_ = true;
 				await this.applySettingsSideEffects();
 				await DecryptionWorker.instance().scheduleStart();

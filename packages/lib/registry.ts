@@ -7,8 +7,28 @@ import { AnyAction, Dispatch } from 'redux';
 import Synchronizer, { SyncStartOptions } from './Synchronizer';
 import BaseSyncTarget from './BaseSyncTarget';
 
+/** Headless timing policy; the registry still owns native synchronization execution. */
+export interface SyncSchedulingPolicy {
+	/** Whether a request is waiting for the current operation or its due time. */
+	readonly pending: boolean;
+	/** Coalesce a request and resolve when that request has been serviced or cancelled. */
+	schedule(delay: number, options: SyncStartOptions, wifiCheck: boolean): Promise<void>;
+	/** Start periodic inbound checks without resetting an existing timer. */
+	setupRecurrentSync(): void;
+	/** Cancel future requests; an already running native operation is drained separately. */
+	stop(): void;
+}
+
+/** Construct a policy around the registry's existing authenticated, context-saving execution path. */
+export type SyncSchedulingPolicyFactory = (
+	run: (options: SyncStartOptions, wifiCheck: boolean)=> Promise<unknown>,
+	pendingChanged: (pending: boolean)=> void,
+)=> SyncSchedulingPolicy;
+
 class Registry {
 
+	/** Present only while the headless service owns synchronization scheduling. */
+	private syncSchedulingPolicy_: SyncSchedulingPolicy | null = null;
 	private syncTargets_: Record<number, BaseSyncTarget> = {};
 	private logger_: Logger = null;
 	private schedSyncCalls_: boolean[] = [];
@@ -113,7 +133,29 @@ class Registry {
 		}
 	};
 
+	/** Install a service-specific timing policy without changing other clients' scheduling. */
+	public setSyncSchedulingPolicy(factory: SyncSchedulingPolicyFactory | null) {
+		this.syncSchedulingPolicy_?.stop();
+		this.syncSchedulingPolicy_ = factory ? factory(
+			(options, wifiCheck) => this.scheduleSync_(0, options, wifiCheck),
+			pending => this.dispatch({ type: 'SYNC_PENDING_UPDATE', value: pending }),
+		) : null;
+	}
+
+	/** Null means the standard client scheduler supplies its existing Redux pending flag. */
+	public syncSchedulingPending(): boolean | null {
+		return this.syncSchedulingPolicy_?.pending ?? null;
+	}
+
 	public scheduleSync = async (delay: number = null, syncOptions: SyncStartOptions = null, doWifiConnectionCheck = false) => {
+		if (this.syncSchedulingPolicy_) {
+			return this.syncSchedulingPolicy_.schedule(delay ?? this.defaultScheduleInterval(), syncOptions ?? {}, doWifiConnectionCheck);
+		}
+		return this.scheduleSync_(delay, syncOptions, doWifiConnectionCheck);
+	};
+
+	/** Execute the established scheduler path, including authentication, context and error handling. */
+	private scheduleSync_ = async (delay: number = null, syncOptions: SyncStartOptions = null, doWifiConnectionCheck = false) => {
 		this.schedSyncCalls_.push(true);
 
 		try {
@@ -121,8 +163,10 @@ class Registry {
 			if (syncOptions === null) syncOptions = {};
 
 			let promiseResolve: ((value?: unknown)=> void) = null;
-			const promise = new Promise((resolve) => {
+			let promiseReject: (error: unknown)=> void = null;
+			const promise = new Promise((resolve, reject) => {
 				promiseResolve = resolve;
+				promiseReject = reject;
 			});
 
 			if (this.scheduleSyncId_) {
@@ -224,6 +268,10 @@ class Registry {
 					this.setupRecurrentSync();
 					promiseResolve();
 
+				} catch (error) {
+					// Preparation (including the second authentication check) must settle the
+					// scheduled operation even though timer callbacks have no awaiting caller.
+					promiseReject(error);
 				} finally {
 					if (newContext === undefined) {
 						// If the logic in the try block returns before executing the sync, ensure syncPending is reset back to false
@@ -247,6 +295,10 @@ class Registry {
 	};
 
 	public setupRecurrentSync() {
+		if (this.syncSchedulingPolicy_) {
+			this.syncSchedulingPolicy_.setupRecurrentSync();
+			return;
+		}
 		this.setupRecurrentCalls_.push(true);
 
 		try {
@@ -296,6 +348,7 @@ class Registry {
 
 	public cancelTimers = async () => {
 		this.logger().info('Cancelling sync timers');
+		this.syncSchedulingPolicy_?.stop();
 		this.cancelTimers_();
 
 		return new Promise((resolve) => {
