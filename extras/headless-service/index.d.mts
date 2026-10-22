@@ -140,6 +140,67 @@ export interface NoteRevisionComparison {
     /** Tracked metadata changes. */
     metadata_changes: NoteRevisionMetadataChange[];
 }
+/** Compact row for a note conflict currently stored on this device. */
+export interface ConflictSummary {
+    /** Native id of the conflict note. */
+    id: string;
+    /** Title of the conflict note. */
+    title: string;
+    /** Native id of the note it conflicts with, or an empty string when no original is linked. */
+    conflict_original_id: string;
+    /** Creation time in Joplin's millisecond timestamp format. */
+    created_time: number;
+    /** Update time in Joplin's millisecond timestamp format. */
+    updated_time: number;
+}
+/** Current native snapshot returned when one conflict side is available. */
+export interface ConflictSnapshot {
+    /** Native note id. */
+    id: string;
+    /** Native parent notebook id; the special root uses an empty string. */
+    parent_id: string;
+    /** Current note title. */
+    title: string;
+    /** Current note body. */
+    body: string;
+    /** Creation time in Joplin's millisecond timestamp format. */
+    created_time: number;
+    /** Update time in Joplin's millisecond timestamp format. */
+    updated_time: number;
+    /** Whether this item is a to-do, encoded as 0 or 1. */
+    is_todo: number;
+    /** To-do completion time in milliseconds, or 0 while open. */
+    todo_completed: number;
+    /** Native Joplin markup language value. */
+    markup_language: number;
+    /** Whether this item is a conflict note, encoded as 0 or 1. */
+    is_conflict: number;
+    /** Original note id linked to this conflict, or an empty string when unlinked. */
+    conflict_original_id: string;
+}
+/** One side of a device-local conflict, with content only when available. */
+export interface ConflictSide {
+    /** Native note id, or null when no note is linked to this side. */
+    id: string | null;
+    /** Why the side can or cannot be read on this device. */
+    status: 'available' | 'missing' | 'trashed' | 'encrypted' | 'locked' | 'unlinked';
+    /** Current note snapshot. Present only when status is `available`. */
+    note?: ConflictSnapshot;
+}
+/** Current conflict copy and original side as stored on this device. */
+export interface ConflictReadResult {
+    /** Conflict copy created by synchronization. */
+    conflict: ConflictSide;
+    /** Current original note associated with the conflict. */
+    original: ConflictSide;
+}
+/** Input for listing a page of device-local note conflicts. */
+export type ConflictListInput = PageOptions;
+/** Input for reading both sides of one device-local note conflict. */
+export interface ConflictReadInput {
+    /** Native id of a conflict note returned by listConflicts. */
+    id: string;
+}
 /** Input for listing a page of native revisions. */
 export interface NoteRevisionListInput extends PageOptions {
     /** Note whose revision history should be listed. */
@@ -409,6 +470,10 @@ export interface JoplinBackend {
     readNoteRevision(input: NoteRevisionReadInput, signal?: AbortSignal): Promise<NoteRevisionSnapshot>;
     /** Compare historical snapshots, defaulting the destination to the latest revision. */
     compareNoteRevisions(input: NoteRevisionCompareInput, signal?: AbortSignal): Promise<NoteRevisionComparison>;
+    /** List one page of note conflicts stored on this device. */
+    listConflicts(input: ConflictListInput, signal?: AbortSignal): Promise<Page<ConflictSummary>>;
+    /** Read the current conflict copy and original note sides stored on this device. */
+    readConflict(input: ConflictReadInput, signal?: AbortSignal): Promise<ConflictReadResult>;
     createNote(input: NewNote, signal?: AbortSignal): Promise<Note>;
     updateNote(id: string, input: NotePatch, signal?: AbortSignal): Promise<Note>;
     /** Create a notebook in the backend. */
@@ -597,6 +662,20 @@ export interface AccountNoteRevisionPage {
     /** Whether a later page is available. */
     hasMore: boolean;
 }
+/** One account-bound page of device-local note conflicts. */
+export interface AccountConflictPage {
+    /** Account that supplied the conflicts. */
+    accountId: string;
+    /** Current conflict note rows in native order. */
+    items: ConflictSummary[];
+    /** Whether a later page is available. */
+    hasMore: boolean;
+}
+/** Conflict sides returned with their account identity. */
+export interface AccountConflictReadResult extends ConflictReadResult {
+    /** Account that supplied both conflict sides. */
+    accountId: string;
+}
 /** Created note identity including the chosen notebook ID. */
 export interface CreatedAccountNote extends AccountNote {
     /** Notebook selected for creation. */
@@ -634,6 +713,10 @@ export interface AccountService {
     readNoteRevision(input: NoteRevisionReadInput, signal?: AbortSignal): Promise<AccountNoteRevisionSnapshot>;
     /** Compare two native revisions, defaulting the destination to the latest. */
     compareNoteRevisions(input: NoteRevisionCompareInput, signal?: AbortSignal): Promise<AccountNoteRevisionComparison>;
+    /** List one account-bound page of device-local note conflicts. */
+    listConflicts(input?: ConflictListInput, signal?: AbortSignal): Promise<AccountConflictPage>;
+    /** Read both current sides of one device-local note conflict. */
+    readConflict(input: ConflictReadInput, signal?: AbortSignal): Promise<AccountConflictReadResult>;
     /** Add and remove tags by trimmed, case-insensitive title. */
     manageTags(input: ManageTagsInput, signal?: AbortSignal): Promise<ManageTagsResult>;
     /** List all readable tags. */

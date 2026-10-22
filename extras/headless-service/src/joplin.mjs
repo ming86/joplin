@@ -1,6 +1,7 @@
 import { ServiceError, requireValue, identifier, pagination } from './errors.mjs';
 import { createMaintenanceClient } from './maintenance-client.mjs';
 import { createRevisionClient } from './revision-client.mjs';
+import { createConflictClient } from './conflict-client.mjs';
 import { createAttachmentClient } from './attachment-client.mjs';
 
 /** Fields used by note reads and metadata scans. */
@@ -212,6 +213,7 @@ export function createJoplinClient(config) {
 	return Object.freeze({
 		...createMaintenanceClient(request),
 		...createRevisionClient(request),
+		...createConflictClient(request),
 		...createAttachmentClient({ request, baseUrl, token, timeoutMs }),
 		/** Reads the core process's in-memory synchronization and decryption summary. */
 		async status(signal) {

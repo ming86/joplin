@@ -1,5 +1,6 @@
 import { ServiceError } from '../errors.mjs';
 import { registerRevisionTools } from './revision-tools.mjs';
+import { registerConflictTools } from './conflict-tools.mjs';
 import { registerMaintenanceTools } from './maintenance-tools.mjs';
 import { isMcpToolResult, registerAttachmentTools } from './attachment-tools.mjs';
 
@@ -34,10 +35,16 @@ const revisionErrorMessages = new Map([
 	['replace_text_ambiguous', 'The text to replace must occur exactly once.'],
 	['validation_error', 'The request did not pass validation.'],
 ]);
+/** Fixed safe detail for device-local conflict inspection errors. */
+const conflictErrorMessages = new Map([
+	['conflict_not_found', 'The requested device-local sync conflict was not found.'],
+	['invalid_conflict_input', 'The conflict request is invalid.'],
+]);
 const revisionToolNames = new Set([
 	'read_note', 'get_note', 'update_note',
 	'list_note_revisions', 'read_note_revision', 'compare_note_revisions',
 ]);
+const conflictToolNames = new Set(['list_conflicts', 'read_conflict']);
 
 export function toolResult(value, isError = false) {
 	return { content: [{ type: 'text', text: JSON.stringify(value) }], structuredContent: value, isError };
@@ -342,6 +349,7 @@ export function createTools(service, { allowWrites = false } = {}) {
 	}
 
 	registerRevisionTools(add, service);
+	registerConflictTools(add, service);
 	if (allowWrites) registerMaintenanceTools(add, service);
 	registerAttachmentTools(add, service, { allowWrites });
 
@@ -369,11 +377,13 @@ export function createTools(service, { allowWrites = false } = {}) {
 				return isMcpToolResult(value) ? value : toolResult(value);
 			} catch (error) {
 				const known = error instanceof ServiceError;
-				const safeRevisionMessage = known && revisionToolNames.has(name) ? revisionErrorMessages.get(error.code) : undefined;
+				const safeMessage = known && revisionToolNames.has(name)
+					? revisionErrorMessages.get(error.code)
+					: known && conflictToolNames.has(name) ? conflictErrorMessages.get(error.code) : undefined;
 				return toolResult({ error: {
 					code: known ? error.code : 'operation_failed',
-					...(safeRevisionMessage ? { message: safeRevisionMessage } : {}),
-					...(known && error.code === 'validation_error' && !revisionToolNames.has(name) && error.message !== error.code ? { message: error.message } : {}),
+					...(safeMessage ? { message: safeMessage } : {}),
+					...(known && error.code === 'validation_error' && !revisionToolNames.has(name) && !conflictToolNames.has(name) && error.message !== error.code ? { message: error.message } : {}),
 					outcomeUnknown: known && error.outcomeUnknown,
 					...(known && error.outcomeUnknown ? { action: 'Inspect the note/list before retrying. The write may have committed; no automatic retry was performed.' } : {}),
 				} }, true);
