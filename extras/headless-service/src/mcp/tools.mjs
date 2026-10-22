@@ -269,12 +269,12 @@ export function createTools(service, { allowWrites = false } = {}) {
 		const updateSchema = object({
 			id: { ...id, description: 'The note id to update.' },
 			title: { ...title, description: 'New note title.' },
-			body: { ...body, description: 'Full replacement body in Markdown. If provided, this takes precedence over append, prepend and replace_text.' },
-			append: { ...body, description: 'Text to append to the existing body when body is omitted.' },
-			prepend: { ...body, description: 'Text to insert at the start of the existing body when body is omitted.' },
+			body: { ...body, description: 'Full replacement body in the note\'s existing Markdown or HTML format. If provided, this takes precedence over append, prepend and replace_text.' },
+			append: { ...body, description: 'Raw text to append to the existing body when body is omitted.' },
+			prepend: { ...body, description: 'Raw text to insert at the start of the existing body when body is omitted.' },
 			replace_text: {
 				...object({
-					find: { type: 'string', description: 'Non-empty exact text to find; it must occur exactly once in the body.' },
+					find: { type: 'string', description: 'Non-empty exact text to find in the raw stored body; it must occur exactly once.' },
 					replace: { type: 'string', description: 'Text to insert in place of the match.' },
 				}, ['find', 'replace']),
 				description: 'Replace one exact body match. If body is omitted, this runs after prepend and append; the match must occur exactly once.',
@@ -283,7 +283,7 @@ export function createTools(service, { allowWrites = false } = {}) {
 			todo_completed: { type: 'boolean', description: 'For a to-do note, true marks it complete and false reopens it.' },
 		}, ['id']);
 		updateSchema.anyOf = [{ required: ['title'] }, { required: ['body'] }, { required: ['append'] }, { required: ['prepend'] }, { required: ['replace_text'] }, { required: ['notebook_id'] }, { required: ['todo_completed'] }];
-		add('update_note', 'Update only the supplied note fields; omitted fields remain unchanged. For a full body replacement, pass body. When body is omitted, prepend, append and replace_text are applied in that order; the replacement text must match exactly once.', updateSchema, async ({ id: noteId, ...changes }, signal) => {
+		add('update_note', 'Update only the supplied note fields; omitted fields remain unchanged. Body operations edit Markdown or HTML directly and preserve the note\'s existing format. For a full body replacement, pass body. When body is omitted, prepend, append and replace_text are applied in that order; the replacement text must match exactly once.', updateSchema, async ({ id: noteId, ...changes }, signal) => {
 			if (!Object.keys(changes).length) throw new ServiceError('empty_note_update');
 			const note = await service.updateNote(noteId, changes, signal);
 			return { id: note.id ?? noteId, updated_time: note.updated_time, note, saved: 'local', synchronization: 'not_confirmed' };

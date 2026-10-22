@@ -224,7 +224,6 @@ export function createAccountRegistry(configurations, factories = {}) {
 					// Best-effort eligibility check, NOT a compare-and-swap or lost-update guarantee.
 					const current = await backend().getNote(id, signal);
 					if (!eligible(current)) throw new ServiceError('note_unavailable');
-					if (current.markup_language !== 1) throw new ServiceError('unsupported_note_format');
 					if (input.notebook_id !== undefined) await backend().getNotebook(input.notebook_id, signal);
 					let nextBody = current.body ?? '';
 					let bodyChanged = false;
