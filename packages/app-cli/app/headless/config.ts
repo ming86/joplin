@@ -5,7 +5,7 @@ export interface HeadlessConfig {
 	profileDir: string;
 	databaseKey: Buffer;
 	sqliteModule: string;
-	/** Headless lightweight remote-poll cadence in seconds; full syncs use a fixed 120-second cadence. */
+	/** Delay after a headless remote poll settles, in seconds; periodic full syncs wait 120 seconds after the previous periodic full sync settles. */
 	syncIntervalSeconds: number;
 }
 
@@ -46,7 +46,7 @@ export const readHeadlessConfig = (env: NodeJS.ProcessEnv): HeadlessConfig | nul
 	if (sqliteModule !== 'sqlite3' && !isAbsolute(sqliteModule)) {
 		throw new Error('JOPLIN_HEADLESS_SQLITE_MODULE must be an absolute module path, or unset to use the installed sqlite3 binding.');
 	}
-	const syncIntervalText = env.JOPLIN_HEADLESS_SYNC_INTERVAL ?? '10';
+	const syncIntervalText = env.JOPLIN_HEADLESS_SYNC_INTERVAL ?? '15';
 	const syncIntervalSeconds = Number(syncIntervalText);
 	if (!/^\d+$/.test(syncIntervalText) || !Number.isSafeInteger(syncIntervalSeconds) || syncIntervalSeconds < 1 || syncIntervalSeconds > 2147483) {
 		throw new Error('JOPLIN_HEADLESS_SYNC_INTERVAL must be a positive whole number of seconds, at most 2147483.');

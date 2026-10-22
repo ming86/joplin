@@ -20,8 +20,8 @@ interface PendingSync {
 
 /** Schedule native headless sync without overlapping runs or postponing inbound checks on edits. */
 export default class HeadlessSyncScheduler implements SyncSchedulingPolicy {
-	/** Fixed lightweight remote-check clock; native runs do not reset it. */
-	private pollInterval_: ReturnType<typeof shim.setInterval> | null = null;
+	/** One-shot delay to the next remote check, measured from the last run's completion. */
+	private pollTimeout_: ReturnType<typeof shim.setTimeout> | null = null;
 	/** Delay until the next periodic full sync after the previous one settles. */
 	private fullTimeout_: ReturnType<typeof shim.setTimeout> | null = null;
 	/** One wake-up for the current pending deadline. */
@@ -30,8 +30,12 @@ export default class HeadlessSyncScheduler implements SyncSchedulingPolicy {
 	private request_: PendingSync | null = null;
 	/** Held across authentication and the entire native run. */
 	private running_ = false;
+	/** Intent of the active request, used to pause remote polls during a full sync. */
+	private runningIntent_: SyncIntent | null = null;
 	/** Shutdown prevents callbacks and synchronizer follow-ups from reviving the scheduler. */
 	private stopped_ = false;
+	/** Recurrent timers are installed once, even while one-shot callbacks are being handled. */
+	private recurrentSyncSetup_ = false;
 
 	/** Bind native execution and pending status. Cadences are measured in milliseconds. */
 	public constructor(
@@ -127,6 +131,8 @@ export default class HeadlessSyncScheduler implements SyncSchedulingPolicy {
 		const request = this.request_;
 		this.request_ = null;
 		this.running_ = true;
+		this.runningIntent_ = request.intent;
+		if (request.intent === 'full') this.clearPollTimeout_();
 		this.pendingChanged_(false);
 		try {
 			await this.run_(request.options, request.wifiCheck);
@@ -135,19 +141,38 @@ export default class HeadlessSyncScheduler implements SyncSchedulingPolicy {
 			for (const caller of request.resolve) caller.reject(error);
 		} finally {
 			this.running_ = false;
+			this.runningIntent_ = null;
 			this.pendingChanged_(this.pending);
 			// A failure consumes its own request; only a new edit/tick can request another run.
 			this.arm();
+			if (request.intent === 'full' || request.intent === 'poll') this.scheduleNextRemotePoll_();
 		}
 	}
 
-	/** Run remote checks on a fixed clock and full syncs after completion-based delays. */
+	/** Start independent remote-poll and periodic full-sync completion-based delays. */
 	public setupRecurrentSync() {
-		if (this.stopped_ || this.pollInterval_ || this.fullTimeout_) return;
-		this.pollInterval_ = shim.setInterval(() => {
+		if (this.stopped_ || this.recurrentSyncSetup_) return;
+		this.recurrentSyncSetup_ = true;
+		this.scheduleNextRemotePoll_();
+		this.scheduleNextFullSync_();
+	}
+
+	/** Schedule a remote check only when no full sync is active or already queued. */
+	private scheduleNextRemotePoll_() {
+		if (this.stopped_ || !this.recurrentSyncSetup_ || this.pollTimeout_) return;
+		if (this.runningIntent_ === 'full' || this.request_?.intent === 'full') return;
+		if (this.runningIntent_ === 'poll' || this.request_?.intent === 'poll') return;
+		this.pollTimeout_ = shim.setTimeout(() => {
+			this.pollTimeout_ = null;
+			if (this.stopped_ || this.runningIntent_ === 'full' || this.request_?.intent === 'full') return;
 			void this.scheduleRecurring_({ remoteChangesOnly: true });
 		}, this.intervalMs_);
-		this.scheduleNextFullSync_();
+	}
+
+	/** Cancel a remote poll deadline when a full sync takes over its work. */
+	private clearPollTimeout_() {
+		if (this.pollTimeout_) shim.clearTimeout(this.pollTimeout_);
+		this.pollTimeout_ = null;
 	}
 
 	/** Start the next full-sync delay; only a settled periodic full sync calls this again. */
@@ -180,10 +205,9 @@ export default class HeadlessSyncScheduler implements SyncSchedulingPolicy {
 	/** Resolve queued callers and remove all timers without touching the active native run. */
 	public stop() {
 		this.stopped_ = true;
-		if (this.pollInterval_) shim.clearInterval(this.pollInterval_);
+		this.clearPollTimeout_();
 		if (this.fullTimeout_) shim.clearTimeout(this.fullTimeout_);
 		if (this.timeout_) shim.clearTimeout(this.timeout_);
-		this.pollInterval_ = null;
 		this.fullTimeout_ = null;
 		this.timeout_ = null;
 		for (const caller of this.request_?.resolve ?? []) caller.resolve();
