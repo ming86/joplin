@@ -61,6 +61,8 @@ The catalog exposes 13 tools when `allowWrites` is true: 8 read-only tools and 5
 
 When `create_note` receives a non-empty body, it first creates an empty note and then writes the body separately, avoiding Joplin's server-side media extraction on note creation. If the body write fails after creation, the result is `write_outcome_unknown`; the adapter does not retry automatically.
 
+When Joplin rejects a save through its model validation, MCP returns `validation_error` with the validation message and `outcomeUnknown: false`. This applies to a rejected update or the initial create request. A validation failure during the second request of note creation retains the partial-create handling described above.
+
 The server returns JSON both in MCP text content and `structuredContent`. Tool input rejects extra fields, including `accountId`, `baseUrl`, `token` and arbitrary Joplin properties. No tool changes which account is bound. Annotations describe reads/writes but are hints, not the permission boundary.
 
 ## Authorization and writes
