@@ -2,11 +2,15 @@ import Synchronizer, { SyncStartOptions } from '@joplin/lib/Synchronizer';
 import type { SyncSchedulingPolicy } from '@joplin/lib/registry';
 import shim from '@joplin/lib/shim';
 
+type SyncIntent = 'full' | 'upload' | 'poll';
+
 /** One coalesced native sync request, with callers waiting for that request's completion. */
 interface PendingSync {
-	/** Full sync requests retain their own options when partial requests arrive later. */
+	/** Distinguishes a lightweight remote check from a local upload request. */
+	intent: SyncIntent;
+	/** Full sync requests retain their own options when lower-priority requests arrive later. */
 	options: SyncStartOptions;
-	/** Earliest full-sync deadline, or the latest partial-sync debounce deadline. */
+	/** Earliest full/poll deadline, or the latest upload debounce deadline. */
 	due: number;
 	/** Whether this request must respect the existing mobile-data policy. */
 	wifiCheck: boolean;
@@ -16,8 +20,10 @@ interface PendingSync {
 
 /** Schedule native headless sync without overlapping runs or postponing inbound checks on edits. */
 export default class HeadlessSyncScheduler implements SyncSchedulingPolicy {
-	/** Fixed periodic inbound clock; native runs do not reset it. */
-	private interval_: ReturnType<typeof shim.setInterval> | null = null;
+	/** Fixed lightweight remote-check clock; native runs do not reset it. */
+	private pollInterval_: ReturnType<typeof shim.setInterval> | null = null;
+	/** Fixed ordinary full-sync clock; native runs do not reset it. */
+	private fullInterval_: ReturnType<typeof shim.setInterval> | null = null;
 	/** One wake-up for the current pending deadline. */
 	private timeout_: ReturnType<typeof shim.setTimeout> | null = null;
 	/** The only waiting request; later requests merge into it. */
@@ -27,41 +33,35 @@ export default class HeadlessSyncScheduler implements SyncSchedulingPolicy {
 	/** Shutdown prevents callbacks and synchronizer follow-ups from reviving the scheduler. */
 	private stopped_ = false;
 
-	/** Bind native execution and pending status, with interval measured in milliseconds. */
+	/** Bind native execution and pending status. Both intervals are measured in milliseconds. */
 	public constructor(
 		private readonly run_: (options: SyncStartOptions, wifiCheck: boolean)=> Promise<unknown>,
 		private readonly pendingChanged_: (pending: boolean)=> void,
 		private readonly intervalMs_: number,
 		private readonly reportError_: ()=> void,
+		/** Ordinary full-sync cadence; defaults to two minutes. */
+		private readonly fullIntervalMs_ = 120000,
 	) {}
 
 	/** A queued request remains pending even while another run is active. */
 	public get pending() { return this.request_ !== null; }
 
-	/** Detect the existing upload-only step sequence; all other requests retain full-sync priority. */
-	private isPartial(options: SyncStartOptions) {
-		return options.syncSteps?.toString() === Synchronizer.partialSyncSteps.toString();
+	/** Classify the explicit periodic poll separately from local upload requests. */
+	private intentFor(options: SyncStartOptions): SyncIntent {
+		if (options.remoteChangesOnly) return 'poll';
+		return options.syncSteps?.toString() === Synchronizer.partialSyncSteps.toString() ? 'upload' : 'full';
 	}
 
 	/** Merge requests before any asynchronous work, so authentication cannot race another request. */
 	public schedule(delay: number, options: SyncStartOptions, wifiCheck: boolean): Promise<void> {
 		if (this.stopped_) return Promise.resolve();
 		const due = Date.now() + delay;
+		const intent = this.intentFor(options);
 		const promise = new Promise<void>((resolve, reject) => {
 			if (!this.request_) {
-				this.request_ = { options, due, wifiCheck, resolve: [{ resolve, reject }] };
+				this.request_ = { intent, options, due, wifiCheck, resolve: [{ resolve, reject }] };
 			} else {
-				const previousPartial = this.isPartial(this.request_.options);
-				const nextPartial = this.isPartial(options);
-				if (previousPartial && !nextPartial) {
-					this.request_.options = options;
-					this.request_.due = Math.min(this.request_.due, due);
-				} else if (!previousPartial && !nextPartial) {
-					this.request_.due = Math.min(this.request_.due, due);
-				} else if (previousPartial && nextPartial) {
-					this.request_.options = options;
-					this.request_.due = due;
-				}
+				this.mergeRequest_(this.request_, intent, options, due);
 				// An explicit request may run even if a periodic request needs a Wi-Fi check.
 				this.request_.wifiCheck = this.request_.wifiCheck && wifiCheck;
 				this.request_.resolve.push({ resolve, reject });
@@ -70,6 +70,45 @@ export default class HeadlessSyncScheduler implements SyncSchedulingPolicy {
 		this.pendingChanged_(true);
 		this.arm();
 		return promise;
+	}
+
+	/** Combine queued intents without letting a poll erase a pending upload. */
+	private mergeRequest_(request: PendingSync, nextIntent: SyncIntent, nextOptions: SyncStartOptions, nextDue: number) {
+		const previousIntent = request.intent;
+
+		if (previousIntent === 'full') {
+			// A full sync already covers either kind of partial work.
+			request.due = Math.min(request.due, nextDue);
+			return;
+		}
+
+		if (nextIntent === 'full') {
+			request.intent = 'full';
+			request.options = nextOptions;
+			request.due = Math.min(request.due, nextDue);
+			return;
+		}
+
+		if (previousIntent === nextIntent) {
+			if (nextIntent === 'upload') {
+				// Keep the established latest-edit debounce and latest upload options.
+				request.options = nextOptions;
+				request.due = nextDue;
+			} else {
+				// Poll ticks coalesce without moving an earlier poll deadline later.
+				request.due = Math.min(request.due, nextDue);
+			}
+			return;
+		}
+
+		// A poll and an upload together become a full sync, preserving auxiliary
+		// options while removing the fields that would limit it to either intent.
+		const fullOptions: SyncStartOptions = { ...request.options, ...nextOptions };
+		delete fullOptions.syncSteps;
+		delete fullOptions.remoteChangesOnly;
+		request.intent = 'full';
+		request.options = fullOptions;
+		request.due = Math.min(request.due, nextDue);
 	}
 
 	/** Keep one deadline while idle; requests during a run are handled by its completion. */
@@ -102,24 +141,34 @@ export default class HeadlessSyncScheduler implements SyncSchedulingPolicy {
 		}
 	}
 
-	/** Run inbound checks on a fixed clock, independent of local debounce and run completion. */
+	/** Run remote checks and full syncs on independent fixed clocks. */
 	public setupRecurrentSync() {
-		if (this.stopped_ || this.interval_) return;
-		this.interval_ = shim.setInterval(async () => {
-			try {
-				await this.schedule(0, {}, true);
-			} catch {
-				this.reportError_();
-			}
+		if (this.stopped_ || this.pollInterval_ || this.fullInterval_) return;
+		this.pollInterval_ = shim.setInterval(() => {
+			void this.scheduleRecurring_({ remoteChangesOnly: true });
 		}, this.intervalMs_);
+		this.fullInterval_ = shim.setInterval(() => {
+			void this.scheduleRecurring_({});
+		}, this.fullIntervalMs_);
+	}
+
+	/** Keep periodic errors reported while joining the same coalesced request. */
+	private async scheduleRecurring_(options: SyncStartOptions) {
+		try {
+			await this.schedule(0, options, true);
+		} catch {
+			this.reportError_();
+		}
 	}
 
 	/** Resolve queued callers and remove all timers without touching the active native run. */
 	public stop() {
 		this.stopped_ = true;
-		if (this.interval_) shim.clearInterval(this.interval_);
+		if (this.pollInterval_) shim.clearInterval(this.pollInterval_);
+		if (this.fullInterval_) shim.clearInterval(this.fullInterval_);
 		if (this.timeout_) shim.clearTimeout(this.timeout_);
-		this.interval_ = null;
+		this.pollInterval_ = null;
+		this.fullInterval_ = null;
 		this.timeout_ = null;
 		for (const caller of this.request_?.resolve ?? []) caller.resolve();
 		this.request_ = null;
