@@ -15,8 +15,8 @@ import { StdioTestClient } from '../scripts/lib/stdio-client.mjs';
 const request = (id, method, params) => ({ jsonrpc: '2.0', id, method, ...(params ? { params } : {}) });
 const initialize = version => request(1, 'initialize', { protocolVersion: version, capabilities: {}, clientInfo: { name: 'test-client', version: '1' } });
 const call = (id, name, args = {}) => request(id, 'tools/call', { name, arguments: args });
-function session(options, customBackend = backend(), config = account()) {
-	return createMcpSession(createAccountRegistry([config], { makeBackend: () => customBackend }).forPrincipal(config.id, config.id), options);
+function session(options, customBackend = backend(), config = account(), factories = {}) {
+	return createMcpSession(createAccountRegistry([config], { makeBackend: () => customBackend, ...factories }).forPrincipal(config.id, config.id), options);
 }
 async function ready(s) { await s.handle(initialize('2025-11-25')); await s.handle({ jsonrpc: '2.0', method: 'notifications/initialized' }); }
 
@@ -39,7 +39,7 @@ test('requires valid initialization and ready notification; rejects second initi
 });
 test('stateless sessions serve tools without a handshake and accept independent initialization requests', async () => {
 	const s = session({ stateless: true });
-	assert.equal((await s.handle(request(2, 'tools/list'))).result.tools.length, 7);
+	assert.equal((await s.handle(request(2, 'tools/list'))).result.tools.length, 8);
 	assert.equal((await s.handle(call(3, 'get_status'))).result.structuredContent.accountId, 'alice');
 	assert.equal((await s.handle(initialize('2025-11-25'))).result.protocolVersion, '2025-11-25');
 	assert.equal((await s.handle(initialize('2025-06-18'))).result.protocolVersion, '2025-06-18');
@@ -59,12 +59,57 @@ test('invalid envelopes and ids; unknown methods; no response or tool execution 
 test('default read-only catalog, annotations and disabled-tool enforcement', async () => {
 	const s = session(); await ready(s);
 	const tools = (await s.handle(request(2, 'tools/list'))).result.tools;
-	assert.equal(tools.length, 7); assert.ok(tools.every(t => t.annotations.readOnlyHint));
+	assert.equal(tools.length, 8); assert.ok(tools.every(t => t.annotations.readOnlyHint));
 	assert.ok(tools.some(t => t.name === 'read_note'));
 	assert.ok(tools.some(t => t.name === 'list_tags'));
 	assert.equal((await s.handle(call(3, 'create_note', { parentId: folderId, title: 'x', body: 'y' }))).error.code, -32602);
 	assert.equal((await s.handle(call(4, 'delete_note', { id: noteId }))).error.code, -32602);
 	assert.equal((await s.handle(request(5, 'tools/list', { cursor: 'bogus' }))).error.code, -32602);
+});
+test('semantic search publishes its full schema and reports not implemented with or without an active index', async () => {
+	const schemaOf = tools => tools.find(tool => tool.name === 'semantic_search_notes')?.inputSchema;
+	const assertSchema = schema => {
+		assert.ok(schema);
+		assert.deepEqual(Object.keys(schema.properties), ['query', 'notebook_id', 'tag_id', 'relevance']);
+		assert.deepEqual(schema.required, ['query']);
+		assert.deepEqual(schema.properties.relevance.enum, ['strict', 'normal', 'loose']);
+		assert.equal(schema.properties.relevance.default, 'normal');
+	};
+	async function assertUnavailable(s) {
+		await ready(s);
+		const tools = (await s.handle(request(2, 'tools/list'))).result.tools;
+		const schema = schemaOf(tools);
+		assertSchema(schema);
+		const result = await s.handle(call(3, 'semantic_search_notes', { query: 'dog sitters', tag_id: noteId, relevance: 'loose' }));
+		assert.equal(result.result.isError, true);
+		assert.equal(result.result.structuredContent.error.code, 'semantic_search_not_implemented');
+		assert.equal(result.result.structuredContent.error.outcomeUnknown, false);
+	}
+
+	const withoutIndex = session();
+	try {
+		await assertUnavailable(withoutIndex);
+	} finally { withoutIndex.close(); }
+
+	const config = account();
+	let semanticSearchCalls = 0;
+	const withIndex = session({}, backend(), config, {
+		makeSemanticBackend: () => ({
+			accountId: config.id,
+			status: () => ({ state: 'ready' }),
+			async search() { semanticSearchCalls++; return { items: [] }; },
+		}),
+	});
+	try {
+		await ready(withIndex);
+		assert.equal((await withIndex.handle(call(2, 'get_status'))).result.structuredContent.semantic.state, 'ready');
+		const tools = (await withIndex.handle(request(3, 'tools/list'))).result.tools;
+		assertSchema(schemaOf(tools));
+		const result = await withIndex.handle(call(4, 'semantic_search_notes', { query: 'dog sitters' }));
+		assert.equal(result.result.isError, true);
+		assert.equal(result.result.structuredContent.error.code, 'semantic_search_not_implemented');
+		assert.equal(semanticSearchCalls, 0);
+	} finally { withIndex.close(); }
 });
 test('tool schemas reject account switching, arbitrary properties and invalid pagination before backend use', async () => {
 	let invoked = 0; const b = backend(); b.getNote = async () => { invoked++; throw Error('should not call'); };

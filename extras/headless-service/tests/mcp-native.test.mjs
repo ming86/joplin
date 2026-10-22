@@ -76,7 +76,7 @@ test('MCP over stdio -> actual encrypted Joplin API, FTS, E2EE filesystem sync a
 	fs.writeFileSync(configFile, JSON.stringify(conf));
 	const mcp = new StdioTestClient(configFile); t.after(() => mcp.close());
 	await mcp.initialize();
-	assert.equal((await mcp.request('tools/list')).tools.length, 7);
+	assert.equal((await mcp.request('tools/list')).tools.length, 8);
 	const marker = `mcpacceptance${randomBytes(6).toString('hex')}`;
 	let result = await mcp.call('create_note', { parentId: notebook.id, title: 'MCP temporary note', body: `${marker} initial 笔记` });
 	assert.equal(result.isError, false, JSON.stringify(result)); const noteId = result.structuredContent.note.id;

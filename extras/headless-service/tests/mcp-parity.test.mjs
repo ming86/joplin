@@ -177,7 +177,7 @@ test('MCP write catalog carries mutation annotations and rejects unsafe note sta
 	try {
 		const tools = (await readonly.handle(request(2, 'tools/list'))).result.tools;
 		const names = new Set(tools.map(tool => tool.name));
-		for (const name of ['get_status', 'list_notebooks', 'list_notes', 'search_notes', 'read_note', 'get_note', 'list_tags']) assert.ok(names.has(name), name);
+		for (const name of ['get_status', 'list_notebooks', 'list_notes', 'search_notes', 'semantic_search_notes', 'read_note', 'get_note', 'list_tags']) assert.ok(names.has(name), name);
 		for (const name of ['create_note', 'update_note', 'delete_note', 'create_notebook', 'manage_tags']) assert.ok(!names.has(name), name);
 	} finally { readonly.close(); }
 
