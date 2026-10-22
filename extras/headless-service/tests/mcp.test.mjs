@@ -109,6 +109,38 @@ test('default read-only catalog, annotations and disabled-tool enforcement', asy
 	assert.equal((await s.handle(call(4, 'delete_note', { id: noteId }))).error.code, -32602);
 	assert.equal((await s.handle(request(5, 'tools/list', { cursor: 'bogus' }))).error.code, -32602);
 });
+test('published write-tool anyOf branches contain their complete closed object schemas', async () => {
+	const s = session({ allowWrites: true }); await ready(s);
+	try {
+		const tools = new Map((await s.handle(request(2, 'tools/list'))).result.tools.map(tool => [tool.name, tool]));
+		const expected = new Map([
+			['create_note', { required: ['title'], alternatives: [['notebook_id'], ['parentId']] }],
+			['update_note', { required: ['id', 'base_revision_id'], alternatives: [['title'], ['body'], ['append'], ['prepend'], ['replace_text'], ['notebook_id'], ['todo_completed']] }],
+			['manage_tags', { required: ['note_id'], alternatives: [['add'], ['remove']] }],
+			['update_notebook', { required: ['id'], alternatives: [['title'], ['parent_id']] }],
+			['update_attachment', { required: ['id'], alternatives: [['title'], ['filename'], ['mime'], ['content_base64']] }],
+		]);
+
+		for (const [name, { required, alternatives }] of expected) {
+			const schema = tools.get(name)?.inputSchema;
+			assert.ok(schema, name);
+			assert.deepEqual(schema.required, required, name);
+			assert.equal(schema.additionalProperties, false, name);
+			assert.equal(schema.anyOf.length, alternatives.length, name);
+			for (const [index, alternativeRequired] of alternatives.entries()) {
+				const branch = schema.anyOf[index];
+				assert.equal(branch.type, 'object', name);
+				assert.deepEqual(branch.properties, schema.properties, name);
+				assert.deepEqual(branch.required, [...required, ...alternativeRequired], name);
+				assert.equal(branch.additionalProperties, false, name);
+				for (const [propertyName, property] of Object.entries(branch.properties)) {
+					assert.equal(typeof property.description, 'string', `${name}.${propertyName} description`);
+					assert.ok(property.description.length > 0, `${name}.${propertyName} description`);
+				}
+			}
+		}
+	} finally { s.close(); }
+});
 test('semantic search publishes its full schema and reports not implemented with or without an active index', async () => {
 	const schemaOf = tools => tools.find(tool => tool.name === 'semantic_search_notes')?.inputSchema;
 	const assertSchema = schema => {
@@ -171,7 +203,7 @@ test('create_note requires an explicit notebook and accepts either destination f
 		const tools = (await s.handle(request(2, 'tools/list'))).result.tools;
 		const schema = tools.find(tool => tool.name === 'create_note').inputSchema;
 		assert.deepEqual(schema.required, ['title']);
-		assert.deepEqual(schema.anyOf, [{ required: ['notebook_id'] }, { required: ['parentId'] }]);
+		assert.deepEqual(schema.anyOf.map(option => option.required), [['title', 'notebook_id'], ['title', 'parentId']]);
 		assert.match(schema.properties.notebook_id.description, /list_notebooks/);
 		assert.match(schema.properties.parentId.description, /alias/);
 
