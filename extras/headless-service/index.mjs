@@ -2,6 +2,9 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { createJoplinClient, endpoint } from './src/joplin.mjs';
 import { bindEmbeddingProvider, embeddingSpace } from './src/embeddings.mjs';
+import { createMaintenanceService } from './src/maintenance.mjs';
+import { createRevisionService } from './src/revisions.mjs';
+import { createAttachmentService } from './src/attachments.mjs';
 import { requireValue, ServiceError, pagination } from './src/errors.mjs';
 export { ServiceError } from './src/errors.mjs';
 export { bindEmbeddingProvider, embeddingSpace, embeddingFingerprint, noteFingerprint } from './src/embeddings.mjs';
@@ -107,6 +110,9 @@ export function createAccountRegistry(configurations, factories = {}) {
 			};
 			const semanticStatus = Object.freeze({ state: 'unavailable', reason: 'not_implemented', ...(config.embedding ? { embeddingSpaceId: config.embedding.space.id } : {}) });
 			return Object.freeze({
+				...createRevisionService({ backend, permit, accountId, readableNotebookTitle }),
+				...createMaintenanceService({ backend, permit, accountId }),
+				...createAttachmentService({ backend, permit, accountId }),
 				accountId,
 				async status(signal) {
 					permit('read');

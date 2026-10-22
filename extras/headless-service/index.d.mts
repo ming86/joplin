@@ -74,6 +74,93 @@ export interface Note {
     deleted_time?: number;
     is_locked?: number;
 }
+/** JSON values retained in a native note revision's metadata snapshot. */
+export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+/** Current note snapshot returned with its native revision precondition. */
+export interface RevisionNote extends Note {
+    /** Native Joplin revision id used as the update precondition. */
+    revision_id: string;
+    /** Previous native revision id, or null when this is the first captured revision. */
+    previous_revision_id?: string | null;
+    /** Whether an update changed the note and captured a new revision. */
+    changed?: boolean;
+}
+/** Result of a protected update, including whether a revision was captured. */
+export interface UpdatedRevisionNote extends RevisionNote {
+    previous_revision_id: string | null;
+    changed: boolean;
+}
+/** Compact row in a note's native revision history. */
+export interface NoteRevisionSummary {
+    /** Native Joplin revision id. */
+    revision_id: string;
+    /** Capture time in Unix epoch milliseconds. */
+    captured_time: number;
+    /** Parent revision id, or null for the first revision in the chain. */
+    parent_revision_id: string | null;
+}
+/** Immutable historical note snapshot reconstructed from native revision data. */
+export interface NoteRevisionSnapshot {
+    /** Original note id, including if the live note was deleted. */
+    note_id: string;
+    /** Native Joplin revision id. */
+    revision_id: string;
+    /** Capture time in Unix epoch milliseconds. */
+    captured_time: number;
+    /** Historical note title. */
+    title: string;
+    /** Historical note body. */
+    body: string;
+    /** JSON-safe tracked metadata from the historical note. */
+    metadata: Record<string, JsonValue>;
+}
+/** One before-and-after metadata field in a revision comparison. */
+export interface NoteRevisionMetadataChange {
+    /** Changed metadata field name. */
+    field: string;
+    /** Value before the change, preserving whether the property existed. */
+    from: { present: true; value: JsonValue } | { present: false };
+    /** Value after the change, preserving whether the property exists. */
+    to: { present: true; value: JsonValue } | { present: false };
+}
+/** Text and metadata differences between two native note revisions. */
+export interface NoteRevisionComparison {
+    /** Original note id. */
+    note_id: string;
+    /** Revision used as the comparison base. */
+    from_revision_id: string;
+    /** Compared-to revision id. */
+    to_revision_id: string;
+    /** Whether the destination is the latest current revision. */
+    to_current: boolean;
+    /** Unified patch for title changes. */
+    title_diff: string;
+    /** Unified patch for body changes. */
+    body_diff: string;
+    /** Tracked metadata changes. */
+    metadata_changes: NoteRevisionMetadataChange[];
+}
+/** Input for listing a page of native revisions. */
+export interface NoteRevisionListInput extends PageOptions {
+    /** Note whose revision history should be listed. */
+    note_id: string;
+}
+/** Input for reading one immutable native note revision. */
+export interface NoteRevisionReadInput {
+    /** Original note id. */
+    note_id: string;
+    /** Native Joplin revision id. */
+    revision_id: string;
+}
+/** Input for comparing one revision with another or with the latest revision. */
+export interface NoteRevisionCompareInput {
+    /** Original note id. */
+    note_id: string;
+    /** Revision used as the comparison base. */
+    from_revision_id: string;
+    /** Optional destination revision; omission selects the latest revision. */
+    to_revision_id?: string;
+}
 /** A notebook returned by the account's paged or complete listing. */
 export interface Notebook {
     /** Joplin notebook ID. */
@@ -87,6 +174,15 @@ export interface Notebook {
 export interface NotebookWithCount extends Notebook {
     /** Number of readable, non-deleted notes in this notebook. */
     note_count: number;
+}
+/** Result of moving a notebook subtree to Joplin Trash. */
+export interface DeletedNotebookResult {
+    /** Trashed notebook id. */
+    id: string;
+    /** Always true after the backend move succeeds. */
+    trashed: true;
+    /** Account that owns the notebook. */
+    accountId: string;
 }
 /** Complete safe notebook listing and its account binding. */
 export interface NotebookListResult {
@@ -170,6 +266,82 @@ export interface NotePatch {
     /** Completion timestamp in milliseconds, or 0 to reopen the to-do. */
     todo_completed?: number;
 }
+/** Protected note update; include the base revision and at least one change. */
+export interface RevisionNoteUpdate extends NoteUpdate {
+    /** Current native revision id returned by readNoteWithRevision. */
+    base_revision_id: string;
+}
+/** Notebook update; include a title and/or parent id. Empty parent id selects the root. */
+export interface NotebookUpdate {
+    /** Optional replacement notebook title. */
+    title?: string;
+    /** Optional destination notebook id, or an empty string for the root. */
+    parent_id?: string;
+}
+/** Attachment metadata returned by account-facing operations. */
+export interface AttachmentMetadata {
+    /** Joplin resource id. */
+    id: string;
+    /** Pathless display filename when supplied by the backend. */
+    filename?: string;
+    /** Display title, when set. */
+    title?: string | null;
+    /** MIME type, when set. */
+    mime?: string | null;
+    /** Resource filename extension. */
+    file_extension?: string | null;
+    /** Stored byte count. */
+    size?: number;
+    /** Creation time in Unix epoch milliseconds. */
+    created_time?: number;
+    /** Last update time in Unix epoch milliseconds. */
+    updated_time?: number;
+    /** Whether Joplin has encrypted the resource metadata. */
+    encryption_applied?: 0 | 1;
+    /** Whether Joplin has encrypted the resource file bytes. */
+    encryption_blob_encrypted?: 0 | 1;
+    /** Whether the resource is locked by Joplin's encryption state. */
+    is_locked?: 0 | 1;
+}
+/** Backend attachment metadata includes a pathless display filename. */
+export interface BackendAttachment extends AttachmentMetadata {
+    /** Filename safe to expose to callers; never a local storage path. */
+    filename: string;
+}
+/** Metadata-only attachment returned by an account service. */
+export interface AccountAttachment extends AttachmentMetadata {
+    /** Account that owns the resource. */
+    accountId: string;
+}
+/** Attachment bytes returned by the account service as standard base64. */
+export interface ReadableAccountAttachment extends AccountAttachment {
+    /** Pathless display filename. */
+    filename: string;
+    /** Complete file bytes encoded as standard base64. */
+    contentBase64: string;
+}
+/** Standalone resource upload input; linking it to a note is a separate body update. */
+export interface CreateAttachmentInput {
+    /** Pathless filename to store for the resource. */
+    filename: string;
+    /** Complete file bytes encoded as standard base64. */
+    contentBase64: string;
+    /** Optional resource display title. */
+    title?: string;
+    /** Optional MIME type. */
+    mime?: string;
+}
+/** Include at least one metadata field or a complete replacement of the current bytes. */
+export interface UpdateAttachmentInput {
+    /** Optional replacement display title. */
+    title?: string;
+    /** Optional pathless filename; Joplin derives the stored extension from it. */
+    filename?: string;
+    /** Optional replacement MIME type. */
+    mime?: string;
+    /** Optional complete replacement file bytes encoded as standard base64. */
+    contentBase64?: string;
+}
 /** Titles to add or remove from a note. Unknown added titles are created. */
 export interface ManageTagsInput {
     /** Note whose tag assignments should change. */
@@ -227,10 +399,28 @@ export interface JoplinBackend {
     createWebPlaceholder?(input: WebPlaceholder, signal?: AbortSignal): Promise<{ id: string }>;
     listIndexNotes?(options?: PageOptions, signal?: AbortSignal): Promise<Page<Note>>;
     getNote(id: string, signal?: AbortSignal): Promise<Note>;
+    /** Read current note data and capture its native revision id for a protected update. */
+    readNoteWithRevision(id: string, signal?: AbortSignal): Promise<RevisionNote>;
+    /** Apply note changes only if the supplied native revision id is still current. */
+    updateNoteWithRevision(id: string, input: RevisionNoteUpdate, signal?: AbortSignal): Promise<UpdatedRevisionNote>;
+    /** List one page of a note's immutable native revision history. */
+    listNoteRevisions(input: NoteRevisionListInput, signal?: AbortSignal): Promise<Page<NoteRevisionSummary>>;
+    /** Read one immutable historical note snapshot. */
+    readNoteRevision(input: NoteRevisionReadInput, signal?: AbortSignal): Promise<NoteRevisionSnapshot>;
+    /** Compare historical snapshots, defaulting the destination to the latest revision. */
+    compareNoteRevisions(input: NoteRevisionCompareInput, signal?: AbortSignal): Promise<NoteRevisionComparison>;
     createNote(input: NewNote, signal?: AbortSignal): Promise<Note>;
     updateNote(id: string, input: NotePatch, signal?: AbortSignal): Promise<Note>;
     /** Create a notebook in the backend. */
     createNotebook?(input: NewNotebook, signal?: AbortSignal): Promise<Notebook>;
+    /** Rename or move a notebook using native notebook update semantics. */
+    updateNotebook(id: string, input: NotebookUpdate, signal?: AbortSignal): Promise<Notebook>;
+    /** Move a notebook and its subtree to Joplin Trash. */
+    deleteNotebook(id: string, signal?: AbortSignal): Promise<void>;
+    /** Read safe tag metadata by id. */
+    getTag(id: string, signal?: AbortSignal): Promise<Tag>;
+    /** Rename a tag using Joplin's native title validation. */
+    updateTag(id: string, input: { title: string }, signal?: AbortSignal): Promise<Tag>;
     /** Return safe tag metadata currently attached to a note. */
     getNoteTags?(noteId: string, signal?: AbortSignal): Promise<Tag[]>;
     /** Return every safe tag reported by the backend. */
@@ -243,6 +433,16 @@ export interface JoplinBackend {
     addTagToNote?(tagId: string, noteId: string, signal?: AbortSignal): Promise<void>;
     /** Detach a tag from a note. */
     removeTagFromNote?(tagId: string, noteId: string, signal?: AbortSignal): Promise<void>;
+    /** List linked resource metadata for a note, following every core API page. */
+    listNoteAttachments(noteId: string, signal?: AbortSignal): Promise<BackendAttachment[]>;
+    /** Read metadata for one Joplin resource. */
+    getAttachment(resourceId: string, signal?: AbortSignal): Promise<BackendAttachment>;
+    /** Read one resource's current bytes as standard base64. */
+    readAttachment(resourceId: string, signal?: AbortSignal): Promise<BackendAttachment & { contentBase64: string }>;
+    /** Upload a standalone Joplin resource; this does not change a note body. */
+    createAttachment(input: CreateAttachmentInput, signal?: AbortSignal): Promise<BackendAttachment>;
+    /** Update resource metadata and/or replace the current resource bytes. */
+    updateAttachment(resourceId: string, input: UpdateAttachmentInput, signal?: AbortSignal): Promise<BackendAttachment>;
     search(query: string, options?: PageOptions, signal?: AbortSignal): Promise<Page<Note>>;
     /** Count all eligible keyword matches without fetching note bodies. */
     countSearchResults?(query: string, signal?: AbortSignal): Promise<number>;
@@ -356,6 +556,47 @@ export interface ReadableAccountNote extends AccountNote {
     /** Titles of readable tags attached to the note. */
     tags: string[];
 }
+/** Current note snapshot returned with its native revision identifier. */
+export interface AccountRevisionNote extends RevisionNote {
+    /** Account that supplied the note. */
+    accountId: string;
+}
+/** Current revision note with readable notebook and tag labels. */
+export interface ReadableAccountRevisionNote extends AccountRevisionNote {
+    /** Readable parent notebook title, or null when there is no readable parent. */
+    notebook_title: string | null;
+    /** Titles of readable tags attached to the note. */
+    tags: string[];
+}
+/** Result of a protected update enriched with its account identity. */
+export interface AccountUpdatedRevisionNote extends UpdatedRevisionNote {
+    /** Account that supplied the note. */
+    accountId: string;
+}
+/** Revision history row enriched with its account identity. */
+export interface AccountNoteRevisionSummary extends NoteRevisionSummary {
+    /** Account that supplied the revision. */
+    accountId: string;
+}
+/** Historical snapshot enriched with its account identity. */
+export interface AccountNoteRevisionSnapshot extends NoteRevisionSnapshot {
+    /** Account that supplied the revision. */
+    accountId: string;
+}
+/** Revision comparison enriched with its account identity. */
+export interface AccountNoteRevisionComparison extends NoteRevisionComparison {
+    /** Account that supplied the revisions. */
+    accountId: string;
+}
+/** One account-bound page of native note revision history. */
+export interface AccountNoteRevisionPage {
+    /** Account that supplied the revisions. */
+    accountId: string;
+    /** Revision rows in newest-first order. */
+    items: AccountNoteRevisionSummary[];
+    /** Whether a later page is available. */
+    hasMore: boolean;
+}
 /** Created note identity including the chosen notebook ID. */
 export interface CreatedAccountNote extends AccountNote {
     /** Notebook selected for creation. */
@@ -383,10 +624,38 @@ export interface AccountService {
     updateNote(id: string, input: NoteUpdate, signal?: AbortSignal): Promise<AccountNote>;
     /** Move an eligible note to Trash. */
     deleteNote(id: string, signal?: AbortSignal): Promise<DeletedNoteResult>;
+    /** Read an eligible note with its native revision id and readable labels. */
+    readNoteWithRevision(id: string, signal?: AbortSignal): Promise<ReadableAccountRevisionNote>;
+    /** Apply changes only when the current native revision matches the supplied base id. */
+    updateNoteWithRevision(id: string, input: RevisionNoteUpdate, signal?: AbortSignal): Promise<AccountUpdatedRevisionNote>;
+    /** List one account-bound page of native note revisions. */
+    listNoteRevisions(input: NoteRevisionListInput, signal?: AbortSignal): Promise<AccountNoteRevisionPage>;
+    /** Read an immutable historical snapshot, including after live-note deletion. */
+    readNoteRevision(input: NoteRevisionReadInput, signal?: AbortSignal): Promise<AccountNoteRevisionSnapshot>;
+    /** Compare two native revisions, defaulting the destination to the latest. */
+    compareNoteRevisions(input: NoteRevisionCompareInput, signal?: AbortSignal): Promise<AccountNoteRevisionComparison>;
     /** Add and remove tags by trimmed, case-insensitive title. */
     manageTags(input: ManageTagsInput, signal?: AbortSignal): Promise<ManageTagsResult>;
     /** List all readable tags. */
     listTags(signal?: AbortSignal): Promise<TagListResult>;
+    /** Rename a readable tag while preserving its existing note assignments. */
+    renameTag(id: string, title: string, signal?: AbortSignal): Promise<Tag & { accountId: string }>;
+    /** Update a notebook title, parent, or both. */
+    updateNotebook(id: string, input: NotebookUpdate, signal?: AbortSignal): Promise<Notebook & { accountId: string }>;
+    /** Move a notebook subtree to Joplin Trash. */
+    deleteNotebook(id: string, signal?: AbortSignal): Promise<DeletedNotebookResult>;
+    /** Create a standalone tag without attaching it to a note. */
+    createTag(title: string, signal?: AbortSignal): Promise<Tag & { accountId: string }>;
+    /** List attachment metadata linked to an eligible note. */
+    listNoteAttachments(noteId: string, signal?: AbortSignal): Promise<AccountAttachment[]>;
+    /** Read metadata for an eligible, unlocked resource. */
+    getAttachment(resourceId: string, signal?: AbortSignal): Promise<AccountAttachment>;
+    /** Read an eligible, unlocked resource and return its bytes as base64. */
+    readAttachment(resourceId: string, signal?: AbortSignal): Promise<ReadableAccountAttachment>;
+    /** Upload a standalone resource; linking it in a note body is a separate update. */
+    createAttachment(input: CreateAttachmentInput, signal?: AbortSignal): Promise<AccountAttachment>;
+    /** Rename or replace an eligible, unlocked resource. */
+    updateAttachment(resourceId: string, input: UpdateAttachmentInput, signal?: AbortSignal): Promise<AccountAttachment>;
     changes(cursor?: string, signal?: AbortSignal): Promise<Page<Change> & { accountId: string; cursor: string }>;
     search(input: SearchInput, signal?: AbortSignal): Promise<SearchResult>;
     embed(texts: string[], purpose: EmbeddingPurpose, signal?: AbortSignal): Promise<EmbeddingResponse & { accountId: string }>;

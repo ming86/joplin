@@ -1,4 +1,7 @@
 import { ServiceError, requireValue, identifier, pagination } from './errors.mjs';
+import { createMaintenanceClient } from './maintenance-client.mjs';
+import { createRevisionClient } from './revision-client.mjs';
+import { createAttachmentClient } from './attachment-client.mjs';
 
 /** Fields used by note reads and metadata scans. */
 const noteFields = 'id,parent_id,title,body,created_time,updated_time,is_todo,todo_completed,markup_language,encryption_applied,deleted_time,is_locked';
@@ -207,6 +210,9 @@ export function createJoplinClient(config) {
 	}
 
 	return Object.freeze({
+		...createMaintenanceClient(request),
+		...createRevisionClient(request),
+		...createAttachmentClient({ request, baseUrl, token, timeoutMs }),
 		/** Reads the core process's in-memory synchronization and decryption summary. */
 		async status(signal) {
 			return headlessStatusResult(await request('services/headless', {}, 'POST', { action: 'status' }, signal, { writeOperation: false }));
