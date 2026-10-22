@@ -3,6 +3,7 @@ import { registerRevisionTools } from './revision-tools.mjs';
 import { registerConflictTools } from './conflict-tools.mjs';
 import { registerMaintenanceTools } from './maintenance-tools.mjs';
 import { isMcpToolResult, registerAttachmentTools } from './attachment-tools.mjs';
+import { getToolOutputSchema } from './output-schemas.mjs';
 
 const id = { type: 'string', pattern: '^[a-f0-9]{32}$' };
 const page = { type: 'integer', minimum: 1, maximum: 1000000 };
@@ -139,7 +140,7 @@ export function createTools(service, { allowWrites = false } = {}) {
 	/** Store each definition with its runner and MCP safety annotations. */
 	function add(name, description, inputSchema, run, annotations = readAnnotations) {
 		tools.set(name, {
-			definition: { name, description, inputSchema, annotations: { ...annotations } }, run,
+			definition: { name, description, inputSchema, outputSchema: getToolOutputSchema(name), annotations: { ...annotations } }, run,
 		});
 	}
 
