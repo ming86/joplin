@@ -135,6 +135,45 @@ test('tool schemas reject account switching, arbitrary properties and invalid pa
 	for (const args of [{ query: 'x', limit: 101 }, { query: '', mode: 'keyword' }, { query: 'x', page: 0 }]) assert.equal((await s.handle(call(5, 'search_notes', args))).result.isError, true);
 	assert.equal(invoked, 0);
 });
+test('create_note requires an explicit notebook and accepts either destination field', async () => {
+	const b = backend(); const createdInputs = [];
+	const createNote = b.createNote;
+	b.createNote = async input => { createdInputs.push(input); return createNote(input); };
+	const config = account(); config.defaultNotebookId = 'c'.repeat(32);
+	const s = session({ allowWrites: true }, b, config); await ready(s);
+	try {
+		const tools = (await s.handle(request(2, 'tools/list'))).result.tools;
+		const schema = tools.find(tool => tool.name === 'create_note').inputSchema;
+		assert.deepEqual(schema.required, ['title']);
+		assert.deepEqual(schema.anyOf, [{ required: ['notebook_id'] }, { required: ['parentId'] }]);
+		assert.match(schema.properties.notebook_id.description, /list_notebooks/);
+		assert.match(schema.properties.parentId.description, /alias/);
+
+		const omitted = (await s.handle(call(3, 'create_note', { title: 'No destination' }))).result;
+		assert.equal(omitted.isError, true);
+		assert.equal(omitted.structuredContent.error.code, 'notebook_id_required');
+		assert.equal(createdInputs.length, 0, 'the configured default is not used');
+
+		const canonical = (await s.handle(call(4, 'create_note', { title: 'Canonical', notebook_id: folderId }))).result;
+		assert.equal(canonical.isError, false);
+		assert.equal(createdInputs[0].parentId, folderId);
+		const alias = (await s.handle(call(5, 'create_note', { title: 'Legacy alias', parentId: folderId }))).result;
+		assert.equal(alias.isError, false);
+		assert.equal(createdInputs[1].parentId, folderId);
+	} finally { s.close(); }
+
+	const soleBackend = backend(); let notebookScans = 0; let writes = 0;
+	const listNotebooks = soleBackend.listNotebooks;
+	soleBackend.listNotebooks = async (...args) => { notebookScans++; return listNotebooks(...args); };
+	soleBackend.createNote = async () => { writes++; return note; };
+	const onlyNotebook = session({ allowWrites: true }, soleBackend, account()); await ready(onlyNotebook);
+	try {
+		const omitted = (await onlyNotebook.handle(call(2, 'create_note', { title: 'No destination' }))).result;
+		assert.equal(omitted.structuredContent.error.code, 'notebook_id_required');
+		assert.equal(notebookScans, 0, 'the sole-readable-notebook fallback is not queried');
+		assert.equal(writes, 0);
+	} finally { onlyNotebook.close(); }
+});
 test('result identity/previews, Unicode paging and semantic fallback are explicit', async () => {
 	const b = backend(); const get = b.getNote; b.getNote = async () => ({ ...await get(), body: 'A😀B'.repeat(10000) });
 	const s = session({}, b); await ready(s);

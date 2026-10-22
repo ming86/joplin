@@ -96,22 +96,20 @@ test('Desktop update operations compose, replace only unique text, move notebook
 	} finally { session.close(); }
 });
 
-test('title-only creation uses the configured or sole notebook and carries to-do metadata', async () => {
+test('account service keeps configured and sole notebook defaults outside the MCP tool', async () => {
 	const singleNotebook = backend();
 	const createdInputs = [];
 	singleNotebook.createNote = async input => {
 		createdInputs.push(input);
 		return { ...note, title: input.title, body: input.body, parent_id: input.parentId, is_todo: input.is_todo };
 	};
-	const first = createSession(singleNotebook);
-	await ready(first);
-	try {
-		const created = (await invoke(first, 'create_note', { title: 'Title only', is_todo: true })).structuredContent;
-		assert.equal(createdInputs[0].body, '');
-		assert.equal(createdInputs[0].parentId, folderId);
-		assert.equal(createdInputs[0].is_todo, 1);
-		assert.equal(created.notebook_id, folderId);
-	} finally { first.close(); }
+	const soleConfig = account();
+	const first = createAccountRegistry([soleConfig], { makeBackend: () => singleNotebook }).forPrincipal(soleConfig.id, soleConfig.id);
+	const created = await first.createNote({ title: 'Title only', is_todo: true });
+	assert.equal(createdInputs[0].body, '');
+	assert.equal(createdInputs[0].parentId, folderId);
+	assert.equal(createdInputs[0].is_todo, 1);
+	assert.equal(created.notebook_id, folderId);
 
 	const configured = backend();
 	const config = account(); config.defaultNotebookId = movedNotebookId;
@@ -120,13 +118,10 @@ test('title-only creation uses the configured or sole notebook and carries to-do
 		createdInputs.push(input);
 		return { ...note, title: input.title, body: input.body, parent_id: input.parentId, is_todo: input.is_todo };
 	};
-	const second = createSession(configured, config);
-	await ready(second);
-	try {
-		await invoke(second, 'create_note', { title: 'Default notebook' });
-		assert.equal(createdInputs[1].parentId, movedNotebookId);
-		assert.equal(createdInputs[1].is_todo, 0);
-	} finally { second.close(); }
+	const second = createAccountRegistry([config], { makeBackend: () => configured }).forPrincipal(config.id, config.id);
+	await second.createNote({ title: 'Default notebook' });
+	assert.equal(createdInputs[1].parentId, movedNotebookId);
+	assert.equal(createdInputs[1].is_todo, 0);
 });
 
 test('notebook counts, notebook creation, tag listing, and case-insensitive tag changes use eligible notes', async () => {
@@ -471,7 +466,7 @@ test('notebook note counts include page 50 when the complete 5000-note page repo
 	} finally { session.close(); }
 });
 
-test('title-only note creation scans past filtered notebooks and rejects multiple readable choices', async t => {
+test('account service fallback scans past filtered notebooks and rejects multiple readable choices', async t => {
 	const encryptedId = '1'.repeat(32);
 	const deletedId = '2'.repeat(32);
 	const safeId = '3'.repeat(32);
@@ -521,18 +516,13 @@ test('title-only note creation scans past filtered notebooks and rejects multipl
 	});
 	const config = account(); config.joplin.baseUrl = url;
 	const service = createAccountRegistry([config]).forPrincipal(config.id, config.id);
-	const session = createMcpSession(service, { allowWrites: true });
-	await ready(session);
-	try {
-		const created = (await invoke(session, 'create_note', { title: 'Find the only readable notebook' })).structuredContent;
-		assert.equal(created.notebook_id, safeId);
-		assert.equal(createdBodies[0].parent_id, safeId);
-		assert.deepEqual(folderPages.slice(0, 2), [{ page: 1, ambiguous: false }, { page: 2, ambiguous: false }]);
+	const created = await service.createNote({ title: 'Find the only readable notebook' });
+	assert.equal(created.notebook_id, safeId);
+	assert.equal(createdBodies[0].parent_id, safeId);
+	assert.deepEqual(folderPages.slice(0, 2), [{ page: 1, ambiguous: false }, { page: 2, ambiguous: false }]);
 
-		ambiguous = true;
-		const rejected = await invoke(session, 'create_note', { title: 'Two readable notebooks' }, 3);
-		assertToolError(rejected, 'notebook_id_required');
-		assert.equal(createdBodies.length, 1, 'ambiguous fallback does not create a note');
-		assert.deepEqual(folderPages.at(-1), { page: 1, ambiguous: true });
-	} finally { session.close(); }
+	ambiguous = true;
+	await assert.rejects(service.createNote({ title: 'Two readable notebooks' }), error => error.code === 'notebook_id_required');
+	assert.equal(createdBodies.length, 1, 'ambiguous fallback does not create a note');
+	assert.deepEqual(folderPages.at(-1), { page: 1, ambiguous: true });
 });
