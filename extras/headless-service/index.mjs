@@ -169,7 +169,7 @@ export function createAccountRegistry(configurations, factories = {}) {
 						requireValue(typeof input.parent_id === 'string', 'invalid_notebook_input');
 						await backend().getNotebook(input.parent_id, signal);
 					}
-					return backend().createNotebook({ title: input.title.trim(), ...(input.parent_id ? { parentId: input.parent_id } : {}) }, signal);
+					return backend().createNotebook({ title: input.title, ...(input.parent_id ? { parentId: input.parent_id } : {}) }, signal);
 				},
 				async getWebCreationRecord(id, signal) { permit('write'); return backend().getClipRecord(id, signal); },
 				async createWebPlaceholder(input, signal) { permit('write'); return backend().createWebPlaceholder(input, signal); },
