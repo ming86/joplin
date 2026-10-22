@@ -1,4 +1,5 @@
 import Folder from '@joplin/lib/models/Folder';
+import Tag from '@joplin/lib/models/Tag';
 import type { FolderEntity } from '@joplin/lib/services/database/types';
 
 /** The only account-facing fields accepted by the private notebook update action. */
@@ -6,6 +7,12 @@ interface NotebookMaintenanceInput {
 	id: string;
 	title?: string;
 	parent_id?: string;
+}
+
+/** The only title accepted by the native tag lookup action. */
+interface TagTitleLookupInput {
+	/** Title passed to Joplin's native tag matching. */
+	title: string;
 }
 
 /** Throw a bounded validation error when a fixed maintenance action input is invalid. */
@@ -50,9 +57,25 @@ async function updateNotebook(input: NotebookMaintenanceInput) {
 	return { id: input.id, title: updated.title ?? current.title ?? '', parent_id: updated.parent_id ?? '' };
 }
 
-/** Return the one native maintenance action accepted by the headless status service. */
+/** Find a tag with Joplin's native trimming, collation, normalization and ordering rules. */
+async function findTagByTitle(input: TagTitleLookupInput) {
+	requireValue(input && typeof input === 'object' && !Array.isArray(input), 'Invalid tag lookup.');
+	requireValue(Object.keys(input).every(key => key === 'title'), 'Unsupported tag lookup property.');
+	requireValue(typeof input.title === 'string' && input.title.trim().length > 0, 'Invalid tag title.');
+
+	const tag = await Tag.loadByTitle(input.title);
+	// The headless HTTP transport drops top-level null responses, so keep misses in an object envelope.
+	if (!tag) return { tag: null };
+
+	// A matched encrypted tag is unavailable, rather than equivalent to a missing tag.
+	requireValue(tag.encryption_applied === 0 && typeof tag.id === 'string' && typeof tag.title === 'string', 'Tag unavailable.');
+	return { tag: { id: tag.id, title: tag.title } };
+}
+
+/** Return the fixed native maintenance actions accepted by the headless status service. */
 export function createHeadlessMaintenanceActions() {
 	return Object.assign(Object.create(null), {
 		maintenanceUpdateNotebook: updateNotebook,
+		findTagByTitle,
 	});
 }
