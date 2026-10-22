@@ -37,7 +37,7 @@ test('key comes from a consumed descriptor, not argv/environment; buffer is inde
 	const config = readHeadlessConfig(env);
 	assert.equal(config.databaseKey.toString('hex'), 'ab'.repeat(32));
 	assert.equal(config.sqliteModule, 'sqlite3');
-	assert.equal(config.syncIntervalSeconds, 10);
+	assert.equal(config.syncIntervalSeconds, 15);
 	assert.equal(env.JOPLIN_HEADLESS_KEY_FD, undefined);
 	assert.throws(() => fs.fstatSync(fd));
 	config.databaseKey.fill(0);

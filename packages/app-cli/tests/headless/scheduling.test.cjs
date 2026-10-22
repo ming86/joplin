@@ -54,7 +54,7 @@ function deferred() {
 }
 
 // Drive the real registry policy and native execution wrapper with deterministic virtual time.
-function headlessFixture(t) {
+function headlessFixture(t, intervalMs = 10000) {
 	let now = 0;
 	const originalNow = Date.now;
 	Date.now = () => now;
@@ -62,7 +62,7 @@ function headlessFixture(t) {
 	const timers = new Set();
 	const shim = {
 		isElectron: () => false,
-		setTimeout(fn, ms) { const timer = { fn, due: now + ms }; timers.add(timer); return timer; },
+		setTimeout(fn, ms) { const timer = { fn, due: now + ms, delay: ms }; timers.add(timer); return timer; },
 		clearTimeout: timer => timers.delete(timer),
 		setInterval(fn, ms) { const timer = { fn, due: now + ms, interval: ms }; timers.add(timer); return timer; },
 		clearInterval: timer => timers.delete(timer),
@@ -73,7 +73,7 @@ function headlessFixture(t) {
 		'@joplin/lib/shim': shim,
 	}).default;
 	const errors = [];
-	output.reg.setSyncSchedulingPolicy((run, pendingChanged) => new Scheduler(run, pendingChanged, 10000, () => errors.push(true)));
+	output.reg.setSyncSchedulingPolicy((run, pendingChanged) => new Scheduler(run, pendingChanged, intervalMs, () => errors.push(true)));
 	output.reg.setupRecurrentSync();
 	t.after(() => output.reg.setSyncSchedulingPolicy(null));
 	return {
@@ -97,7 +97,7 @@ function headlessFixture(t) {
 
 const partialOptions = { syncSteps: ['update_remote'] };
 
-test('headless registry keeps its 10-second inbound clock despite repeated local saves', async t => {
+test('headless registry keeps its remote-check cadence independent of repeated local saves', async t => {
 	const { reg, calls, advance, timers, settings } = headlessFixture(t);
 	const startup = reg.scheduleSync(0);
 	await advance(0); await startup;
@@ -108,7 +108,7 @@ test('headless registry keeps its 10-second inbound clock despite repeated local
 	assert.equal(calls.length, 2);
 	assert.equal(calls[1].syncSteps, undefined, 'periodic full sync subsumes the debounced partial');
 	assert.equal(calls[1].remoteChangesOnly, undefined);
-	assert.equal([...timers].filter(timer => timer.interval === 10000).length, 1);
+	assert.equal([...timers].filter(timer => timer.delay === 10000).length, 1);
 	assert.equal(settings['sync.interval'], 300, 'normal client cadence is not rewritten');
 	assert.deepEqual(JSON.parse(settings['sync.9.context']), { cursor: 2 });
 });
@@ -132,7 +132,7 @@ test('edits during native sync coalesce and retain the remaining debounce after 
 	assert.equal(reg.syncSchedulingPending(), false);
 });
 
-test('periodic ticks and synchronizer followups never overlap or downgrade a pending full sync', async t => {
+test('remote checks pause during a full sync without losing a debounced upload followup', async t => {
 	const { reg, fakeSync, calls, advance } = headlessFixture(t);
 	const running = deferred();
 	fakeSync.start = async options => { calls.push(options); await running.promise; return {}; };
@@ -142,53 +142,98 @@ test('periodic ticks and synchronizer followups never overlap or downgrade a pen
 	void reg.scheduleSync(1000, partialOptions);
 	assert.equal(calls.length, 1);
 	running.resolve(); await startup; await turn();
-	await advance(0);
-	assert.equal(calls.length, 2, 'three ticks coalesce into one follow-up');
-	assert.equal(calls[1].syncSteps, undefined);
-	assert.equal(calls[1].remoteChangesOnly, undefined, 'a local upload combined with a poll becomes an ordinary full sync');
+	await advance(999);
+	assert.equal(calls.length, 1, 'a full sync suppresses polls while it is active');
+	await advance(1);
+	assert.equal(calls.length, 2, 'the debounced upload still runs after the full sync');
+	assert.deepEqual(calls[1].syncSteps, partialOptions.syncSteps);
 });
 
-test('headless remote polls stay fixed while the full-sync delay starts after completion', async t => {
+test('remote checks wait 15 seconds after the previous check completes', async t => {
+	const { reg, fakeSync, calls, advance } = headlessFixture(t, 15000);
+	const startup = reg.scheduleSync(0);
+	await advance(0); await startup;
+	const poll = deferred();
+	fakeSync.start = async options => {
+		calls.push(options);
+		if (options.remoteChangesOnly) await poll.promise;
+	};
+
+	await advance(15000);
+	assert.equal(calls.filter(options => options.remoteChangesOnly).length, 1);
+	await advance(30000);
+	assert.equal(calls.filter(options => options.remoteChangesOnly).length, 1, 'a slow check does not overlap or queue another poll');
+	poll.resolve();
+	await advance(0);
+	await advance(14999);
+	assert.equal(calls.filter(options => options.remoteChangesOnly).length, 1);
+	await advance(1);
+	assert.equal(calls.filter(options => options.remoteChangesOnly).length, 2, 'the next check starts 15 seconds after completion');
+});
+
+test('remote checks remain paused through a periodic full sync and restart after it settles', async t => {
 	const { reg, calls, advance, timers } = headlessFixture(t);
 	const startup = reg.scheduleSync(0);
 	await advance(0); await startup;
-	assert.deepEqual([...timers].filter(timer => timer.interval).map(timer => timer.interval), [10000]);
-	assert.equal([...timers].find(timer => !timer.interval).due, 120000);
+	assert.equal([...timers].filter(timer => timer.interval).length, 0, 'remote checks use one-shot timers');
+	assert.deepEqual([...timers].map(timer => timer.delay).sort((a, b) => a - b), [10000, 120000]);
 
 	await advance(10000);
 	assert.equal(calls.length, 2);
 	assert.equal(calls[1].remoteChangesOnly, true);
 	await advance(109999);
-	assert.equal(calls.filter(options => !options.remoteChangesOnly).length, 1, 'polls do not restart or replace the full-sync clock');
+	assert.equal(calls.filter(options => !options.remoteChangesOnly).length, 1, 'polls do not reset the periodic full-sync clock');
 	await advance(1);
 	assert.equal(calls.filter(options => !options.remoteChangesOnly).length, 2, 'the ordinary full sync still runs at 120 seconds');
 	assert.equal(calls[calls.length - 1].remoteChangesOnly, undefined);
-	assert.equal([...timers].find(timer => !timer.interval).due, 240000, 'the next delay begins when that full sync settles');
+	assert.equal([...timers].find(timer => timer.delay === 120000).due, 240000, 'the next delay begins when that full sync settles');
+	assert([...timers].some(timer => timer.delay === 10000 && timer.due === 130000), 'remote checks restart after the full sync completes');
 });
 
-test('a slow periodic full sync delays the next full sync until 120 seconds after completion', async t => {
-	const { reg, fakeSync, calls, advance } = headlessFixture(t);
+test('periodic full sync delay restarts 120 seconds after success or failure settles', async t => {
+	const { reg, fakeSync, calls, advance, timers } = headlessFixture(t);
 	const startup = reg.scheduleSync(0);
 	await advance(0); await startup;
 	const periodicFull = deferred();
+	const failedPeriodicFull = deferred();
 	let fullRuns = 0;
 	fakeSync.start = async options => {
 		calls.push(options);
-		if (!options.remoteChangesOnly && ++fullRuns === 1) await periodicFull.promise;
+		if (!options.remoteChangesOnly) {
+			fullRuns++;
+			if (fullRuns === 1) await periodicFull.promise;
+			if (fullRuns === 2) {
+				await failedPeriodicFull.promise;
+				throw new Error('periodic full sync failed');
+			}
+		}
 		return {};
 	};
 
 	await advance(120000);
 	assert.equal(calls.filter(options => !options.remoteChangesOnly).length, 2, 'the first periodic full sync starts after its delay');
 	await advance(120000);
-	assert.equal(calls.filter(options => !options.remoteChangesOnly).length, 2, 'a full sync still running at its next fixed-clock deadline does not queue another full sync');
+	assert.equal(calls.filter(options => !options.remoteChangesOnly).length, 2, 'a full sync still running does not queue another full sync');
+	assert.equal(calls.filter(options => options.remoteChangesOnly).length, 11, 'remote checks stay suspended while the full sync is running');
 
 	periodicFull.resolve();
 	await advance(0);
 	await advance(119999);
 	assert.equal(calls.filter(options => !options.remoteChangesOnly).length, 2, 'the next delay starts after the slow full sync finishes');
 	await advance(1);
-	assert.equal(calls.filter(options => !options.remoteChangesOnly).length, 3, 'the next full sync starts 120 seconds after completion');
+	assert.equal(calls.filter(options => !options.remoteChangesOnly).length, 3, 'the next full sync starts 120 seconds after successful completion');
+
+	await advance(120000);
+	assert.equal(calls.filter(options => !options.remoteChangesOnly).length, 3, 'the next full sync does not start while the failed run is active');
+	assert.equal(calls.filter(options => options.remoteChangesOnly).length, 22, 'remote checks remain suspended during that full sync');
+	failedPeriodicFull.resolve();
+	await advance(0); await turn();
+	assert([...timers].some(timer => timer.delay === 10000 && timer.due === 490000), 'the poll delay restarts after the failed full sync settles');
+	assert([...timers].some(timer => timer.delay === 120000 && timer.due === 600000), 'the next full-sync delay also starts after failure settles');
+	await advance(119999);
+	assert.equal(calls.filter(options => !options.remoteChangesOnly).length, 3, 'failure does not trigger an immediate full-sync retry');
+	await advance(1);
+	assert.equal(calls.filter(options => !options.remoteChangesOnly).length, 4, 'the next periodic full sync still starts 120 seconds after failure settles');
 });
 
 test('a remote poll and a queued local upload merge into an ordinary full sync', async t => {
