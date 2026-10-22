@@ -586,6 +586,8 @@ export interface DecryptionStatusSummary {
 }
 /** Fixed core process status fields that exclude note and error contents. */
 export interface HeadlessStatusSummary {
+    /** Email configured for the Joplin account in the core, or null when unavailable. */
+    accountEmail: string | null;
     /** Unix epoch milliseconds when this summary was observed. */
     observedAt: number;
     /** Unix epoch milliseconds when this headless service process started. */
@@ -597,7 +599,7 @@ export interface HeadlessStatusSummary {
 }
 /** Account-bound status combining core process state with the local semantic index. */
 export interface AccountStatus extends HeadlessStatusSummary {
-    /** Account selected by the configured registry binding. */
+    /** Local account binding ID selected by the configured registry. */
     accountId: string;
     /** Semantic index state for this account. */
     semantic: SemanticStatus;

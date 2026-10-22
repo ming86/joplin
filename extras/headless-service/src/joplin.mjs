@@ -47,7 +47,8 @@ function headlessStatusResult(data) {
 	const nullableTimestamp = value => value === null || timestamp(value);
 	const count = value => Number.isSafeInteger(value) && value >= 0;
 	const reportStates = ['idle', 'in_progress', null];
-	requireValue(data && typeof data === 'object' && timestamp(data.observedAt) && timestamp(data.serviceStartedAt)
+	requireValue(data && typeof data === 'object' && (typeof data.accountEmail === 'string' || data.accountEmail === null)
+		&& timestamp(data.observedAt) && timestamp(data.serviceStartedAt)
 		&& data.sync && typeof data.sync === 'object' && typeof data.sync.running === 'boolean' && typeof data.sync.pending === 'boolean'
 		&& data.decryption && typeof data.decryption === 'object'
 		&& (data.decryption.state === null || data.decryption.state === 'idle' || data.decryption.state === 'started')
@@ -82,6 +83,7 @@ function headlessStatusResult(data) {
 		batch = { itemIndex: input.itemIndex, itemCount: input.itemCount };
 	}
 	return {
+		accountEmail: data.accountEmail,
 		observedAt: data.observedAt,
 		serviceStartedAt: data.serviceStartedAt,
 		sync: {

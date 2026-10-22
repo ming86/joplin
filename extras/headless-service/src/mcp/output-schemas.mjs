@@ -62,7 +62,9 @@ const syncReport = object({
 });
 /** Current process status combined with the account and semantic index state. */
 const status = object({
-	accountId, semantic, observedAt: time, serviceStartedAt: time,
+	accountEmail: { ...nullableString, description: 'Joplin account email configured in the core, or null when unavailable.' },
+	accountId: { type: 'string', description: 'Local account binding ID selected by the registry.' },
+	semantic, observedAt: time, serviceStartedAt: time,
 	sync: object({ running: boolean, pending: boolean, report: { anyOf: [syncReport, { type: 'null' }] } }),
 	decryption: object({
 		state: { type: ['string', 'null'], enum: ['idle', 'started', null] },
