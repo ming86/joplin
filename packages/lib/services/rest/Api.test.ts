@@ -732,12 +732,7 @@ describe('services/rest/Api', () => {
 			expect(r1.items[1].title).toBe('folder2');
 
 			const r2 = await api.route(RequestMethod.GET, 'folders', { ...baseQuery, page: 2 });
-
-			// The API currently doesn't check if there's effectively a
-			// page of data after the current one. If the number of
-			// returned items === limit, it sets `has_more` and the next
-			// result set will be empty
-			expect(r1.has_more).toBe(true);
+			expect(r2.has_more).toBe(false);
 			expect(r2.items.length).toBe(2);
 			expect(r2.items[0].title).toBe('folder3');
 			expect(r2.items[1].title).toBe('folder4');
@@ -840,6 +835,7 @@ describe('services/rest/Api', () => {
 			limit: 2,
 		});
 
+		expect(r1.has_more).toBe(true);
 		expect(r1.items.length).toBe(2);
 		expect(r1.items[0].id).toBe(note1.id);
 		expect(r1.items[1].id).toBe(note2.id);
@@ -849,8 +845,17 @@ describe('services/rest/Api', () => {
 			page: 2,
 		});
 
+		expect(r2.has_more).toBe(false);
 		expect(r2.items.length).toBe(1);
 		expect(r2.items[0].id).toBe(note3.id);
+
+		const r3 = await api.route(RequestMethod.GET, `folders/${folder.id}/notes`, { limit: 3 });
+		expect(r3.items.map((item: NoteEntity) => item.id)).toEqual([note1.id, note2.id, note3.id]);
+		expect(r3.has_more).toBe(false);
+
+		const r4 = await api.route(RequestMethod.GET, `folders/${folder.id}/notes`, { limit: 3, page: 2 });
+		expect(r4.items).toHaveLength(0);
+		expect(r4.has_more).toBe(false);
 	}));
 
 	it('should sort search paginated results', (async () => {
@@ -994,6 +999,18 @@ describe('services/rest/Api', () => {
 		const r3 = await api.route(RequestMethod.GET, 'search', { query: 'a', limit: 4, page: 3 });
 		expect(r3.items.length).toBe(2);
 		expect(!!r3.has_more).toBe(false);
+
+		const exactFirstPage = await api.route(RequestMethod.GET, 'search', { query: 'a', limit: 5 });
+		expect(exactFirstPage.items.length).toBe(5);
+		expect(exactFirstPage.has_more).toBe(true);
+
+		const exactLastPage = await api.route(RequestMethod.GET, 'search', { query: 'a', limit: 5, page: 2 });
+		expect(exactLastPage.items.length).toBe(5);
+		expect(exactLastPage.has_more).toBe(false);
+
+		const beyondLastPage = await api.route(RequestMethod.GET, 'search', { query: 'a', limit: 5, page: 3 });
+		expect(beyondLastPage.items.length).toBe(0);
+		expect(beyondLastPage.has_more).toBe(false);
 
 		await SearchEngine.instance().destroy();
 

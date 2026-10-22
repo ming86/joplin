@@ -25,7 +25,7 @@ export default function(itemType: ModelType, items: any[], request: Request, opt
 	const pagination = requestPaginationOptions(request);
 	const startIndex = (pagination.page - 1) * pagination.limit;
 	const itemCount = Math.min(items.length - startIndex, pagination.limit);
-	const hasMore = itemCount >= pagination.limit;
+	const hasMore = items.length > startIndex + pagination.limit;
 
 	const sortBy = pagination.order[0].by;
 	const sortDir = pagination.order[0].dir;

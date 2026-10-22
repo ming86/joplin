@@ -42,18 +42,19 @@ export default async function(db: JoplinDatabase, tableName: string, pagination:
 	const fieldsSql = fields.length ? db.escapeFields(fields) : '*';
 	const offset = (pagination.page - 1) * pagination.limit;
 
+	// Fetch one extra row to tell whether another page exists after this one.
 	const sql = `
 		SELECT ${fieldsSql} FROM \`${tableName}\`
 		${where.length ? `WHERE ${where.join(' AND ')}` : ''}
 		ORDER BY ${orderBySql}
-		LIMIT ${pagination.limit}
+		LIMIT ${pagination.limit + 1}
 		OFFSET ${offset}
 	`;
 
 	const rows = await db.selectAll(sql, sqlParams);
 
 	return {
-		items: rows,
-		has_more: rows.length >= pagination.limit,
+		items: rows.slice(0, pagination.limit),
+		has_more: rows.length > pagination.limit,
 	};
 }
