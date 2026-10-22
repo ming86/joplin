@@ -37,6 +37,7 @@ test('key comes from a consumed descriptor, not argv/environment; buffer is inde
 	const config = readHeadlessConfig(env);
 	assert.equal(config.databaseKey.toString('hex'), 'ab'.repeat(32));
 	assert.equal(config.sqliteModule, 'sqlite3');
+	assert.equal(config.syncIntervalSeconds, 10);
 	assert.equal(env.JOPLIN_HEADLESS_KEY_FD, undefined);
 	assert.throws(() => fs.fstatSync(fd));
 	config.databaseKey.fill(0);
@@ -103,4 +104,15 @@ test('ordinary settings and public resource files remain permitted plaintext', a
 	fs.writeFileSync(path.join(dir, 'resources', 'public.txt'), 'public reference');
 	await prepareProfile(dir);
 	assert.equal(fs.readFileSync(path.join(dir, 'resources', 'public.txt'), 'utf8'), 'public reference');
+});
+
+
+test('headless sync cadence accepts seconds without changing standard sync.interval', t => {
+	const env = interval => ({ JOPLIN_HEADLESS: '1', JOPLIN_HEADLESS_PROFILE: temporaryDirectory(t), JOPLIN_HEADLESS_SYNC_INTERVAL: interval, JOPLIN_HEADLESS_KEY_FD: `${descriptor(t, 'ab'.repeat(32))}` });
+	for (const value of ['0', '-1', '1.5', 'foo', '2147484', '']) {
+		const values = env(value);
+		assert.throws(() => readHeadlessConfig(values), /JOPLIN_HEADLESS_SYNC_INTERVAL/);
+		fs.closeSync(Number(values.JOPLIN_HEADLESS_KEY_FD));
+	}
+	assert.equal(readHeadlessConfig(env('30')).syncIntervalSeconds, 30);
 });

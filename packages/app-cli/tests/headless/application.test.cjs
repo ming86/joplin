@@ -26,7 +26,7 @@ function fixture() {
 	const empty = {};
 	const mocks = Object.fromEntries([
 		'@joplin/lib/folders-screen-utils.js', '@joplin/lib/BaseModel', '@joplin/lib/models/Folder',
-		'@joplin/lib/models/BaseItem', '@joplin/lib/models/Note', '@joplin/lib/models/Tag',
+		'@joplin/lib/models/BaseItem', '@joplin/lib/Synchronizer', './headless/HeadlessSyncScheduler', '@joplin/lib/models/Note', '@joplin/lib/models/Tag',
 		'@joplin/lib/path-utils', '@joplin/lib/locale', 'fs-extra', '@joplin/lib/shim',
 		'./setupCommand', './base-command', './utils/initializeCommandService', './cli-utils',
 		'./headless/config', './headless/profile', 'proper-lockfile',
@@ -34,8 +34,13 @@ function fixture() {
 	Object.assign(mocks, {
 		'@joplin/lib/BaseApplication': Base,
 		'@joplin/lib/Cache': class {},
+		'@joplin/lib/models/BaseItem': { setLocalChangeHandler: handler => events.push(handler ? 'attach-local-sync' : 'detach-local-sync') },
 		'@joplin/utils/Logger': Logger,
 		'./headless/DatabaseDriver': Driver,
+		'./headless/revisions': { createHeadlessRevisionActions: () => ({}) },
+		'./headless/maintenance': { createHeadlessMaintenanceActions: () => ({}) },
+		'./headless/attachments': { default: () => ({}), __esModule: true },
+		'./headless/conflicts': () => ({}),
 		'./headless/status': load('packages/app-cli/app/headless/status.ts'),
 		'@joplin/lib/ClipperServer': { instance: () => instance },
 		'@joplin/lib/services/DecryptionWorker': { instance: () => ({
@@ -51,6 +56,8 @@ function fixture() {
 		},
 		'@joplin/lib/registry.js': { reg: {
 			scheduleSync: async () => events.push('schedule-sync'),
+			setSyncSchedulingPolicy: factory => events.push(factory ? 'attach-sync-policy' : 'detach-sync-policy'),
+			syncSchedulingPending: () => false,
 			cancelTimers: async () => events.push('cancel-sync-timers'),
 			syncTarget: () => ({ syncStarted: async () => true, synchronizer: async () => ({
 				cancel: async () => events.push('cancel-sync'),
@@ -74,14 +81,14 @@ test('headless application wires one owner: initialize, listen, drain sync/worke
 	app.headlessInitialized_ = true;
 	await app.runHeadlessService();
 	assert.deepEqual(events, [
-		'background:true', 'decrypt', 'fts', 'resources', 'revisions', 'save-settings',
-		'listen', 'schedule-sync', 'ready', 'drain-api', 'cancel-sync-timers', 'cancel-sync',
-		'drain-sync', 'detach-redux', 'stop-workers', 'save-settings', 'cancel-settings-timer',
+		'attach-sync-policy', 'attach-local-sync', 'background:true', 'decrypt', 'fts', 'resources', 'revisions', 'save-settings',
+		'listen', 'schedule-sync', 'ready', 'detach-local-sync', 'drain-api', 'cancel-sync-timers', 'cancel-sync',
+		'drain-sync', 'detach-sync-policy', 'detach-redux', 'stop-workers', 'save-settings', 'cancel-settings-timer',
 		'close-db', 'reset-models',
 	]);
 	assert.equal(app.backgroundServicesEnabled(), false);
 	const summary = await clipper.actions.headless().status();
-	assert.equal(summary.sync.pending, true);
+	assert.equal(summary.sync.pending, false);
 	assert.equal(summary.decryption.disabledItemCount, 1);
 	assert.ok(!JSON.stringify(summary).includes('never-exposed'));
 	await app.stopHeadless();
