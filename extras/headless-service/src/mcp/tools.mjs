@@ -144,7 +144,7 @@ export function createTools(service, { allowWrites = false } = {}) {
 		});
 	}
 
-	add('get_status', 'Return the configured Joplin account email (when available) and local binding ID, plus semantic index state, live sync details, and decryption worker state and last-reported batch.', object({}), (_args, signal) => service.status(signal));
+	add('get_status', 'Return the Joplin account email and local binding ID, plus semantic index state, live sync details, and decryption worker state and last-reported batch.', object({}), (_args, signal) => service.status(signal));
 	add('list_notebooks', 'List all readable notebooks (folders) with their ids, titles, parent ids and note counts. The notebooks field contains the complete list; items contains the requested page, and hasMore indicates whether a later page remains. Use parent_id to reconstruct the notebook tree.', object({
 		page: { ...page, description: 'Page number for items; defaults to 1. The notebooks field always contains the complete list.' },
 		limit: { ...limit, description: 'Maximum number of notebooks in the items page; defaults to 20.' },
