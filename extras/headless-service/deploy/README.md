@@ -44,7 +44,7 @@ Provide the MCP container with a private JSON config and separate private files 
 }
 ```
 
-Set the core profile's `api.port` to `41190` so it matches the MCP `baseUrl`. The MCP listener uses `0.0.0.0` inside the shared pod so Podman can publish its port on the VPS loopback interface. `allowedOrigins` is an exact allowlist for requests that include an `Origin` header; it does not authenticate clients. The generated config sets `allowWrites` to true, enabling all five write tools and exposing 12 tools in total for Desktop parity in this deployment. No semantic-search configuration is required for this deployment. See [MCP.md](../MCP.md) for the full transport and configuration behavior.
+Set the core profile's `api.port` to `41190` so it matches the MCP `baseUrl`. The MCP listener uses `0.0.0.0` inside the shared pod so Podman can publish its port on the VPS loopback interface. `allowedOrigins` is an exact allowlist for requests that include an `Origin` header; it does not authenticate clients. After rebuilding the image with the updated catalog, the generated config sets `allowWrites` to true and exposes 13 tools (8 read-only and 5 write). `semantic_search_notes` is listed with its Desktop schema without semantic runtime setup, but calls currently return an explicit unavailable/not-implemented result. This does not enable or change the existing semantic and hybrid modes of `search_notes`. See [MCP.md](../MCP.md) for the full transport and configuration behavior.
 
 ## Health and deployment scope
 
