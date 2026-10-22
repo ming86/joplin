@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { createAccountRegistry, ServiceError } from '../index.mjs';
 import { startMcpHttpServer } from '../src/mcp/http.mjs';
-import { account, backend, note, noteId, folderId } from './fixtures.mjs';
+import { account, backend, initialRevisionId, note, noteId, folderId } from './fixtures.mjs';
 
 const token = 'test-http-token';
 const version = '2025-11-25';
@@ -205,7 +205,7 @@ test('HTTP returns a successful write reply larger than the former response cap'
 	b.getNote = async () => ({ ...largeNote });
 	b.updateNote = async (_id, patch) => { writes++; return { ...largeNote, ...patch }; };
 	const server = await start(t, b, { allowWrites: true });
-	const response = await exchange(server, call(1, 'update_note', { id: noteId, title: 'new title' }));
+	const response = await exchange(server, call(1, 'update_note', { id: noteId, base_revision_id: initialRevisionId, title: 'new title' }));
 	assert.equal(response.status, 200);
 	assert.equal(response.json.result.isError, false);
 	assert.equal(response.json.result.structuredContent.note.body, body);

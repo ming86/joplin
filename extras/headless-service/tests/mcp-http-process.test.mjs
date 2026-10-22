@@ -97,14 +97,23 @@ test('HTTP MCP launcher serves authenticated stateless requests and stops cleanl
 	t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
 	const apiToken = 'synthetic-private-api-token';
 	const bearerToken = 'synthetic-http-bearer-token';
-	const api = http.createServer((req, res) => {
+	const api = http.createServer(async (req, res) => {
 		const target = new URL(req.url, 'http://127.0.0.1');
 		if (target.searchParams.get('token') !== apiToken) {
 			res.writeHead(401).end();
 			return;
 		}
 		res.setHeader('Content-Type', 'application/json');
-		if (req.method === 'GET' && target.pathname === '/notes') {
+		if (req.method === 'POST' && target.pathname === '/services/headless') {
+			const chunks = [];
+			for await (const chunk of req) chunks.push(chunk);
+			const action = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+			if (action.action === 'readNote') {
+				res.end(JSON.stringify({ ...note, revision_id: '0'.repeat(31) + '1' }));
+			} else {
+				res.writeHead(400).end('{}');
+			}
+		} else if (req.method === 'GET' && target.pathname === '/notes') {
 			res.end(JSON.stringify({ items: [], has_more: false }));
 		} else if (req.method === 'GET' && target.pathname === `/notes/${noteId}`) {
 			res.end(JSON.stringify(note));

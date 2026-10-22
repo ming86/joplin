@@ -68,7 +68,7 @@ test('private API clip adapter preserves explicit ID/source and does not expose 
 		res.setHeader('Content-Type', 'application/json');
 		if (u.pathname === '/notes' && req.method === 'POST') { const body = await readJson(req); assert.equal(body.id, op); assert.equal(body.source, 'joplin-headless-clip/v1:' + 'a'.repeat(64)); assert.equal(body.user_data, undefined); res.end(JSON.stringify({ id: op, unexpected: 'hidden' })); }
 		else if (u.pathname === `/notes/${op}`) { assert.equal(u.searchParams.get('include_deleted'), '1'); assert.ok(!u.searchParams.get('fields').includes('body')); res.end(JSON.stringify({ id: op, parent_id: folder, source: 'receipt', body: 'hidden', encryption_applied: 0 })); }
-		else res.end(JSON.stringify({ id: folder, title: 'Allowed', deleted_time: 0 }));
+		else res.end(JSON.stringify({ id: folder, title: 'Allowed', encryption_applied: 0, deleted_time: 0 }));
 	});
 	const api = createJoplinClient({ baseUrl: url, token: 'private' });
 	assert.deepEqual(await api.createClipRecord({ id: op, parent_id: folder, title: 'a', body: 'text', source: 'joplin-headless-clip/v1:' + 'a'.repeat(64) }), { id: op });

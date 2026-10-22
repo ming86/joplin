@@ -1,7 +1,9 @@
 import http from 'node:http';
 import { once } from 'node:events';
+import { ServiceError } from '../src/errors.mjs';
 export const noteId = 'a'.repeat(32);
 export const folderId = 'b'.repeat(32);
+export const initialRevisionId = '0'.repeat(31) + '1';
 export const space = { id: 'test-space-v1', revision: 'fake-weights-v1', dimensions: 2, preprocessingVersion: 'title-body-v1' };
 export const note = { id: noteId, parent_id: folderId, title: 'Test', body: 'Unicode 笔记', created_time: 50, updated_time: 100, is_todo: 0, todo_completed: 0, markup_language: 1, encryption_applied: 0, deleted_time: 0, is_locked: 0 };
 export const headlessStatus = {
@@ -19,9 +21,53 @@ export function account(id = 'alice') {
 	};
 }
 export function backend(id = 'alice') {
+	let revisionSequence = 2n;
+	let currentRevisionId = initialRevisionId;
 	return {
 		async status() { return structuredClone(headlessStatus); },
 		async getNote() { return { ...note, body: id }; },
+		async readNoteWithRevision(noteId, signal) {
+			const current = await this.getNote(noteId, signal);
+			return { ...current, revision_id: currentRevisionId };
+		},
+		async updateNoteWithRevision(noteId, input, signal) {
+			const current = await this.readNoteWithRevision(noteId, signal);
+			if (current.encryption_applied !== 0 || current.deleted_time || current.is_locked) {
+				throw new ServiceError('note_unavailable');
+			}
+			if (input.base_revision_id !== current.revision_id) {
+				throw new ServiceError('note_conflict');
+			}
+			const { base_revision_id, ...changes } = input;
+			const patch = {};
+			if (Object.hasOwn(changes, 'title')) patch.title = changes.title;
+			if (Object.hasOwn(changes, 'notebook_id')) patch.parentId = changes.notebook_id;
+			if (Object.hasOwn(changes, 'todo_completed')) patch.todo_completed = changes.todo_completed ? 1234 : 0;
+			if (Object.hasOwn(changes, 'body')) patch.body = changes.body;
+			else {
+				let updatedBody = current.body ?? '';
+				if (Object.hasOwn(changes, 'prepend')) updatedBody = changes.prepend + updatedBody;
+				if (Object.hasOwn(changes, 'append')) updatedBody += changes.append;
+				if (Object.hasOwn(changes, 'replace_text')) {
+					const { find, replace } = changes.replace_text;
+					const first = updatedBody.indexOf(find);
+					const second = updatedBody.indexOf(find, first + find.length);
+					if (first < 0) {
+						throw new ServiceError('replace_text_not_found');
+					}
+					if (second >= 0) {
+						throw new ServiceError('replace_text_ambiguous');
+					}
+					updatedBody = updatedBody.slice(0, first) + replace + updatedBody.slice(first + find.length);
+				}
+				if (Object.hasOwn(changes, 'prepend') || Object.hasOwn(changes, 'append') || Object.hasOwn(changes, 'replace_text')) patch.body = updatedBody;
+			}
+			const result = await this.updateNote(noteId, patch, signal);
+			const previous_revision_id = current.revision_id;
+			const revision_id = (revisionSequence++).toString(16).padStart(32, '0');
+			currentRevisionId = revision_id;
+			return { ...result, revision_id, previous_revision_id, changed: true };
+		},
 		async listNotes() { return { items: [{ ...note, body: id }], hasMore: false }; },
 		async listNoteSummaries() {
 			const summary = { ...note };

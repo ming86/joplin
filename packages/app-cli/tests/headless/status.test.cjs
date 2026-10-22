@@ -52,8 +52,15 @@ function api(actionApi) {
 	const routes = ['folders', 'notes', 'resources', 'tags', 'master_keys', 'search', 'ping', 'auth', 'events', 'revisions', 'mcp'];
 	const mocks = Object.fromEntries(routes.map(name => [`./routes/${name}`, {}]));
 	Object.assign(mocks, {
+		'../../BaseModel': { UserSideValidationError: class UserSideValidationError extends Error {} },
 		'../../models/utils/types': {},
-		'./utils/errors': { ErrorMethodNotAllowed: HttpError, ErrorForbidden: HttpError, ErrorBadRequest: HttpError, ErrorNotFound: HttpError },
+		'./utils/errors': {
+			ErrorMethodNotAllowed: HttpError,
+			ErrorForbidden: HttpError,
+			ErrorBadRequest: HttpError,
+			ErrorNotFound: HttpError,
+			ErrorValidation: HttpError,
+		},
 		'../../path-utils': { ltrimSlashes: value => value.replace(/^\/+/, '') },
 		md5: () => '',
 	});
@@ -63,7 +70,13 @@ function api(actionApi) {
 
 test('fixed headless status action uses REST token authentication and excludes other actions', async () => {
 	let reads = 0;
-	const actions = createHeadlessActionApi(state, async () => { reads++; return 2; });
+	const extraActions = {
+		status: async () => ({ overridden: true }),
+		probe: async () => ({ registered: true }),
+	};
+	const actions = createHeadlessActionApi(state, async () => { reads++; return 2; }, extraActions);
+	assert.equal(Object.getPrototypeOf(actions), null);
+	assert.equal(Object.getPrototypeOf(actions.headless()), null);
 	const router = api(actions);
 	const body = JSON.stringify({ action: 'status' });
 	await assert.rejects(router.route('POST', 'services/headless', {}, body), /Missing "token"/);
@@ -72,6 +85,8 @@ test('fixed headless status action uses REST token authentication and excludes o
 	const summary = await router.route('POST', 'services/headless', { token: 'private-token' }, body);
 	assert.equal(summary.decryption.disabledItemCount, 2);
 	assert.equal(reads, 1);
+	const probe = await router.route('POST', 'services/headless', { token: 'private-token' }, JSON.stringify({ action: 'probe' }));
+	assert.deepEqual(probe, { registered: true });
 	for (const action of ['start', 'toString', 'constructor']) {
 		await assert.rejects(router.route('POST', 'services/headless', { token: 'private-token' }, JSON.stringify({ action })), /Invalid action/);
 	}

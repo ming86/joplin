@@ -30,6 +30,15 @@ test('launched web entry shares account with stdio MCP; metadata reads, preview,
 	const baseUrl = await server(t, async (req, res) => {
 		const u = new URL(req.url, 'http://localhost'); assert.equal(u.searchParams.get('token'), conf.token);
 		const send = value => { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(value)); };
+		if (req.method === 'POST' && u.pathname === '/services/headless') {
+			const action = await readJson(req);
+			if (action.action === 'readNote') {
+				const current = notes.get(action.id);
+				if (!current) { res.writeHead(404); return res.end('{}'); }
+				return send({ ...current, revision_id: '0'.repeat(31) + '1' });
+			}
+			res.writeHead(400); return res.end('{}');
+		}
 		if (req.method === 'POST' && u.pathname === '/notes') {
 			const body = await readJson(req); assert.equal(body.body, ''); writes.push('POST');
 			notes.set(body.id, { ...note, ...body }); return send(notes.get(body.id));
@@ -39,13 +48,14 @@ test('launched web entry shares account with stdio MCP; metadata reads, preview,
 			const fields = u.searchParams.get('fields').split(','); assert.equal(fields.includes('body'), false);
 			return send({ items: [...notes.values()].map(n => Object.fromEntries(fields.map(k => [k, n[k]]))), has_more: false });
 		}
+		if (u.pathname.match(/^\/notes\/[a-f0-9]{32}\/tags$/)) return send({ items: [], has_more: false });
 		if (u.pathname.startsWith('/notes/')) { const n = notes.get(u.pathname.split('/').pop()); if (!n) { res.writeHead(404); res.end('{}'); return; } return send(n); }
-		if (u.pathname.startsWith('/folders/')) return send({ id: folderId, title: 'Test folder' });
+		if (u.pathname.startsWith('/folders/')) return send({ id: folderId, title: 'Test folder', encryption_applied: 0 });
 		if (u.pathname === '/folders') return send({ items: [{ id: folderId, title: 'Test folder', parent_id: '' }], has_more: false });
 		res.writeHead(404); res.end('{}');
 	});
 	conf = await config(t, baseUrl); const client = new StdioTestClient(conf.filename, entry); t.after(() => client.close());
-	await client.initialize(); assert.equal((await client.request('tools/list')).tools.length, 8);
+	await client.initialize(); assert.equal((await client.request('tools/list')).tools.length, 24);
 	const login = await fetch(conf.origin + '/api/login', { method: 'POST', headers: { Origin: conf.origin, 'X-Joplin-Web': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ token: conf.webToken }) });
 	assert.equal(login.status, 200); const cookie = login.headers.get('set-cookie').split(';')[0]; await login.json();
 	const headers = { Origin: conf.origin, 'X-Joplin-Web': '1', 'Content-Type': 'application/json', Cookie: cookie };

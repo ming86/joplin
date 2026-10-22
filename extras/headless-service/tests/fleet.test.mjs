@@ -33,7 +33,8 @@ test('fleet: two real worker processes route web/clipper/MCP to separate synthet
  const second=await mcp(t,a);await am.close();assert.equal((await second.call('get_note',{id:sharedId})).isError,false);
  const bad=path.join(a.base,'bad-connect.json');write(bad,{socketPath:b.config.mcp.socketPath,tokenFile:a.config.mcp.tokenFile});
  const rejected=new StdioTestClient(bad,connectEntry,{timeoutMs:3000});t.after(()=>rejected.close());await assert.rejects(rejected.initialize());assert.match(rejected.stderr,/mcp_authentication_failed/);
- const bw=await bm.call('update_note',{id:sharedId,body:'bob changed'});assert.equal(bw.isError,false);assert.equal((await web(b,'/api/note/'+sharedId,{cookie:jar})).body.note.body,'bob changed');
+	const bobNote=await bm.call('read_note',{id:sharedId});
+	const bw=await bm.call('update_note',{id:sharedId,base_revision_id:bobNote.structuredContent.revision_id,body:'bob changed'});assert.equal(bw.isError,false);assert.equal((await web(b,'/api/note/'+sharedId,{cookie:jar})).body.note.body,'bob changed');
  assert.equal((await web(a,'/api/note/'+sharedId,{cookie:jar})).body.note.body,'alice private synthetic body');
  await am.close();await bm.close();await second.close();
 });
@@ -64,7 +65,7 @@ test('fleet: absent account key does not prevent the other account; restoring th
 
 test('fleet: read-only account has no clipping route or write tools; unavailable semantic store stays account-bound',async t=>{
  const f=await fixture(t,{readOnlyBob:true,semantic:true}),fleet=await f.start();const[a,b]=f.accounts;await Promise.all([running(fleet,'alice'),running(fleet,'bob')]);
- const bl=await login(b);const c=await mcp(t,b);assert.equal((await c.request('tools/list')).tools.length,5);
+	const bl=await login(b);const c=await mcp(t,b);assert.equal((await c.request('tools/list')).tools.length,13);
  const r=await web(b,'/api/write',{cookie:bl.cookie,body:{kind:'create',operationId:'e'.repeat(32),notebookId:folderId,title:'no',body:'no'}});assert.equal(r.status,403);
  const al=await login(a);const search=await web(a,'/api/search',{cookie:al.cookie,body:{query:'alice',mode:'hybrid'}});assert.equal(search.body.executedMode,'keyword');assert.equal(search.body.semantic.state,'unavailable');assert.ok(search.body.items.every(n=>n.accountId==='alice'));
  const unavailable=await web(b,'/api/search',{cookie:bl.cookie,body:{query:'alice',mode:'semantic'}});assert.equal(unavailable.body.executedMode,null);assert.equal(unavailable.body.accountId,'bob');

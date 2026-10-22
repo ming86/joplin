@@ -29,7 +29,10 @@ async function controller(shared = {}) {
 		if (url === '/api/logout') { shared.signedIn = false; return result(200, { authenticated: false }); }
 		if (shared.signedIn === false) return result(401, { error: 'authentication_required' });
 		if (shared.intercept) { const r = await shared.intercept(url, input); if (r) return r; }
-		if (url === '/api/status') return result(200, { core: 'reachable', allowWrites: true, semantic: { state: 'unavailable' } });
+		if (url === '/api/status') return result(200, {
+			core: 'reachable', allowWrites: true, semantic: { state: 'unavailable' },
+			sync: { running: false, pending: false },
+		});
 		if (url.startsWith('/api/notebooks')) return result(200, { items: [{ id: folderId, title: 'Personal' }], hasMore: false });
 		if (url.startsWith('/api/notes')) return result(200, { items: [shared.current.note], hasMore: false });
 		if (url.startsWith('/api/note/')) return result(200, shared.current);

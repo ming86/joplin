@@ -24,7 +24,8 @@ test('smoke runner uses GET only and no actual embedding endpoint (fake API self
 	const result = await checkAccount({ confirmRealCore: true, expectedNoteId: noteId, searchQuery: 'Test', accountId: 'test', subject: 'verified-test', baseUrl, apiTokenFile: `${temp}/token`, semanticDatabasePath: `${temp}/semantic.db`, semanticKeyRef: 'test/key' }, line => logs.push(line));
 	assert.equal(result.status, 'PASS');
 	assert.equal(result.embedding, 'fake-provider-only');
-	assert.equal(methods.length, 4); assert(methods.every(method => method === 'GET'));
+	assert.equal(methods.length, 5); // Includes the separate total-count search request.
+	assert(methods.every(method => method === 'GET'));
 	assert(!fs.existsSync(`${temp}/semantic.db`));
 	assert(!logs.join('\n').includes('only-test-token'));
 });

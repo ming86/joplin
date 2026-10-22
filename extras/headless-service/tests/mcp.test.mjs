@@ -39,7 +39,7 @@ test('requires valid initialization and ready notification; rejects second initi
 });
 test('stateless sessions serve tools without a handshake and accept independent initialization requests', async () => {
 	const s = session({ stateless: true });
-	assert.equal((await s.handle(request(2, 'tools/list'))).result.tools.length, 8);
+	assert.equal((await s.handle(request(2, 'tools/list'))).result.tools.length, 13);
 	assert.equal((await s.handle(call(3, 'get_status'))).result.structuredContent.accountId, 'alice');
 	assert.equal((await s.handle(initialize('2025-11-25'))).result.protocolVersion, '2025-11-25');
 	assert.equal((await s.handle(initialize('2025-06-18'))).result.protocolVersion, '2025-06-18');
@@ -76,9 +76,12 @@ test('invalid envelopes and ids; unknown methods; no response or tool execution 
 test('default read-only catalog, annotations and disabled-tool enforcement', async () => {
 	const s = session(); await ready(s);
 	const tools = (await s.handle(request(2, 'tools/list'))).result.tools;
-	assert.equal(tools.length, 8); assert.ok(tools.every(t => t.annotations.readOnlyHint));
+	assert.equal(tools.length, 13); assert.ok(tools.every(t => t.annotations.readOnlyHint));
 	assert.ok(tools.some(t => t.name === 'read_note'));
 	assert.ok(tools.some(t => t.name === 'list_tags'));
+	for (const name of ['list_note_revisions', 'read_note_revision', 'compare_note_revisions', 'list_note_attachments', 'read_attachment']) {
+		assert.ok(tools.some(tool => tool.name === name), name);
+	}
 	assert.equal((await s.handle(call(3, 'create_note', { parentId: folderId, title: 'x', body: 'y' }))).error.code, -32602);
 	assert.equal((await s.handle(call(4, 'delete_note', { id: noteId }))).error.code, -32602);
 	assert.equal((await s.handle(request(5, 'tools/list', { cursor: 'bogus' }))).error.code, -32602);
@@ -196,14 +199,17 @@ test('opt-in writes also require account permission, preserve unknown outcomes a
 	const result = (await s.handle(call(2, 'create_note', args))).result;
 	assert.equal(result.structuredContent.error.outcomeUnknown, true); assert.equal(calls, 1);
 	assert.ok(!JSON.stringify(result).includes('private-token'));
-	assert.equal((await s.handle(call(3, 'update_note', { id: noteId }))).result.structuredContent.error.code, 'empty_note_update');
+	const revision = (await s.handle(call(3, 'read_note', { id: noteId }))).result.structuredContent.revision_id;
+	assert.equal((await s.handle(call(4, 'update_note', { id: noteId }))).result.structuredContent.error.code, 'invalid_tool_arguments');
+	assert.equal((await s.handle(call(5, 'update_note', { id: noteId, base_revision_id: revision }))).result.structuredContent.error.code, 'invalid_tool_arguments');
 });
 test('local-save semantics and safe unexpected error output', async () => {
 	const b = backend(); const s = session({ allowWrites: true }, b); await ready(s);
-	const r = (await s.handle(call(2, 'update_note', { id: noteId, body: 'new' }))).result;
+	const revision = (await s.handle(call(2, 'read_note', { id: noteId }))).result.structuredContent.revision_id;
+	const r = (await s.handle(call(3, 'update_note', { id: noteId, base_revision_id: revision, body: 'new' }))).result;
 	assert.equal(r.structuredContent.saved, 'local'); assert.equal(r.structuredContent.synchronization, 'not_confirmed');
 	b.getNote = async () => { throw new Error('secret upstream payload'); };
-	assert.ok(!JSON.stringify(await s.handle(call(3, 'get_note', { id: noteId }))).includes('secret upstream'));
+	assert.ok(!JSON.stringify(await s.handle(call(4, 'get_note', { id: noteId }))).includes('secret upstream'));
 });
 test('active duplicate ids, concurrency, cancellation and close reach underlying AbortSignal', async () => {
 	const b = backend(); b.getNote = async (_id, signal) => { await once(signal, 'abort'); throw new ServiceError('request_cancelled'); };

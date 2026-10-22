@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { createAccountRegistry } from '../index.mjs';
 import { startMcpHttpServer } from '../src/mcp/http.mjs';
-import { account, backend, note, noteId, folderId } from './fixtures.mjs';
+import { account, backend, initialRevisionId, note, noteId, folderId } from './fixtures.mjs';
 
 const version = '2026-07-28';
 const versionKey = 'io.modelcontextprotocol/protocolVersion';
@@ -179,7 +179,7 @@ test('modern HTTP returns complete successful write replies above the former res
 	b.getNote = async () => ({ ...largeNote });
 	b.updateNote = async (_id, patch) => { writes++; return { ...largeNote, ...patch }; };
 	const server = await start(t, b, true);
-	const response = await exchange(server, call(1, 'update_note', { id: noteId, title: 'Updated large note' }));
+	const response = await exchange(server, call(1, 'update_note', { id: noteId, base_revision_id: initialRevisionId, title: 'Updated large note' }));
 	assertComplete(response);
 	assert.equal(response.json.result.isError, false);
 	assert.equal(response.json.result.structuredContent.note.body, body);

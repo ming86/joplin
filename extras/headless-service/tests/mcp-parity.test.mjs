@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createAccountRegistry } from '../index.mjs';
 import { createMcpSession } from '../mcp.mjs';
-import { account, backend, folderId, note, noteId, readJson, server } from './fixtures.mjs';
+import { account, backend, folderId, initialRevisionId, note, noteId, readJson, server } from './fixtures.mjs';
 
 const movedNotebookId = 'c'.repeat(32);
 const workTagId = 'd'.repeat(32);
@@ -26,6 +26,18 @@ async function invoke(session, name, args = {}, id = 2) {
 	const response = await session.handle(call(id, name, args));
 	assert.equal(response.error, undefined, `${name} should return a tool result`);
 	return response.result;
+}
+
+async function update(session, changes, id = 2, baseRevisionId = undefined) {
+	let revision = baseRevisionId;
+	if (revision === undefined) {
+		const read = await invoke(session, 'read_note', { id: changes.id ?? noteId }, id + 1000);
+		revision = read.structuredContent.revision_id;
+	}
+	return invoke(session, 'update_note', {
+		...changes,
+		base_revision_id: revision,
+	}, id);
 }
 
 function assertToolError(result, code) {
@@ -84,14 +96,14 @@ test('MCP note, search, and tag fields accept values beyond the former arbitrary
 	const query = 'q'.repeat(10001);
 	const longTag = 'g'.repeat(257);
 	let created;
-	let update;
+	let updatePatch;
 	let searched;
 	b.createNote = async input => {
 		created = input;
 		return { ...note, title: input.title, body: input.body, parent_id: input.parentId, is_todo: input.is_todo };
 	};
 	b.getNote = async () => ({ ...note, body: find });
-	b.updateNote = async (_id, input) => { update = input; return { ...note, ...input }; };
+	b.updateNote = async (_id, input) => { updatePatch = input; return { ...note, ...input }; };
 	b.search = async value => { searched = value; return { items: [{ ...note, body: 'match' }], hasMore: false }; };
 	b.countSearchResults = async () => 1;
 	b.createTag = async tagTitle => ({ id: tagTitle.length.toString(16).padStart(32, '0'), title: tagTitle });
@@ -105,9 +117,9 @@ test('MCP note, search, and tag fields accept values beyond the former arbitrary
 		assert.equal(created.title.length, 1025);
 		assert.equal(created.body.length, 131073);
 
-		const updatedResult = await invoke(session, 'update_note', { id: noteId, replace_text: { find, replace } }, 3);
+		const updatedResult = await update(session, { id: noteId, replace_text: { find, replace } }, 3);
 		assert.equal(updatedResult.isError, false);
-		assert.equal(update.body, replace);
+		assert.equal(updatePatch.body, replace);
 
 		const searchResult = await invoke(session, 'search_notes', { query }, 4);
 		assert.equal(searchResult.isError, false);
@@ -135,20 +147,20 @@ test('Desktop update operations compose, replace only unique text, move notebook
 	const session = createSession(b);
 	await ready(session);
 	try {
-		await invoke(session, 'update_note', { id: noteId, prepend: 'start ', append: ' end' });
+		await update(session, { id: noteId, prepend: 'start ', append: ' end' });
 		assert.equal(patches[0].body, 'start middle end');
 
-		await invoke(session, 'update_note', { id: noteId, replace_text: { find: 'middle', replace: 'center' } }, 3);
+		await update(session, { id: noteId, replace_text: { find: 'middle', replace: 'center' } }, 3);
 		assert.equal(patches[1].body, 'start center end');
-		assertToolError(await invoke(session, 'update_note', { id: noteId, replace_text: { find: 'missing', replace: 'x' } }, 4), 'replace_text_not_found');
+		assertToolError(await update(session, { id: noteId, replace_text: { find: 'missing', replace: 'x' } }, 4), 'replace_text_not_found');
 		current = { ...current, body: 'same and same' };
-		assertToolError(await invoke(session, 'update_note', { id: noteId, replace_text: { find: 'same', replace: 'x' } }, 5), 'replace_text_ambiguous');
+		assertToolError(await update(session, { id: noteId, replace_text: { find: 'same', replace: 'x' } }, 5), 'replace_text_ambiguous');
 		assert.equal(patches.length, 2, 'failed replacements do not write');
 
-		await invoke(session, 'update_note', { id: noteId, notebook_id: movedNotebookId, todo_completed: true }, 6);
+		await update(session, { id: noteId, notebook_id: movedNotebookId, todo_completed: true }, 6);
 		assert.equal(patches[2].parentId, movedNotebookId);
 		assert.ok(patches[2].todo_completed > 0);
-		await invoke(session, 'update_note', { id: noteId, todo_completed: false }, 7);
+		await update(session, { id: noteId, todo_completed: false }, 7);
 		assert.equal(patches[3].todo_completed, 0);
 	} finally { session.close(); }
 });
@@ -230,7 +242,9 @@ test('MCP write catalog carries mutation annotations and rejects unsafe note sta
 		const tools = (await readonly.handle(request(2, 'tools/list'))).result.tools;
 		const names = new Set(tools.map(tool => tool.name));
 		for (const name of ['get_status', 'list_notebooks', 'list_notes', 'search_notes', 'semantic_search_notes', 'read_note', 'get_note', 'list_tags']) assert.ok(names.has(name), name);
-		for (const name of ['create_note', 'update_note', 'delete_note', 'create_notebook', 'manage_tags']) assert.ok(!names.has(name), name);
+		for (const name of ['create_note', 'update_note', 'delete_note', 'create_notebook', 'manage_tags', 'update_notebook', 'delete_notebook', 'create_tag', 'rename_tag', 'create_attachment', 'update_attachment']) assert.ok(!names.has(name), name);
+		for (const name of ['list_note_revisions', 'read_note_revision', 'compare_note_revisions', 'list_note_attachments', 'read_attachment']) assert.ok(names.has(name), name);
+		assert.equal(tools.length, 13);
 	} finally { readonly.close(); }
 
 	const writable = createSession();
@@ -238,6 +252,8 @@ test('MCP write catalog carries mutation annotations and rejects unsafe note sta
 	try {
 		const tools = (await writable.handle(request(2, 'tools/list'))).result.tools;
 		const byName = new Map(tools.map(tool => [tool.name, tool]));
+		assert.equal(tools.length, 24);
+		assert.deepEqual(byName.get('update_note').inputSchema.required, ['id', 'base_revision_id']);
 		assert.equal(byName.get('update_note').annotations.destructiveHint, true);
 		assert.equal(byName.get('delete_note').annotations.destructiveHint, true);
 		assert.equal(byName.get('delete_note').annotations.idempotentHint, true);
@@ -253,7 +269,7 @@ test('MCP write catalog carries mutation annotations and rejects unsafe note sta
 		const session = createSession(b);
 		await ready(session);
 		try {
-			assertToolError(await invoke(session, 'update_note', { id: noteId, title: 'Blocked' }), 'note_unavailable');
+			assertToolError(await update(session, { id: noteId, title: 'Blocked' }, 2, initialRevisionId), 'note_unavailable');
 			assertToolError(await invoke(session, 'delete_note', { id: noteId }, 3), 'note_unavailable');
 			assertToolError(await invoke(session, 'manage_tags', { note_id: noteId, add: ['Tag'] }, 4), 'note_unavailable');
 			assert.equal(mutations, 0);
@@ -261,16 +277,92 @@ test('MCP write catalog carries mutation annotations and rejects unsafe note sta
 	}
 });
 
-test('real Data API writes keep Markdown out of POST, preserve unknown PUT outcomes, and soft-delete', async t => {
-	let postBodies = 0; let putBodies = 0; let failPut = false; let deleteQuery;
+test('the MCP catalog requires a note revision and preserves embedded attachment content blocks', async () => {
+	const resourceId = '9'.repeat(32);
+	const contentBase64 = 'AAECAw==';
+	const b = backend();
+	let reads = 0;
+	b.readAttachment = async id => {
+		reads++;
+		return {
+			id,
+			title: 'diagram',
+			filename: 'diagram.png',
+			mime: 'image/png',
+			file_extension: 'png',
+			size: 4,
+			created_time: 10,
+			updated_time: 11,
+			encryption_applied: 0,
+			encryption_blob_encrypted: 0,
+			is_locked: 0,
+			contentBase64,
+		};
+	};
+	const session = createSession(b);
+	await ready(session);
+	try {
+		const tools = (await session.handle(request(2, 'tools/list'))).result.tools;
+		assert.equal(tools.length, 24);
+		const readSchema = tools.find(tool => tool.name === 'read_note').inputSchema;
+		const updateSchema = tools.find(tool => tool.name === 'update_note').inputSchema;
+		assert.ok(readSchema.properties.id);
+		assert.deepEqual(updateSchema.required, ['id', 'base_revision_id']);
+		assert.ok(updateSchema.properties.base_revision_id);
+		assert.equal(updateSchema.properties.base_revision_id.pattern, '^[a-f0-9]{32}$');
+
+		const missingRevision = await invoke(session, 'update_note', { id: noteId, title: 'No base revision' }, 3);
+		assertToolError(missingRevision, 'invalid_tool_arguments');
+		assert.equal(reads, 0, 'invalid update arguments stop before any attachment backend call');
+
+		const read = await invoke(session, 'read_note', { id: noteId }, 4);
+		assert.equal(read.structuredContent.revision_id, initialRevisionId);
+		const attachment = await invoke(session, 'read_attachment', { id: resourceId }, 5);
+		assert.equal(attachment.isError, false);
+		assert.equal(attachment.structuredContent.uri, `joplin-resource://${resourceId}/diagram.png`);
+		assert.equal(Object.hasOwn(attachment.structuredContent, 'contentBase64'), false);
+		assert.deepEqual(attachment.content[1], {
+			type: 'resource',
+			resource: {
+				uri: `joplin-resource://${resourceId}/diagram.png`,
+				mimeType: 'image/png',
+				blob: contentBase64,
+			},
+		});
+		assert.equal(attachment.content[0].text.includes(contentBase64), false);
+		assert.equal(reads, 1);
+	} finally { session.close(); }
+});
+
+test('MCP creation keeps Markdown out of POST; native revision updates are conditional and never retried', async t => {
+	let postBodies = 0; let putBodies = 0; let failPut = false; let failRevisionUpdate = false; let deleteQuery; let revisionUpdates = 0;
+	let currentRevisionId = '1'.repeat(32);
+	let currentNote = { ...note, title: 'Created' };
 	const url = await server(t, async (req, res) => {
 		const target = new URL(req.url, 'http://localhost');
 		assert.equal(target.searchParams.get('token'), 'alice-private-token');
 		res.setHeader('Content-Type', 'application/json');
+		if (req.method === 'POST' && target.pathname === '/services/headless') {
+			const action = await readJson(req);
+			if (action.action === 'readNote') return res.end(JSON.stringify({ ...currentNote, revision_id: currentRevisionId }));
+			if (action.action === 'updateNote') {
+				revisionUpdates++;
+				assert.equal(action.id, noteId);
+				assert.equal(action.base_revision_id, currentRevisionId);
+				assert.deepEqual(action.changes, { title: 'Native update' });
+				if (failRevisionUpdate) { res.writeHead(500); return res.end('private server text'); }
+				const previous_revision_id = currentRevisionId;
+				currentRevisionId = '2'.repeat(32);
+				currentNote = { ...currentNote, ...action.changes, updated_time: currentNote.updated_time + 1 };
+				return res.end(JSON.stringify({ ...currentNote, revision_id: currentRevisionId, previous_revision_id, changed: true }));
+			}
+			res.writeHead(400); return res.end(JSON.stringify({ error: 'unknown action' }));
+		}
 		if (req.method === 'GET' && target.pathname === `/folders/${folderId}`) {
 			return res.end(JSON.stringify({ id: folderId, title: 'Notebook', parent_id: '', encryption_applied: 0, deleted_time: 0 }));
 		}
-		if (req.method === 'GET' && target.pathname === `/notes/${noteId}`) return res.end(JSON.stringify(note));
+		if (req.method === 'GET' && target.pathname === `/notes/${noteId}/tags`) return res.end(JSON.stringify({ items: [], has_more: false }));
+		if (req.method === 'GET' && target.pathname === `/notes/${noteId}`) return res.end(JSON.stringify(currentNote));
 		if (req.method === 'POST' && target.pathname === '/notes') {
 			const body = await readJson(req);
 			postBodies++;
@@ -282,7 +374,8 @@ test('real Data API writes keep Markdown out of POST, preserve unknown PUT outco
 			putBodies++;
 			assert.deepEqual(body, { body: '![remote](http://example.invalid/image.png)' });
 			if (failPut) { res.writeHead(500); return res.end('private server text'); }
-			return res.end(JSON.stringify({ ...note, title: 'Created', body: body.body }));
+			currentNote = { ...currentNote, ...body };
+			return res.end(JSON.stringify(currentNote));
 		}
 		if (req.method === 'DELETE' && target.pathname === `/notes/${noteId}`) {
 			deleteQuery = target.searchParams;
@@ -307,8 +400,21 @@ test('real Data API writes keep Markdown out of POST, preserve unknown PUT outco
 		assert.equal(uncertain.structuredContent.error.outcomeUnknown, true);
 		assert.equal(postBodies, 2);
 		assert.equal(putBodies, 2, 'the failed second PUT is not retried');
+		failPut = false;
 
-		const deleted = (await invoke(session, 'delete_note', { id: noteId }, 4)).structuredContent;
+		const changed = await update(session, { id: noteId, title: 'Native update' }, 4);
+		assert.equal(changed.isError, false);
+		assert.equal(changed.structuredContent.note.title, 'Native update');
+		assert.equal(changed.structuredContent.previous_revision_id, '1'.repeat(32));
+		assert.equal(currentRevisionId, '2'.repeat(32));
+
+		failRevisionUpdate = true;
+		const lostRevisionReply = await update(session, { id: noteId, title: 'Native update' }, 5);
+		assertToolError(lostRevisionReply, 'write_outcome_unknown');
+		assert.equal(lostRevisionReply.structuredContent.error.outcomeUnknown, true);
+		assert.equal(revisionUpdates, 2, 'the failed conditional update is not retried');
+
+		const deleted = (await invoke(session, 'delete_note', { id: noteId }, 6)).structuredContent;
 		assert.equal(deleted.trashed, true);
 		assert.equal(deleteQuery.has('permanent'), false, 'DELETE uses Joplin Trash semantics');
 	} finally { session.close(); }
@@ -317,25 +423,48 @@ test('real Data API writes keep Markdown out of POST, preserve unknown PUT outco
 test('MCP updates preserve HTML note bodies and format for metadata and raw-body operations', async t => {
 	const originalBody = '<article><h1>Heading</h1><p>Old text</p></article>';
 	let currentNote = { ...note, body: originalBody, markup_language: 2, is_todo: 1 };
-	const putBodies = [];
+	const updates = [];
+	let revisionNumber = 1;
+	let currentRevisionId = String(revisionNumber).padStart(32, '0');
 	const url = await server(t, async (req, res) => {
 		const target = new URL(req.url, 'http://localhost');
 		assert.equal(target.searchParams.get('token'), 'alice-private-token');
 		res.setHeader('Content-Type', 'application/json');
-		if (req.method === 'GET' && target.pathname === `/notes/${noteId}`) return res.end(JSON.stringify(currentNote));
-		if (req.method === 'GET' && target.pathname === `/folders/${movedNotebookId}`) {
-			return res.end(JSON.stringify({ id: movedNotebookId, title: 'Moved notebook', parent_id: '', encryption_applied: 0, deleted_time: 0 }));
+		if (req.method === 'POST' && target.pathname === '/services/headless') {
+			const action = await readJson(req);
+			if (action.action === 'readNote') return res.end(JSON.stringify({ ...currentNote, revision_id: currentRevisionId }));
+			if (action.action === 'updateNote') {
+				assert.equal(action.id, noteId);
+				assert.equal(action.base_revision_id, currentRevisionId);
+				updates.push(action.changes);
+				const changes = action.changes;
+				const { append, prepend, replace_text: replaceText, ...fields } = changes;
+				currentNote = {
+					...currentNote,
+					...fields,
+					...(fields.notebook_id === undefined ? {} : { parent_id: fields.notebook_id }),
+					...(fields.todo_completed === undefined ? {} : { todo_completed: fields.todo_completed ? 1234 : 0 }),
+					updated_time: currentNote.updated_time + 1,
+				};
+				delete currentNote.notebook_id;
+				if (Object.hasOwn(changes, 'body')) currentNote.body = changes.body;
+				else {
+					let nextBody = currentNote.body;
+					if (prepend !== undefined) nextBody = prepend + nextBody;
+					if (append !== undefined) nextBody += append;
+					if (replaceText) nextBody = nextBody.replace(replaceText.find, replaceText.replace);
+					currentNote.body = nextBody;
+				}
+				const previous_revision_id = currentRevisionId;
+				currentRevisionId = String(++revisionNumber).padStart(32, '0');
+				return res.end(JSON.stringify({ ...currentNote, revision_id: currentRevisionId, previous_revision_id, changed: true }));
+			}
+			res.writeHead(400); return res.end('{}');
 		}
-		if (req.method === 'PUT' && target.pathname === `/notes/${noteId}`) {
-			const body = await readJson(req);
-			putBodies.push(body);
-			currentNote = {
-				...currentNote,
-				...body,
-				parent_id: body.parent_id ?? currentNote.parent_id,
-				updated_time: currentNote.updated_time + 1,
-			};
-			return res.end(JSON.stringify(currentNote));
+		if (req.method === 'GET' && target.pathname === `/notes/${noteId}/tags`) return res.end(JSON.stringify({ items: [], has_more: false }));
+		if (req.method === 'GET' && target.pathname.startsWith('/folders/')) {
+			const id = target.pathname.split('/').pop();
+			return res.end(JSON.stringify({ id, title: id === movedNotebookId ? 'Moved notebook' : 'Original notebook', parent_id: '', encryption_applied: 0, deleted_time: 0 }));
 		}
 		res.writeHead(404);
 		return res.end('{}');
@@ -345,35 +474,35 @@ test('MCP updates preserve HTML note bodies and format for metadata and raw-body
 	const session = createMcpSession(service, { allowWrites: true });
 	await ready(session);
 	try {
-		const metadataResult = await invoke(session, 'update_note', {
+		const metadataResult = await update(session, {
 			id: noteId, title: 'Renamed HTML note', notebook_id: movedNotebookId, todo_completed: true,
 		});
 		assert.equal(metadataResult.isError, false);
-		assert.deepEqual(Object.keys(putBodies[0]).sort(), ['parent_id', 'title', 'todo_completed']);
-		assert.equal(putBodies[0].title, 'Renamed HTML note');
-		assert.equal(putBodies[0].parent_id, movedNotebookId);
-		assert.ok(putBodies[0].todo_completed > 0);
+		assert.deepEqual(Object.keys(updates[0]).sort(), ['notebook_id', 'title', 'todo_completed']);
+		assert.equal(updates[0].title, 'Renamed HTML note');
+		assert.equal(updates[0].notebook_id, movedNotebookId);
+		assert.equal(updates[0].todo_completed, true);
 		assert.equal(currentNote.body, originalBody);
 		assert.equal(currentNote.markup_language, 2);
 		assert.equal(metadataResult.structuredContent.note.body, originalBody);
 		assert.equal(metadataResult.structuredContent.note.markup_language, 2);
 
 		const replacement = '<article><h1>Updated</h1><p>Old text</p></article>';
-		const replaceResult = await invoke(session, 'update_note', { id: noteId, body: replacement }, 3);
+		const replaceResult = await update(session, { id: noteId, body: replacement }, 3);
 		assert.equal(replaceResult.isError, false);
-		assert.deepEqual(putBodies[1], { body: replacement });
+		assert.deepEqual(updates[1], { body: replacement });
 		assert.equal(currentNote.body, replacement);
 		assert.equal(currentNote.markup_language, 2);
 
 		const expectedBody = '<!-- start --><article><h1>Updated</h1><p>New text</p></article><!-- end -->';
-		const partialResult = await invoke(session, 'update_note', {
+		const partialResult = await update(session, {
 			id: noteId,
 			prepend: '<!-- start -->',
 			append: '<!-- end -->',
 			replace_text: { find: 'Old text', replace: 'New text' },
 		}, 4);
 		assert.equal(partialResult.isError, false);
-		assert.deepEqual(putBodies[2], { body: expectedBody });
+		assert.deepEqual(updates[2], { prepend: '<!-- start -->', append: '<!-- end -->', replace_text: { find: 'Old text', replace: 'New text' } });
 		assert.equal(currentNote.body, expectedBody);
 		assert.equal(currentNote.markup_language, 2);
 		assert.equal(partialResult.structuredContent.note.markup_language, 2);
@@ -387,10 +516,22 @@ test('MCP reports structured core validation messages and keeps other 400 respon
 	const url = await server(t, async (req, res) => {
 		const target = new URL(req.url, 'http://localhost');
 		assert.equal(target.searchParams.get('token'), 'alice-private-token');
+		if (req.method === 'POST' && target.pathname === '/services/headless') {
+			const action = await readJson(req);
+			if (action.action === 'readNote') return res.end(JSON.stringify({ ...note, revision_id: initialRevisionId }));
+			if (action.action === 'updateNote') {
+				assert.equal(action.id, noteId);
+				assert.equal(action.base_revision_id, initialRevisionId);
+				assert.deepEqual(action.changes, { title: 'Rejected update' });
+				writes++;
+				return res.end(JSON.stringify({ error: { code: 'validation_error', error: 'The note update is invalid.', applied: false } }));
+			}
+			res.writeHead(400); return res.end('{}');
+		}
+		if (req.method === 'GET' && target.pathname === `/notes/${noteId}/tags`) return res.end(JSON.stringify({ items: [], has_more: false }));
 		if (req.method === 'GET' && target.pathname === `/folders/${folderId}`) {
 			return res.end(JSON.stringify({ id: folderId, title: 'Notebook', parent_id: '', encryption_applied: 0, deleted_time: 0 }));
 		}
-		if (req.method === 'GET' && target.pathname === `/notes/${noteId}`) return res.end(JSON.stringify(note));
 		if (req.method === 'POST' && target.pathname === '/notes') {
 			await readJson(req);
 			writes++;
@@ -398,12 +539,6 @@ test('MCP reports structured core validation messages and keeps other 400 respon
 			if (failure === 'validation') return res.end(JSON.stringify({ code: 'validation_error', error: validationMessage, stack: 'private stack' }));
 			if (failure === 'generic') return res.end(JSON.stringify({ error: 'private upstream text' }));
 			return res.end('{ malformed');
-		}
-		if (req.method === 'PUT' && target.pathname === `/notes/${noteId}`) {
-			assert.deepEqual(await readJson(req), { title: 'Rejected update' });
-			writes++;
-			res.writeHead(400, { 'Content-Type': 'application/json' });
-			return res.end(JSON.stringify({ code: 'validation_error', error: 'The note update is invalid.', stack: 'private update stack' }));
 		}
 		res.writeHead(404);
 		return res.end('{}');
@@ -418,9 +553,9 @@ test('MCP reports structured core validation messages and keeps other 400 respon
 		assert.deepEqual(validation, { code: 'validation_error', message: validationMessage, outcomeUnknown: false });
 		assert.equal(JSON.stringify(validation).includes('private stack'), false);
 
-		const update = (await invoke(session, 'update_note', { id: noteId, title: 'Rejected update' }, 3)).structuredContent.error;
-		assert.deepEqual(update, { code: 'validation_error', message: 'The note update is invalid.', outcomeUnknown: false });
-		assert.equal(JSON.stringify(update).includes('private update stack'), false);
+		const failedUpdate = (await update(session, { id: noteId, title: 'Rejected update' }, 3)).structuredContent.error;
+		assert.deepEqual(failedUpdate, { code: 'validation_error', message: 'The request did not pass validation.', outcomeUnknown: false });
+		assert.equal(JSON.stringify(failedUpdate).includes('The note update is invalid.'), false);
 
 		failure = 'generic';
 		const generic = (await invoke(session, 'create_note', args, 4)).structuredContent.error;
