@@ -1,33 +1,22 @@
-import { completeResult, modernProtocolVersion, rpcError } from './session.mjs';
-import { toolResult } from './tools.mjs';
+import { rpcError } from './session.mjs';
 
-// Newline-delimited UTF-8 JSON only. Bounded framing/output and concurrent dispatch
-// allow cancellation to be read while an HTTP-backed tool is still in progress.
-export function serveStdio(session, { input = process.stdin, output = process.stdout, maxFrameBytes = 1024 * 1024, maxOutputBytes = 2 * 1024 * 1024 } = {}) {
+// Newline-delimited UTF-8 JSON with concurrent dispatch allows cancellation to be
+// read while an HTTP-backed tool is still in progress.
+export function serveStdio(session, { input = process.stdin, output = process.stdout } = {}) {
 	let buffer = Buffer.alloc(0);
 	let closing = false;
 	let failed = false;
 	let writing = Promise.resolve();
-	let queuedBytes = 0;
 	const pending = new Set();
 	let resolveDone;
 	const done = new Promise(resolve => { resolveDone = resolve; });
 	function send(response) {
 		if (!response || finished) return;
-		let line = `${JSON.stringify(response)}\n`;
-		if (Buffer.byteLength(line) > maxOutputBytes) {
-			const unknown = response.result?.structuredContent?.saved === 'local';
-			const fallback = toolResult({ error: { code: 'tool_response_too_large', outcomeUnknown: unknown } }, true);
-			const result = response.result?.resultType === 'complete'
-				? completeResult(fallback, modernProtocolVersion)
-				: fallback;
-			line = `${JSON.stringify({ jsonrpc: '2.0', id: response.id, result })}\n`;
-		}
-		const size = Buffer.byteLength(line);
-		if (queuedBytes + size > maxOutputBytes * 4) { void close(true); return; }
-		queuedBytes += size;
+		const line = `${JSON.stringify(response)}\n`;
 		writing = writing.then(() => new Promise((resolve, reject) => output.write(line, error => error ? reject(error) : resolve())))
-			.catch(() => { void close(true); }).finally(() => { queuedBytes -= size; });
+			.catch(() => { void close(true); });
+		// Keep the request pending until stdout finishes its reply, including queued writes.
+		return writing;
 	}
 	async function close(error = false) {
 		failed ||= error;
@@ -60,7 +49,6 @@ export function serveStdio(session, { input = process.stdin, output = process.st
 		buffer = Buffer.concat([buffer, Buffer.from(chunk)]);
 		let boundary;
 		while (!closing && (boundary = buffer.indexOf(10)) !== -1) {
-			if (boundary > maxFrameBytes) { send(rpcError(null, -32600, 'Frame too large')); void close(true); return; }
 			const frame = buffer.subarray(0, boundary); buffer = buffer.subarray(boundary + 1);
 			let message;
 			try { message = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(frame)); }
@@ -70,7 +58,6 @@ export function serveStdio(session, { input = process.stdin, output = process.st
 			const operation = session.handle(message).then(send).catch(() => send(rpcError(null, -32603, 'Internal error')));
 			pending.add(operation); void operation.finally(() => pending.delete(operation));
 		}
-		if (buffer.length > maxFrameBytes) { send(rpcError(null, -32600, 'Frame too large')); void close(true); }
 	}
 	input.on('data', onData); input.once('end', onEnd); input.on('error', onError); output.on('error', onError);
 	return { done, close };

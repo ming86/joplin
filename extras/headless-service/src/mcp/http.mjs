@@ -1,12 +1,7 @@
 import http from 'node:http';
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { completeResult, createMcpSession, modernProtocolVersion, protocolVersions, rpcError, unsupportedProtocolVersion } from './session.mjs';
-import { createTools, toolResult } from './tools.mjs';
+import { createMcpSession, modernProtocolVersion, protocolVersions, rpcError, unsupportedProtocolVersion } from './session.mjs';
 
-/** Bound incoming JSON independently of any backend operation. */
-const maxBodyBytes = 256 * 1024;
-/** Match the stdio transport's maximum serialized response size. */
-const maxResponseBytes = 2 * 1024 * 1024;
 /** Preserve the session concurrency limit across otherwise independent POSTs. */
 const maxDispatches = 8;
 /** Give aborted backends a bounded interval to finish during shutdown. */
@@ -95,10 +90,9 @@ function modernHeadersMatch(headers, message) {
 			: headers['mcp-name'] === undefined);
 }
 
-/** Read bounded bytes and decode UTF-8 strictly; disconnection only stops body collection. */
+/** Read JSON and decode UTF-8 strictly; disconnection only stops body collection. */
 function readBody(req) {
 	return new Promise((resolve, reject) => {
-		let size = 0;
 		let parts = [];
 		let settled = false;
 		/** Release buffered bytes immediately after a body failure. */
@@ -110,8 +104,6 @@ function readBody(req) {
 		}
 		req.on('data', part => {
 			if (settled) return;
-			size += part.length;
-			if (size > maxBodyBytes) return fail('request_too_large');
 			parts.push(part);
 		});
 		req.on('error', () => fail('invalid_body'));
@@ -139,7 +131,6 @@ export async function startMcpHttpServer({ service, allowWrites = false, bearerT
 	const sessions = new Set();
 	const probes = new Set();
 	const pending = new Set();
-	const mutatingTools = new Set(createTools(service, { allowWrites }).list().filter(tool => !tool.annotations.readOnlyHint).map(tool => tool.name));
 	let closing = false;
 	let closePromise;
 
@@ -175,14 +166,9 @@ export async function startMcpHttpServer({ service, allowWrites = false, bearerT
 			|| (req.headers['content-encoding'] !== undefined && req.headers['content-encoding'].toLowerCase() !== 'identity')) return respond(res, 415, { error: 'json_required' });
 		if (!acceptsJson(req.headers.accept)) return respond(res, 406, { error: 'json_response_required' });
 		const version = req.headers['mcp-protocol-version'];
-		if (Number(req.headers['content-length'] ?? 0) > maxBodyBytes) return respond(res, 413, { error: 'request_too_large' }, { Connection: 'close' });
 		let message;
 		try { message = await readBody(req); }
-		catch (error) {
-			return error.message === 'request_too_large'
-				? respond(res, 413, { error: 'request_too_large' })
-				: respond(res, 400, rpcError(null, -32700, 'Parse error'));
-		}
+		catch { return respond(res, 400, rpcError(null, -32700, 'Parse error')); }
 		const kind = envelopeKind(message);
 		if (!kind) return respond(res, 400, rpcError(null, -32600, 'Invalid Request'));
 		if (version !== undefined && !protocolVersions.includes(version)) return respond(res, 400, unsupportedProtocolVersion(message.id ?? null, version));
@@ -209,12 +195,7 @@ export async function startMcpHttpServer({ service, allowWrites = false, bearerT
 			// A disconnected client does not cancel a write; only shutdown closes the session.
 			const response = await session.handle(message);
 			if (kind === 'notification') return respond(res, 202);
-			let json = JSON.stringify(response);
-			if (Buffer.byteLength(json) > maxResponseBytes) {
-				const outcomeUnknown = response.result?.structuredContent?.error?.outcomeUnknown === true
-					|| (message.method === 'tools/call' && mutatingTools.has(message.params?.name) && response.result?.isError === false);
-				json = JSON.stringify({ jsonrpc: '2.0', id: message.id, result: completeResult(toolResult({ error: { code: 'tool_response_too_large', outcomeUnknown } }, true), version) });
-			}
+			const json = JSON.stringify(response);
 			const errorCode = response.error?.code;
 			const status = errorCode === -32022 ? 400 : modern && errorCode === -32601 ? 404 : modern && errorCode === -32602 ? 400 : 200;
 			respond(res, status, json);
