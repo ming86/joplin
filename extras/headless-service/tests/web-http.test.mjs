@@ -89,6 +89,7 @@ test('read-only mode hides write permission and rejects a manually forged write'
 	const f = await setup(t, { allowWrites: false }); await f.login();
 	const r = await f.call('/api/write', newWrite()); assert.equal(r.status, 403); await r.text();
 	const status = await (await f.call('/api/status')).json(); assert.equal(status.allowWrites, false);
+	assert.equal(status.sync.running, false); assert.equal(status.decryption.disabledItemCount, 0);
 });
 test('web configuration uses private key files and rejects unknown fields', t => {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'web-config-test-')); t.after(() => fs.rmSync(dir,{recursive:true,force:true}));

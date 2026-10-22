@@ -1,0 +1,85 @@
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const load = require('./loadSource.cjs');
+const { summarizeHeadlessState, createHeadlessActionApi } = load('packages/app-cli/app/headless/status.ts');
+
+/** Supply only the Redux fields read by the status boundary. */
+function state() {
+	return {
+		syncStarted: false, syncPending: false, syncReport: { errors: [] },
+		notLoadedMasterKeys: [],
+		decryptionWorker: { state: 'idle', itemIndex: 0, itemCount: 0 },
+	};
+}
+
+test('status distinguishes an absent report, live activity, and the retained report', () => {
+	const current = state();
+	assert.equal(summarizeHeadlessState(current, 0, 100).sync.report, null);
+	current.syncReport = {
+		startTime: 1000, completedTime: 2000, state: 'in_progress', createLocal: 4,
+		fetchingTotal: 8, fetchingProcessed: 6, updateRemote: Infinity, deleteRemote: -1,
+		errors: [new Error('secret note title /profile/path https://private.example password')],
+		backendMessage: 'secret', noteTitle: 'secret',
+	};
+	current.syncPending = true;
+	const summary = summarizeHeadlessState(current, 2, 100);
+	assert.deepEqual(summary.sync, {
+		running: false, pending: true,
+		report: { state: 'in_progress', startTime: 1000, completedTime: 2000,
+			counters: { createLocal: 4, fetchingTotal: 8, fetchingProcessed: 6 }, errorCount: 1 },
+	});
+	assert.equal(summary.serviceStartedAt, 100);
+	assert.ok(summary.observedAt >= 100);
+	assert.ok(!JSON.stringify(summary).includes('secret'));
+	current.syncReport.createLocal = 5;
+	assert.equal(summary.sync.report.counters.createLocal, 4);
+});
+
+test('decryption exposes only the active batch and existing missing-key and disabled-record indicators', () => {
+	const current = state();
+	current.notLoadedMasterKeys = ['private-key-id'];
+	current.decryptionWorker = { state: 'started', itemIndex: 2, itemCount: 10, skippedItemCount: 99 };
+	assert.deepEqual(summarizeHeadlessState(current, 3, 100).decryption, {
+		state: 'started', batch: { itemIndex: 2, itemCount: 10 }, missingMasterKey: true, disabledItemCount: 3,
+	});
+	current.decryptionWorker.state = 'idle';
+	assert.equal(summarizeHeadlessState(current, 3, 100).decryption.batch, null);
+});
+
+/** Use the real REST router and authentication with unrelated entity routes isolated. */
+function api(actionApi) {
+	class HttpError extends Error {}
+	const routes = ['folders', 'notes', 'resources', 'tags', 'master_keys', 'search', 'ping', 'auth', 'events', 'revisions', 'mcp'];
+	const mocks = Object.fromEntries(routes.map(name => [`./routes/${name}`, {}]));
+	Object.assign(mocks, {
+		'../../models/utils/types': {},
+		'./utils/errors': { ErrorMethodNotAllowed: HttpError, ErrorForbidden: HttpError, ErrorBadRequest: HttpError, ErrorNotFound: HttpError },
+		'../../path-utils': { ltrimSlashes: value => value.replace(/^\/+/, '') },
+		md5: () => '',
+	});
+	const Api = load('packages/lib/services/rest/Api.ts', mocks).default;
+	return new Api('private-token', null, actionApi);
+}
+
+test('fixed headless status action uses REST token authentication and excludes other actions', async () => {
+	let reads = 0;
+	const actions = createHeadlessActionApi(state, async () => { reads++; return 2; });
+	const router = api(actions);
+	const body = JSON.stringify({ action: 'status' });
+	await assert.rejects(router.route('POST', 'services/headless', {}, body), /Missing "token"/);
+	await assert.rejects(router.route('POST', 'services/headless', { token: 'wrong' }, body), /Invalid "token"/);
+	assert.equal(reads, 0);
+	const summary = await router.route('POST', 'services/headless', { token: 'private-token' }, body);
+	assert.equal(summary.decryption.disabledItemCount, 2);
+	assert.equal(reads, 1);
+	for (const action of ['start', 'toString', 'constructor']) {
+		await assert.rejects(router.route('POST', 'services/headless', { token: 'private-token' }, JSON.stringify({ action })), /Invalid action/);
+	}
+	await assert.rejects(api().route('POST', 'services/headless', { token: 'private-token' }, body), /No action API/);
+	await assert.rejects(router.route('GET', 'services/headless', { token: 'private-token' }, body));
+});
+
+test('status acquisition failures propagate without a substitute count or report', async () => {
+	const actions = createHeadlessActionApi(state, async () => { throw new Error('lookup failed: /private/profile'); });
+	await assert.rejects(actions.headless().status(), { message: 'Headless status unavailable.' });
+});

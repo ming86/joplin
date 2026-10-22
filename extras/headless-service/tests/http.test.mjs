@@ -37,6 +37,43 @@ test('real loopback transport implements a Joplin-shaped read/write/search/event
 	assert.deepEqual(writes.slice(1).map(([, , body]) => body), [{ body: 'hello' }, { body: 'updated' }]);
 });
 
+test('headless status uses its fixed authenticated action, allowlists the summary, and fails explicitly', async t => {
+	let fail = false;
+	const url = await server(t, async (req, res) => {
+		const target = new URL(req.url, 'http://local');
+		assert.equal(target.pathname, '/services/headless');
+		assert.equal(target.searchParams.get('token'), 'alice-private-token');
+		assert.equal(req.method, 'POST');
+		assert.deepEqual(await readJson(req), { action: 'status' });
+		if (fail) { res.writeHead(503); return res.end('private upstream error'); }
+		res.end(JSON.stringify({
+			observedAt: 2000,
+			serviceStartedAt: 1000,
+			sync: {
+				running: true,
+				pending: false,
+				report: { state: 'in_progress', startTime: 1500, completedTime: null, counters: { noteConflict: 2, updateLocal: 3, privateCounter: 99 }, errorCount: 1, errors: ['private error'] },
+				privateField: 'not exposed',
+			},
+			decryption: { state: 'started', batch: { itemIndex: 1, itemCount: 8, privateField: 'not exposed' }, missingMasterKey: true, disabledItemCount: 4, error: 'private error' },
+			privateField: 'not exposed',
+		}));
+	});
+	const config = account(); config.joplin.baseUrl = url;
+	const service = createAccountRegistry([config]).forPrincipal('alice', 'alice');
+	const status = await service.status();
+	assert.deepEqual(status, {
+		accountId: 'alice',
+		semantic: { state: 'unavailable', reason: 'not_implemented', embeddingSpaceId: 'test-space-v1' },
+		observedAt: 2000,
+		serviceStartedAt: 1000,
+		sync: { running: true, pending: false, report: { state: 'in_progress', startTime: 1500, completedTime: null, counters: { noteConflict: 2, updateLocal: 3 }, errorCount: 1 } },
+		decryption: { state: 'started', batch: { itemIndex: 1, itemCount: 8 }, missingMasterKey: true, disabledItemCount: 4 },
+	});
+	fail = true;
+	await assert.rejects(service.status(), code('backend_request_failed'));
+});
+
 test('path traversal, injected input properties and invalid pagination are rejected before sending', async t => {
 	let count = 0; const url = await server(t, (_req, res) => { count++; res.end('{}'); });
 	const client = createJoplinClient({ baseUrl: url, token: 'secret' });

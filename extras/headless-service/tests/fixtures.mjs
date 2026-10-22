@@ -4,6 +4,12 @@ export const noteId = 'a'.repeat(32);
 export const folderId = 'b'.repeat(32);
 export const space = { id: 'test-space-v1', revision: 'fake-weights-v1', dimensions: 2, preprocessingVersion: 'title-body-v1' };
 export const note = { id: noteId, parent_id: folderId, title: 'Test', body: 'Unicode 笔记', created_time: 50, updated_time: 100, is_todo: 0, todo_completed: 0, markup_language: 1, encryption_applied: 0, deleted_time: 0, is_locked: 0 };
+export const headlessStatus = {
+	observedAt: 1000,
+	serviceStartedAt: 900,
+	sync: { running: false, pending: false, report: null },
+	decryption: { state: 'idle', batch: null, missingMasterKey: false, disabledItemCount: 0 },
+};
 export function account(id = 'alice') {
 	return {
 		id, subjects: [id], permissions: ['read', 'write'],
@@ -14,6 +20,7 @@ export function account(id = 'alice') {
 }
 export function backend(id = 'alice') {
 	return {
+		async status() { return structuredClone(headlessStatus); },
 		async getNote() { return { ...note, body: id }; },
 		async listNotes() { return { items: [{ ...note, body: id }], hasMore: false }; },
 		async listNoteSummaries() {

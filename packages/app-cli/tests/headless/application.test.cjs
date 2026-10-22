@@ -6,6 +6,10 @@ const load = require('./loadSource.cjs');
 function fixture() {
 	const events = [];
 	class Base {
+		store() { return { getState: () => ({
+			syncStarted: false, syncPending: true, syncReport: { errors: [] },
+			notLoadedMasterKeys: [], decryptionWorker: { state: 'idle' },
+		}) }; }
 		createDatabaseDriver() { return 'stock-driver'; }
 		backgroundServicesEnabled() { return false; }
 		async applySettingsSideEffects() { events.push(`background:${this.backgroundServicesEnabled()}`); }
@@ -15,7 +19,7 @@ function fixture() {
 	class Logger { setLevel() {} }
 	class Driver { constructor(key) { this.key = key; } }
 	const instance = {
-		initialize() {}, setLogger() {}, setDispatch() {},
+		initialize(actions) { this.actions = actions; }, setLogger() {}, setDispatch() {},
 		async start(options) { assert.equal(options.returnWhenListening, true); events.push('listen'); },
 		async stop(options) { assert.equal(options.graceful, true); events.push('drain-api'); },
 	};
@@ -32,8 +36,12 @@ function fixture() {
 		'@joplin/lib/Cache': class {},
 		'@joplin/utils/Logger': Logger,
 		'./headless/DatabaseDriver': Driver,
+		'./headless/status': load('packages/app-cli/app/headless/status.ts'),
 		'@joplin/lib/ClipperServer': { instance: () => instance },
-		'@joplin/lib/services/DecryptionWorker': { instance: () => ({ scheduleStart: async () => events.push('decrypt') }) },
+		'@joplin/lib/services/DecryptionWorker': { instance: () => ({
+			scheduleStart: async () => events.push('decrypt'),
+			decryptionDisabledItems: async () => [{ id: 'never-exposed' }],
+		}) },
 		'@joplin/lib/services/search/SearchEngine': { instance: () => ({ syncTables: async () => events.push('fts') }) },
 		'@joplin/lib/services/ResourceService': { runInBackground: () => events.push('resources') },
 		'@joplin/lib/services/RevisionService': { instance: () => ({ runInBackground: () => events.push('revisions') }) },
@@ -57,11 +65,11 @@ function fixture() {
 	const app = new Application();
 	app.stdout = () => events.push('ready');
 	app.database_ = { close: async () => events.push('close-db') };
-	return { app, events, Driver };
+	return { app, events, Driver, clipper: instance };
 }
 
 test('headless application wires one owner: initialize, listen, drain sync/workers, flush and close', async () => {
-	const { app, events } = fixture();
+	const { app, events, clipper } = fixture();
 	app.headlessConfig_ = { databaseKey: Buffer.alloc(32) };
 	app.headlessInitialized_ = true;
 	await app.runHeadlessService();
@@ -72,14 +80,19 @@ test('headless application wires one owner: initialize, listen, drain sync/worke
 		'close-db', 'reset-models',
 	]);
 	assert.equal(app.backgroundServicesEnabled(), false);
+	const summary = await clipper.actions.headless().status();
+	assert.equal(summary.sync.pending, true);
+	assert.equal(summary.decryption.disabledItemCount, 1);
+	assert.ok(!JSON.stringify(summary).includes('never-exposed'));
 	await app.stopHeadless();
 	assert.equal(events.filter(value => value === 'close-db').length, 1);
 });
 
 test('headless driver is opt-in and standard CLI cannot accidentally invoke the daemon', async () => {
-	const { app, Driver } = fixture();
+	const { app, Driver, clipper } = fixture();
 	assert.equal(app.createDatabaseDriver(), 'stock-driver');
 	await assert.rejects(app.runHeadlessService(), /JOPLIN_HEADLESS=1/);
+	assert.equal(clipper.actions, undefined);
 	const key = Buffer.alloc(32);
 	app.headlessConfig_ = { databaseKey: key };
 	const driver = app.createDatabaseDriver();

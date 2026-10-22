@@ -17,6 +17,17 @@ test('web reads metadata without bodies and preserves exact supported Markdown o
 	assert.equal(saved.note.body, body); assert.equal(saved.saved, 'local'); assert.equal(saved.synchronization, 'not_observed');
 	assert.equal(f.writes.length, 1); assert.equal(f.writes[0].method, 'PUT');
 });
+test('web status uses the core summary without an extra reachability request and propagates status failures', async () => {
+	const f = webFixture(); let noteListRequests = 0;
+	f.backend.listNoteSummaries = async () => { noteListRequests++; throw new ServiceError('backend_request_failed'); };
+	f.backend.status = async () => ({ observedAt: 1000, serviceStartedAt: 900, sync: { running: true, pending: true, report: null }, decryption: { state: 'started', batch: { itemIndex: 0, itemCount: 2 }, missingMasterKey: false, disabledItemCount: 0 } });
+	const status = await f.service.status();
+	assert.equal(status.core, 'reachable'); assert.equal(Object.hasOwn(status, 'synchronization'), false);
+	assert.equal(status.sync.running, true); assert.equal(status.sync.pending, true); assert.equal(status.decryption.state, 'started');
+	assert.equal(noteListRequests, 0);
+	f.backend.status = async () => { throw new ServiceError('backend_request_failed'); };
+	await assert.rejects(f.service.status(), code('backend_request_failed'));
+});
 test('new Markdown is never sent to POST; blank receipt survives restart and lost reply', async () => {
 	const f = webFixture(), input = newWrite('![x](http://127.0.0.1:1/secret)');
 	f.hooks.afterPlaceholder = async () => { throw new ServiceError('write_outcome_unknown', true); };

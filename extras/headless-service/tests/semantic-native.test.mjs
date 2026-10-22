@@ -85,8 +85,8 @@ test('actual SQLCipher Joplin core -> HTTP fixture embeddings -> encrypted seman
 	const prep = await openMcpRuntime(configFile,{background:false});
 	try {
 		// This demonstrates why simply accepting persisted ready is insufficient.
-		assert.equal(prep.service.status().semantic.state,'ready');
-		const before = prep.service.status().semantic.indexedNotes;
+		assert.equal((await prep.service.status()).semantic.state,'ready');
+		const before = (await prep.service.status()).semantic.indexedNotes;
 		const after = await prepareSemanticCheck(prep,10000);
 		assert.equal(after.indexedNotes,before+1);
 	} finally {await prep.close();}

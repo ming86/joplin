@@ -9,7 +9,7 @@ import { createAccountRegistry, ServiceError } from '../index.mjs';
 import { createMcpSession } from '../mcp.mjs';
 import { serveStdio } from '../src/mcp/stdio.mjs';
 import { loadMcpConfig } from '../src/mcp/config.mjs';
-import { account, backend, noteId, folderId, server, readJson } from './fixtures.mjs';
+import { account, backend, headlessStatus, noteId, folderId, server, readJson } from './fixtures.mjs';
 import { StdioTestClient } from '../scripts/lib/stdio-client.mjs';
 
 const request = (id, method, params) => ({ jsonrpc: '2.0', id, method, ...(params ? { params } : {}) });
@@ -46,6 +46,23 @@ test('stateless sessions serve tools without a handshake and accept independent 
 	assert.equal((await s.handle(request(4, 'initialize', {}))).error.code, -32602);
 	s.close();
 	assert.equal((await s.handle(request(5, 'tools/list'))).error.code, -32000);
+});
+test('get_status returns sync/decryption details, forwards cancellation, and reports backend failure', async () => {
+	let seenSignal;
+	const b = backend();
+	b.status = async signal => { seenSignal = signal; return structuredClone(headlessStatus); };
+	const s = session({}, b); await ready(s);
+	const result = (await s.handle(call(2, 'get_status'))).result;
+	assert.equal(result.isError, false);
+	assert.equal(result.structuredContent.accountId, 'alice');
+	assert.deepEqual(result.structuredContent.sync, headlessStatus.sync);
+	assert.deepEqual(result.structuredContent.decryption, headlessStatus.decryption);
+	assert.equal(seenSignal instanceof AbortSignal, true);
+	b.status = async () => { throw new ServiceError('backend_request_failed'); };
+	const failure = (await s.handle(call(3, 'get_status'))).result;
+	assert.equal(failure.isError, true);
+	assert.equal(failure.structuredContent.error.code, 'backend_request_failed');
+	s.close();
 });
 test('invalid envelopes and ids; unknown methods; no response or tool execution for notifications', async () => {
 	let writes = 0; const b = backend(); b.createNote = async () => { writes++; };

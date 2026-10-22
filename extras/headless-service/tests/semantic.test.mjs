@@ -160,7 +160,7 @@ test('configured bad semantic key degrades optional search without breaking keyw
 	const tokenFile=path.join(dir,'token');fs.writeFileSync(tokenFile,'synthetic',{mode:0o600}); const keyFile=path.join(dir,'key');fs.writeFileSync(keyFile,'bad-key',{mode:0o600});
 	const cfg=path.join(dir,'config.json');const a=account();
 	fs.writeFileSync(cfg,JSON.stringify({accountId:'alice',baseUrl:url,apiTokenFile:tokenFile,semantic:{enabled:true,keyFile,sqliteModule,embedding:a.embedding}}));
-	const runtime=await openMcpRuntime(cfg);t.after(()=>runtime.close());assert.equal(runtime.service.status().semantic.state,'unavailable');
+	const runtime=await openMcpRuntime(cfg);t.after(()=>runtime.close());assert.equal(runtime.engine.status().state,'unavailable');
 	assert.equal((await runtime.service.search({query:'x',mode:'hybrid'})).executedMode,'keyword');
 });
 test('native serialized transactions roll back invalid event batch and cursor together',native,async t=>{
@@ -175,9 +175,9 @@ test('native cancellation leaves pending work resumable and a source cursor rese
 	await f.store.enqueue([],'999');f.setTransport(async texts=>vectorResponse(texts));await f.engine.runOnce();
 	assert.equal(f.engine.status().state,'ready');assert.equal((await f.store.info()).event_cursor,'1');
 });
-test('semantic backends cannot cross account binding even when a trusted factory returns the wrong instance',()=>{
+test('semantic backends cannot cross account binding even when a trusted factory returns the wrong instance',async()=>{
 	const r=createAccountRegistry([account()],{makeSemanticBackend:()=>({accountId:'bob',status:()=>({state:'ready'})})});
-	assert.throws(()=>r.forPrincipal('alice','alice').status(),/semantic_account_mismatch/);
+	await assert.rejects(r.forPrincipal('alice','alice').status(),/semantic_account_mismatch/);
 });
 test('real ordinary SQLite and a plaintext database are rejected without plaintext adoption',{
 	skip: !sqliteModule || !process.env.JOPLIN_PLAIN_SQLITE_MODULE ? 'Set SQLCipher and ordinary sqlite3 module paths.' : false,

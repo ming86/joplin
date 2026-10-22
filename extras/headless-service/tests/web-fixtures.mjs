@@ -2,7 +2,7 @@ import { createAccountRegistry } from '../index.mjs';
 import { ServiceError } from '../src/errors.mjs';
 import { createWebService } from '../src/web/service.mjs';
 import { createMarkdownRenderer } from '../src/web/render.mjs';
-import { account as config, note, folderId } from './fixtures.mjs';
+import { account as config, headlessStatus, note, folderId } from './fixtures.mjs';
 export const namespace = 'c'.repeat(32);
 export const newWrite = (body = '# Test\nUnicode 笔记', operationId = 'd'.repeat(32)) => ({ kind: 'create', operationId, notebookId: folderId, title: 'Browser test', body });
 export function webFixture({ allowWrites = true, render = body => body, records = [note], makeSemanticBackend } = {}) {
@@ -10,6 +10,7 @@ export function webFixture({ allowWrites = true, render = body => body, records 
 	const writes = [];
 	const hooks = { afterPlaceholder: null, afterUpdate: null, beforeUpdate: null };
 	const backend = {
+		async status() { return structuredClone(headlessStatus); },
 		async getNote(id) { const n = notes.get(id); if (!n) throw new ServiceError('not_found'); return { ...n }; },
 		async getClipRecord(id) { const n = await this.getNote(id); return { ...n, source: n.source ?? '' }; },
 		async getNotebook(id) { if (id !== folderId) throw new ServiceError('not_found'); return { id, title: 'Notebook' }; },
