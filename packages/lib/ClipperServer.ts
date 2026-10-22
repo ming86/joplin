@@ -2,6 +2,7 @@ import Setting from './models/Setting';
 import Logger from '@joplin/utils/Logger';
 import Api, { RequestFile } from './services/rest/Api';
 import ApiResponse from './services/rest/ApiResponse';
+import { ErrorValidation } from './services/rest/utils/errors';
 import { ltrimSlashes } from './path-utils';
 import * as urlParser from 'url';
 const { randomClipperPort, startPort } = require('./randomClipperPort');
@@ -239,6 +240,11 @@ export default class ClipperServer {
 				} catch (error) {
 					this.logger().error(error);
 					const httpCode = error.httpCode ? error.httpCode : 500;
+					if (error instanceof ErrorValidation) {
+						writeResponseJson(httpCode, { code: error.code, error: error.message });
+						return;
+					}
+
 					const msg = [];
 					if (httpCode >= 500) msg.push('Internal Server Error');
 					if (error.message) msg.push(error.message);

@@ -8,6 +8,14 @@ import { BaseItemEntity, SqlQuery } from './services/database/types';
 import uuid from './uuid';
 import { Mutex } from 'async-mutex';
 
+/** An error raised when an item fails BaseModel's user-side validation rules. */
+export class UserSideValidationError extends Error {
+	/** Creates a validation error with the existing user-facing message. */
+	public constructor(message: string) {
+		super(message);
+	}
+}
+
 // New code should make use of this enum
 export enum ModelType {
 	Note = 1,
@@ -607,19 +615,20 @@ class BaseModel {
 		return query;
 	}
 
+	/** Validates user-supplied item fields, throwing UserSideValidationError when a rule fails. */
 	public static userSideValidation(o: Record<string, unknown>) {
 		if (typeof o.id === 'string' && !o.id.match(/^[a-f0-9]{32}$/)) {
-			throw new Error('Validation error: ID must a 32-characters lowercase hexadecimal string');
+			throw new UserSideValidationError('Validation error: ID must a 32-characters lowercase hexadecimal string');
 		}
 
 		const timestamps = ['user_updated_time', 'user_created_time'] as const;
 		for (const k of timestamps) {
-			if ((k in o) && (typeof o[k] !== 'number' || isNaN(o[k] as number) || (o[k] as number) < 0)) throw new Error('Validation error: user_updated_time and user_created_time must be numbers greater than 0');
+			if ((k in o) && (typeof o[k] !== 'number' || isNaN(o[k] as number) || (o[k] as number) < 0)) throw new UserSideValidationError('Validation error: user_updated_time and user_created_time must be numbers greater than 0');
 		}
 
 		const maxTitleLength = 4096;
 		if (typeof o.title === 'string' && o.title.length > maxTitleLength) {
-			throw new Error(`Validation error: title must be ${maxTitleLength} characters or less`);
+			throw new UserSideValidationError(`Validation error: title must be ${maxTitleLength} characters or less`);
 		}
 
 		// Null bytes break Joplin's serialised note format and can cause silent
@@ -628,7 +637,7 @@ class BaseModel {
 		for (const k of Object.keys(o)) {
 			const v = o[k];
 			if (typeof v === 'string' && v.includes(nul)) {
-				throw new Error(`Validation error: ${k} cannot contain a null byte`);
+				throw new UserSideValidationError(`Validation error: ${k} cannot contain a null byte`);
 			}
 		}
 	}

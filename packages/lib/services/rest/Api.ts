@@ -1,5 +1,6 @@
 import { PaginationOrderDir } from '../../models/utils/types';
-import { ErrorMethodNotAllowed, ErrorForbidden, ErrorBadRequest, ErrorNotFound } from './utils/errors';
+import { UserSideValidationError } from '../../BaseModel';
+import { ErrorMethodNotAllowed, ErrorForbidden, ErrorBadRequest, ErrorNotFound, ErrorValidation } from './utils/errors';
 
 import route_folders from './routes/folders';
 import route_notes from './routes/notes';
@@ -241,6 +242,7 @@ export default class Api {
 		try {
 			return await parsedPath.fn(request, id, link, context);
 		} catch (error) {
+			if (error instanceof UserSideValidationError) throw new ErrorValidation(error.message);
 			if (!error.httpCode) error.httpCode = 500;
 			throw error;
 		}

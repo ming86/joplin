@@ -31,3 +31,14 @@ export class ErrorBadRequest extends ApiError {
 		super(message, 400);
 	}
 }
+
+/** Represents a BaseModel user-side validation failure returned to an API caller. */
+export class ErrorValidation extends ApiError {
+	/** Marker used by ClipperServer to return the stable validation response shape. */
+	public readonly code = 'validation_error';
+
+	/** Creates a bad-request error while preserving the model validation message. */
+	public constructor(message: string) {
+		super(message, 400);
+	}
+}
