@@ -30,11 +30,19 @@ Forwarding always uses the VPC binding `JOPLIN_MCP` and the fixed URL `http://lo
 https://joplin-mcp.example.com/oauth/google/callback
 ```
 
-The current config has placeholders for both the Worker's KV namespace ID and the VPC Service ID. They must be replaced with the IDs of the resources created for this Worker before deployment. The intended VPC Service is an HTTP service that targets `localhost` on port `41191` through the existing locally managed tunnel `00000000-0000-0000-0000-000000000000`. The MCP listener is published by Podman on the VPS loopback interface only. Do not add a public DNS hostname, tunnel ingress rule, or reverse-proxy route for the sidecar.
+The resources are provisioned in the Cloudflare account configured by `account_id` in `wrangler.jsonc`. That file is the canonical source for their IDs.
 
-The exact Wrangler command for creating the VPC Service is:
+| Resource | Worker binding | Name | Destination |
+| --- | --- | --- | --- |
+| KV namespace | `OAUTH_KV` | `joplin-mcp-oauth` | OAuth provider state and one-time transaction data |
+| HTTP VPC Service | `JOPLIN_MCP` | `joplin-headless-mcp` | `localhost:41191` through the existing tunnel |
+
+The VPC Service maps the Worker's fixed request URL `http://localhost:41191/mcp` to the MCP listener on the VPS loopback interface. Workers VPC requires the tunnel to use QUIC and `cloudflared` 2025.7.0 or later; the VPS was running version `2026.9.1` when checked. Outbound UDP port `7844` must be allowed. The sidecar needs no public DNS hostname, tunnel ingress rule, or reverse-proxy route. See Cloudflare's [Workers VPC tunnel requirements](https://developers.cloudflare.com/workers-vpc/configuration/tunnel/) and [VPC Service configuration](https://developers.cloudflare.com/workers-vpc/configuration/vpc-services/).
+
+If these resources need to be recreated, authenticate Wrangler to the configured account, then run the following commands from this package directory and put the returned IDs into the corresponding bindings in `wrangler.jsonc`:
 
 ```sh
+npx wrangler kv namespace create joplin-mcp-oauth
 npx wrangler vpc service create joplin-headless-mcp \
   --type http \
   --tunnel-id 00000000-0000-0000-0000-000000000000 \
@@ -42,17 +50,15 @@ npx wrangler vpc service create joplin-headless-mcp \
   --http-port 41191
 ```
 
-This command creates an account resource and returns its service ID; run it only during the separately authorized live-provisioning step. Put the returned ID in the `JOPLIN_MCP` entry in `wrangler.jsonc`. The command syntax was checked with the package's installed Wrangler 4.151.3 help and the [Cloudflare VPC Service command reference](https://developers.cloudflare.com/workers/wrangler/commands/vpc/); it has not been run against a Cloudflare account.
+Creating a VPC Service requires the account's Connectivity Directory Admin permission; binding an existing VPC Service requires Connectivity Directory Bind. See the [Wrangler VPC Service command reference](https://developers.cloudflare.com/workers/wrangler/commands/vpc/).
 
-Before creating the service, confirm that the existing `cloudflared` tunnel is running with QUIC (`auto` or `quic`) and that outbound UDP port `7844` is allowed. Workers VPC requires QUIC and `cloudflared` 2025.7.0 or later; the current host binary is 2026.9.1. See Cloudflare's [Workers VPC tunnel requirements](https://developers.cloudflare.com/workers-vpc/configuration/tunnel/) and [VPC Service configuration](https://developers.cloudflare.com/workers-vpc/configuration/vpc-services/). Workers VPC is currently in beta and is free on all Workers plans, according to Cloudflare's [Get started guide](https://developers.cloudflare.com/workers-vpc/get-started/).
-
-Create a Google OAuth **web application** and register the callback URL above. If its consent app is in testing, add `allowed@example.com` as a test user. The requested Google scopes are `openid email profile`. The Worker also displays its own per-client consent page.
+The Google Cloud project `joplin-mcp-example` has an OAuth app branded `Joplin MCP`, with audience External and publishing status Testing. The `Joplin MCP Worker` web OAuth client uses the callback URL above. The Worker requests only the `openid`, `email`, and `profile` identity scopes. Google's guidance says test-user allowlisting and seven-day authorization expiry do not apply when an app requests only these scopes; see [Manage App Audience](https://support.google.com/cloud/answer/15549945?hl=en). The Worker also displays its own per-client consent page.
 
 ## Secrets and local development
 
 Install SOPS locally and use a current supported Node.js release for tooling; this package requires Node.js 22 or later. Dependency versions are pinned in this package and its lockfile, independently of the parent repository.
 
-Add these Worker secrets to `extras/cloudflare-mcp-worker/.sops.env`:
+The committed encrypted file `extras/cloudflare-mcp-worker/.sops.env` contains these Worker secrets:
 
 | Secret | Value |
 | --- | --- |
@@ -86,4 +92,4 @@ npm run test:worker
 
 `npm run build` only bundles with `wrangler deploy --dry-run`; it does not deploy. For manual browser sign-in during local development, use HTTPS and keep `PUBLIC_URL` and the registered Google redirect URI aligned, because the provider uses Secure `__Host-` cookies. `npm run dev` starts Wrangler with HTTPS.
 
-Live Google sign-in, a selected remote MCP client, the VPC path, and VPS/container integration still need verification after live resources and secrets are provisioned.
+On 2026-10-22, deployed Worker version `00000000-0000-0000-0000-000000000000` passed a live Google OAuth flow using PKCE S256 and dynamic client registration. OAuth discovery returned 200 and unauthenticated `/mcp` returned 401. Through the private VPC path, `tools/list` exposed all seven read-only tools and `get_status` succeeded. The query-free browser check completed, and its helper exited 0 without writing tokens to disk. Semantic status was `unavailable`; semantic search readiness remains separate work. A connection from a selected ChatGPT or Claude client has not yet been verified.
