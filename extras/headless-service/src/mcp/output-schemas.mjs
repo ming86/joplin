@@ -113,7 +113,7 @@ const coreOutputSchemas = {
 		note_id: string, title: nullableString, notebook_id: nullableString,
 		chunk_index: { type: 'number', description: 'Chunk index within the source note.' }, chunk_text: string,
 		score: { type: 'number', description: 'Similarity score rounded to three decimal places.' },
-	})), total: { type: 'number', description: 'Number of returned matching chunks.' } }), description: 'Defined ranked-chunk success contract. This dedicated headless tool currently returns semantic_search_not_implemented.' },
+	})), total: { type: 'number', description: 'Number of returned matching chunks.' } }), description: 'On success, returns ranked note chunks with source ids, matching text and similarity scores.' },
 	read_note: object({ ...readProperties, is_todo: boolean, todo_completed: boolean }, readRequired),
 	get_note: object(readProperties, readRequired),
 	create_note: object({ id: string, title: string, notebook_id: nullableString, note: object({ ...note.properties, notebook_id: string }, note.required), ...saveProperties }, ['id', 'notebook_id', 'note', 'saved', 'synchronization']),

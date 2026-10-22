@@ -55,7 +55,7 @@ export function registerConflictTools(add, service) {
 	);
 
 	add('read_conflict',
-		'Read the current conflict copy and original note content for one device-local sync conflict. Each side keeps its availability status; current note content is returned only when that side is available. Use offset and max_chars for UTF-16-safe body chunks. This read does not provide an update revision; call read_note for the target immediately before update_note.',
+		'Read the current conflict copy and original note content for one device-local sync conflict. Each side keeps its availability status; current note content is returned only when that side is available. Use offset and max_chars for UTF-16-safe body chunks. To edit either note, first call read_note for that note, then pass its revision_id as base_revision_id to update_note.',
 		object({
 			id: { ...id, description: 'The conflict note id returned by list_conflicts.' },
 			offset: { type: 'integer', description: 'UTF-16 code-unit offset applied independently to each available note body. Defaults to 0; returned offsets avoid splitting a surrogate pair.', minimum: 0 },

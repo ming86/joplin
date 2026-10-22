@@ -15,7 +15,7 @@ export function registerMaintenanceTools(add, service) {
 	updateNotebookSchema.anyOf = [{ required: ['title'] }, { required: ['parent_id'] }];
 	add('update_notebook', [
 		'Change an available notebook title, parent notebook, or both. Use parent_id "" to move it to the top level.',
-		'Joplin validates notebook names and nesting rules. A combined title and move update runs as native model operations and can be partially applied if a later operation fails.',
+		'Joplin validates notebook names and nesting rules. If both title and parent are changed, one change may succeed before the other fails.',
 	].join(' '), updateNotebookSchema, async (args, signal) => service.updateNotebook(args.id, {
 		...(Object.hasOwn(args, 'title') ? { title: args.title } : {}),
 		...(Object.hasOwn(args, 'parent_id') ? { parent_id: args.parent_id } : {}),
