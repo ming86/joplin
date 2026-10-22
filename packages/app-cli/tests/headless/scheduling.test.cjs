@@ -107,6 +107,7 @@ test('headless registry keeps its 10-second inbound clock despite repeated local
 	}
 	assert.equal(calls.length, 2);
 	assert.equal(calls[1].syncSteps, undefined, 'periodic full sync subsumes the debounced partial');
+	assert.equal(calls[1].remoteChangesOnly, undefined);
 	assert.equal([...timers].filter(timer => timer.interval === 10000).length, 1);
 	assert.equal(settings['sync.interval'], 300, 'normal client cadence is not rewritten');
 	assert.deepEqual(JSON.parse(settings['sync.9.context']), { cursor: 2 });
@@ -144,6 +145,36 @@ test('periodic ticks and synchronizer followups never overlap or downgrade a pen
 	await advance(0);
 	assert.equal(calls.length, 2, 'three ticks coalesce into one follow-up');
 	assert.equal(calls[1].syncSteps, undefined);
+	assert.equal(calls[1].remoteChangesOnly, undefined, 'a local upload combined with a poll becomes an ordinary full sync');
+});
+
+test('headless remote polls and ordinary full syncs keep independent fixed clocks', async t => {
+	const { reg, calls, advance, timers } = headlessFixture(t);
+	const startup = reg.scheduleSync(0);
+	await advance(0); await startup;
+	assert.deepEqual([...timers].filter(timer => timer.interval).map(timer => timer.interval).sort((a, b) => a - b), [10000, 120000]);
+
+	await advance(10000);
+	assert.equal(calls.length, 2);
+	assert.equal(calls[1].remoteChangesOnly, true);
+	await advance(109999);
+	assert.equal(calls.filter(options => !options.remoteChangesOnly).length, 1, 'polls do not restart or replace the full-sync clock');
+	await advance(1);
+	assert.equal(calls.filter(options => !options.remoteChangesOnly).length, 2, 'the ordinary full sync still runs at 120 seconds');
+	assert.equal(calls[calls.length - 1].remoteChangesOnly, undefined);
+});
+
+test('a remote poll and a queued local upload merge into an ordinary full sync', async t => {
+	const { reg, calls, advance } = headlessFixture(t);
+	const startup = reg.scheduleSync(0);
+	await advance(0); await startup;
+	await advance(9000);
+	const upload = reg.scheduleSync(5000, partialOptions);
+	await advance(1000);
+	await upload;
+	assert.equal(calls.length, 2);
+	assert.equal(calls[1].syncSteps, undefined);
+	assert.equal(calls[1].remoteChangesOnly, undefined);
 });
 
 test('native failure does not self-requeue, while a new edit during failure remains scheduled', async t => {

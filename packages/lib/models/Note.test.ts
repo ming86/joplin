@@ -5,6 +5,7 @@ import markdownUtils from '../markdownUtils';
 import { sortedIds, createNTestNotes, expectThrow, setupDatabaseAndSynchronizer, switchClient, checkThrowAsync, supportDir, expectNotThrow, simulateReadOnlyShareEnv, msleep, db, encryptionService, revisionService } from '../testing/test-utils';
 import Folder from './Folder';
 import Note from './Note';
+import BaseItem from './BaseItem';
 import Tag from './Tag';
 import ItemChange from './ItemChange';
 import Resource from './Resource';
@@ -516,6 +517,23 @@ describe('models/Note', () => {
 		expect(all.length).toBe(1);
 		expect(all[0].id).toBe(folder1.id);
 	}));
+
+	it('notifies local sync after moving notes to trash, without echoing synced trash changes', async () => {
+		const note = await Note.save({ title: 'Trash notification' });
+		const notify = jest.fn();
+		BaseItem.setLocalChangeHandler(notify);
+		try {
+			await Note.batchDelete([note.id], { toTrash: true });
+			expect(notify).toHaveBeenCalledTimes(1);
+			expect((await Note.load(note.id)).deleted_time).toBeGreaterThan(0);
+
+			await Note.batchDelete([note.id], { toTrash: true, changeSource: ItemChange.SOURCE_SYNC });
+			expect(notify).toHaveBeenCalledTimes(1);
+		} finally {
+			BaseItem.setLocalChangeHandler(null);
+		}
+		await ItemChange.waitForAllSaved();
+	});
 
 	it('should delete only the selected notes', (async () => {
 		const f1 = await Folder.save({ title: 'folder1' });
