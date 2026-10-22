@@ -110,11 +110,18 @@ test('remote embedding processing must be permitted explicitly', () => {
 	c.embedding.remoteProcessing = true; assert.doesNotThrow(() => createAccountRegistry([c]));
 });
 
-test('non-Markdown notes remain readable but cannot be rewritten through the initial editor contract', async () => {
-	const fake = backend(); fake.getNote = async () => ({ ...note, markup_language: 2 });
+test('non-Markdown notes remain readable and accept updates without changing their format', async () => {
+	const fake = backend();
+	const htmlNote = { ...note, markup_language: 2 };
+	let update;
+	fake.getNote = async () => htmlNote;
+	fake.updateNote = async (_id, patch) => { update = patch; return { ...htmlNote, ...patch }; };
 	const service = createAccountRegistry([account()], { makeBackend: () => fake }).forPrincipal('alice', 'alice');
 	assert.equal((await service.getNote(noteId)).markup_language, 2);
-	await assert.rejects(service.updateNote(noteId, { body: 'plain text' }), code('unsupported_note_format'));
+	const updated = await service.updateNote(noteId, { title: 'Renamed' });
+	assert.deepEqual(update, { title: 'Renamed' });
+	assert.equal(updated.title, 'Renamed');
+	assert.equal(updated.markup_language, 2);
 });
 
 test('missing account ID is rejected rather than coerced to a valid string', () => {

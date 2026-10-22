@@ -314,6 +314,72 @@ test('real Data API writes keep Markdown out of POST, preserve unknown PUT outco
 	} finally { session.close(); }
 });
 
+test('MCP updates preserve HTML note bodies and format for metadata and raw-body operations', async t => {
+	const originalBody = '<article><h1>Heading</h1><p>Old text</p></article>';
+	let currentNote = { ...note, body: originalBody, markup_language: 2, is_todo: 1 };
+	const putBodies = [];
+	const url = await server(t, async (req, res) => {
+		const target = new URL(req.url, 'http://localhost');
+		assert.equal(target.searchParams.get('token'), 'alice-private-token');
+		res.setHeader('Content-Type', 'application/json');
+		if (req.method === 'GET' && target.pathname === `/notes/${noteId}`) return res.end(JSON.stringify(currentNote));
+		if (req.method === 'GET' && target.pathname === `/folders/${movedNotebookId}`) {
+			return res.end(JSON.stringify({ id: movedNotebookId, title: 'Moved notebook', parent_id: '', encryption_applied: 0, deleted_time: 0 }));
+		}
+		if (req.method === 'PUT' && target.pathname === `/notes/${noteId}`) {
+			const body = await readJson(req);
+			putBodies.push(body);
+			currentNote = {
+				...currentNote,
+				...body,
+				parent_id: body.parent_id ?? currentNote.parent_id,
+				updated_time: currentNote.updated_time + 1,
+			};
+			return res.end(JSON.stringify(currentNote));
+		}
+		res.writeHead(404);
+		return res.end('{}');
+	});
+	const config = account(); config.joplin.baseUrl = url;
+	const service = createAccountRegistry([config]).forPrincipal(config.id, config.id);
+	const session = createMcpSession(service, { allowWrites: true });
+	await ready(session);
+	try {
+		const metadataResult = await invoke(session, 'update_note', {
+			id: noteId, title: 'Renamed HTML note', notebook_id: movedNotebookId, todo_completed: true,
+		});
+		assert.equal(metadataResult.isError, false);
+		assert.deepEqual(Object.keys(putBodies[0]).sort(), ['parent_id', 'title', 'todo_completed']);
+		assert.equal(putBodies[0].title, 'Renamed HTML note');
+		assert.equal(putBodies[0].parent_id, movedNotebookId);
+		assert.ok(putBodies[0].todo_completed > 0);
+		assert.equal(currentNote.body, originalBody);
+		assert.equal(currentNote.markup_language, 2);
+		assert.equal(metadataResult.structuredContent.note.body, originalBody);
+		assert.equal(metadataResult.structuredContent.note.markup_language, 2);
+
+		const replacement = '<article><h1>Updated</h1><p>Old text</p></article>';
+		const replaceResult = await invoke(session, 'update_note', { id: noteId, body: replacement }, 3);
+		assert.equal(replaceResult.isError, false);
+		assert.deepEqual(putBodies[1], { body: replacement });
+		assert.equal(currentNote.body, replacement);
+		assert.equal(currentNote.markup_language, 2);
+
+		const expectedBody = '<!-- start --><article><h1>Updated</h1><p>New text</p></article><!-- end -->';
+		const partialResult = await invoke(session, 'update_note', {
+			id: noteId,
+			prepend: '<!-- start -->',
+			append: '<!-- end -->',
+			replace_text: { find: 'Old text', replace: 'New text' },
+		}, 4);
+		assert.equal(partialResult.isError, false);
+		assert.deepEqual(putBodies[2], { body: expectedBody });
+		assert.equal(currentNote.body, expectedBody);
+		assert.equal(currentNote.markup_language, 2);
+		assert.equal(partialResult.structuredContent.note.markup_language, 2);
+	} finally { session.close(); }
+});
+
 test('MCP reports structured core validation messages and keeps other 400 responses definite', async t => {
 	let failure = 'validation';
 	let writes = 0;
