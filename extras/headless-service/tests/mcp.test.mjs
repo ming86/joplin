@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PassThrough } from 'node:stream';
+import { PassThrough, Writable } from 'node:stream';
 import { once } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -229,10 +229,84 @@ test('stdio fragmented UTF-8, CRLF, multiple frames, invalid JSON and EOF', asyn
 	assert.ok(responses.some(r => r.error?.code === -32700)); assert.ok(responses.some(r => r.error?.code === -32600));
 	assert.equal(responses.find(r => r.id === 2).result.structuredContent.accountId, 'alice');
 });
-test('stdio oversized frames fail with bounded output', async () => {
-	const input = new PassThrough(); const output = new PassThrough(); let size = 0; output.on('data', b => { size += b.length; });
-	const t = serveStdio(session(), { input, output, maxFrameBytes: 32 }); input.write('x'.repeat(33));
-	assert.equal((await t.done).failed, true); assert.ok(size < 200);
+test('stdio accepts a request larger than the former frame cap', async () => {
+	const input = new PassThrough(); const output = new PassThrough(); let data = '';
+	output.on('data', chunk => { data += chunk; });
+	const t = serveStdio(session(), { input, output });
+	const largeRequest = request(2, 'ping', { padding: 'x'.repeat(1024 * 1024) });
+	const raw = `${JSON.stringify(largeRequest)}\n`;
+	assert.ok(Buffer.byteLength(raw) > 1024 * 1024);
+	input.write(`${JSON.stringify(initialize('2025-11-25'))}\n`);
+	input.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`);
+	input.write(raw);
+	input.end();
+	assert.equal((await t.done).failed, false);
+	const responses = data.trim().split('\n').map(JSON.parse);
+	assert.deepEqual(responses.find(response => response.id === 2).result, {});
+});
+test('stdio pending limit includes replies queued behind a stalled output write', { timeout: 10000 }, async t => {
+	const input = new PassThrough();
+	const outputChunks = [];
+	let outputWrites = 0;
+	let firstWriteCallback;
+	let releaseRequested = false;
+	let resolveFirstWrite;
+	const firstWrite = new Promise(resolve => { resolveFirstWrite = resolve; });
+	const output = new Writable({
+		highWaterMark: 1,
+		write(chunk, _encoding, callback) {
+			outputWrites++;
+			outputChunks.push(chunk.toString());
+			if (outputWrites === 1) {
+				firstWriteCallback = callback;
+				resolveFirstWrite();
+				if (releaseRequested) releaseFirstWrite();
+			} else callback();
+		},
+	});
+	let handled = 0;
+	const fakeSession = {
+		async handle(message) {
+			handled++;
+			return { jsonrpc: '2.0', id: message.id, result: {} };
+		},
+		close() {},
+	};
+	const transport = serveStdio(fakeSession, { input, output });
+	function releaseFirstWrite() {
+		releaseRequested = true;
+		if (!firstWriteCallback) return;
+		const callback = firstWriteCallback;
+		firstWriteCallback = undefined;
+		callback();
+	}
+	t.after(async () => {
+		releaseFirstWrite();
+		input.end();
+		await transport.close();
+	});
+	const nextTurn = () => new Promise(resolve => setImmediate(resolve));
+
+	for (let id = 1; id <= 64; id++) {
+		input.write(`${JSON.stringify(request(id, 'ping'))}\n`);
+		await nextTurn();
+	}
+	await firstWrite;
+	assert.equal(handled, 64);
+	assert.equal(outputWrites, 1);
+
+	input.write(`${JSON.stringify(request(65, 'ping'))}\n`);
+	await nextTurn();
+	assert.equal(handled, 64);
+	assert.equal(outputWrites, 1);
+
+	input.end();
+	releaseFirstWrite();
+	assert.equal((await transport.done).failed, true);
+	assert.equal(outputWrites, 65);
+	const replies = outputChunks.join('').trim().split('\n').map(JSON.parse);
+	assert.equal(replies.length, 65);
+	assert.equal(replies.at(-1).error.code, -32000);
 });
 test('configuration rejects exposed token files and client-selected privilege values', t => {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-config-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -267,9 +341,9 @@ test('launched MCP process uses real HTTP, survives API failure, and does not re
 	assert.deepEqual(await client.request('ping'), {}); assert.ok(!client.stderr.includes('private response'));
 	await client.close(); assert.equal(client.child.exitCode, 0);
 });
-test('stdio handles malformed UTF-8, incomplete frame and bounded oversized tool output', async () => {
+test('stdio handles malformed UTF-8, incomplete frames and tool listing', async () => {
 	const input = new PassThrough(); const output = new PassThrough(); let text = ''; output.on('data', b => { text += b; });
-	const t = serveStdio(session(), { input, output, maxOutputBytes: 512 });
+	const t = serveStdio(session(), { input, output });
 	input.write(Buffer.from([0xff, 0x0a]));
 	input.write(`${JSON.stringify(initialize('2025-11-25'))}\n`);
 	input.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`);
@@ -277,7 +351,7 @@ test('stdio handles malformed UTF-8, incomplete frame and bounded oversized tool
 	await new Promise(r => setTimeout(r, 20)); input.end('{'); await t.done;
 	const replies = text.trim().split('\n').map(JSON.parse);
 	assert.equal(replies.filter(r => r.error?.code === -32700).length, 2);
-	assert.equal(replies.find(r => r.id === 2).result.structuredContent.error.code, 'tool_response_too_large');
+	assert.ok(replies.find(r => r.id === 2).result.tools.length > 0);
 });
 test('two MCP sessions with identical note ids stay bound to their own account', async () => {
 	const a = session({}, backend('alice'), account('alice')); const b = session({}, backend('bob'), account('bob'));

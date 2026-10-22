@@ -58,29 +58,43 @@ test('real HTTP common embedding route applies preparation exactly once and reor
 	const p=bindEmbeddingProvider({...space,documentPrefix:'doc: '},createEmbeddingTransport({baseUrl:url+'/v1',model:'fake',remoteProcessing:false,apiKey:'synthetic'}));
 	const result=await p.embed(['first','second'],'document'); assert.deepEqual(got.input,['doc: first','doc: second']); assert.equal(got.encoding_format,'float'); assert.deepEqual(result.vectors,[[1,0],[0,1]]); assert.equal(result.inputTokens,7);
 });
-test('HTTP transport refuses remote disclosure by default, invalid batches and oversized input', async () => {
+test('HTTP transport refuses remote disclosure by default and validates batches and nonempty inputs', async () => {
 	assert.throws(()=>createEmbeddingTransport({baseUrl:'https://example.com/v1',model:'m',remoteProcessing:false}),/remote_processing/);
-	let calls=0; const transport=createEmbeddingTransport({baseUrl:'http://localhost/v1',model:'m',remoteProcessing:false,maxInputBytes:8,maxBatch:1},()=>{calls++;});
-	await assert.rejects(transport(['123456789'],'query'),/input_too_large/); await assert.rejects(transport(['a','b'],'document'),/batch/); assert.equal(calls,0);
+	let calls=0; const transport=createEmbeddingTransport({baseUrl:'http://localhost/v1',model:'m',remoteProcessing:false,maxBatch:1},()=>{calls++;});
+	await assert.rejects(transport([''],'query'),/invalid_configuration/); await assert.rejects(transport(['a','b'],'document'),/batch/); assert.equal(calls,0);
+});
+test('HTTP transport accepts input and response bodies above the former byte caps', async t => {
+	const input = 'é'.repeat(4097);
+	const padding = 'x'.repeat(16 * 1024 * 1024 + 1);
+	const responseBody = JSON.stringify({ data: [], padding });
+	let inputBytes = 0;
+	const url = await server(t, async (req, res) => {
+		const body = await readJson(req);
+		inputBytes = Buffer.byteLength(body.input[0]);
+		res.setHeader('content-type', 'application/json');
+		res.end(responseBody);
+	});
+	const transport = createEmbeddingTransport({ baseUrl: url, model: 'm', remoteProcessing: false });
+	const result = await transport([input], 'query');
+	assert.equal(inputBytes, 8194);
+	assert.equal(result.padding.length, 16 * 1024 * 1024 + 1);
 });
 test('HTTP failures preserve bounded retry metadata without leaking provider payload or credential', async t => {
 	const url=await server(t, async (_req,res)=>{ res.writeHead(429,{'retry-after':'30'}); res.end('private diagnostic'); });
 	const p=bindEmbeddingProvider(space,createEmbeddingTransport({baseUrl:url,model:'fake',remoteProcessing:false}));
 	await assert.rejects(p.embed(['x'],'query'), e=>e.code==='embedding_rate_limited' && e.retryAfterMs===30000 && !JSON.stringify(e).includes('private'));
 });
-test('redirect, malformed body, oversized reply, timeout and cancellation fail boundedly', async t => {
+test('redirect, malformed body, timeout and cancellation fail boundedly', async t => {
 	let kind='redirect'; let redirected=0;
 	const target=await server(t, (_req,res)=>{redirected++;res.end('{}');});
 	const url=await server(t, (_req,res)=> {
 		if(kind==='redirect') {res.writeHead(302,{location:target});res.end();}
 		if(kind==='malformed') res.end('{bad');
-		if(kind==='large') res.end('x'.repeat(100));
 		if(kind==='timeout') { /* deliberately pending */ }
 	});
-	const f=createEmbeddingTransport({baseUrl:url,model:'m',remoteProcessing:false,maxResponseBytes:32,timeoutMs:50});
+	const f=createEmbeddingTransport({baseUrl:url,model:'m',remoteProcessing:false,timeoutMs:50});
 	await assert.rejects(f(['x'],'query'),/provider_unavailable/);assert.equal(redirected,0);
 	kind='malformed'; await assert.rejects(f(['x'],'query'),/provider_unavailable/);
-	kind='large'; await assert.rejects(f(['x'],'query'),/response_too_large/);
 	kind='timeout';await assert.rejects(f(['x'],'query'),/provider_unavailable/);
 	await assert.rejects(f(['x'],'query',AbortSignal.abort()),/request_cancelled/);
 });

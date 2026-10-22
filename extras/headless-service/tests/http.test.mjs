@@ -6,7 +6,7 @@ import { account, server, readJson, note, noteId, folderId } from './fixtures.mj
 const code = expected => error => error.code === expected;
 
 test('real loopback transport implements a Joplin-shaped read/write/search/events contract', async t => {
-	let stored = { ...note }; const writes = [];
+	let stored = { ...note }; const writes = []; const searchQueries = [];
 	const url = await server(t, async (req, res) => {
 		const u = new URL(req.url, 'http://local');
 		assert.equal(u.searchParams.get('token'), 'alice-private-token');
@@ -21,6 +21,7 @@ test('real loopback transport implements a Joplin-shaped read/write/search/event
 		if (u.pathname === '/folders') return res.end(JSON.stringify({ items: [{ id: folderId, title: 'Notebook', parent_id: '', encryption_applied: 0, deleted_time: 0 }], has_more: false }));
 		if (u.pathname === '/events') return res.end(JSON.stringify({ items: [{ id: 1, item_id: noteId, item_type: 1, type: 1, created_time: 2 }], has_more: false, cursor: '1' }));
 		if (u.pathname === `/notes/${noteId}`) return res.end(JSON.stringify({ ...stored, unexpected_secret: 'not exposed' }));
+		if (u.pathname === '/search') searchQueries.push(u.searchParams.get('query'));
 		return res.end(JSON.stringify({ items: [stored], has_more: false }));
 	});
 	const c = account(); c.joplin.baseUrl = url;
@@ -30,11 +31,30 @@ test('real loopback transport implements a Joplin-shaped read/write/search/event
 	assert.equal((await svc.updateNote(noteId, { body: 'updated' })).body, 'updated');
 	assert.equal((await svc.getNote(noteId)).unexpected_secret, undefined);
 	assert.equal((await svc.search({ query: 'updated', mode: 'hybrid' })).items[0].body, 'updated');
+	const longQuery = 'q'.repeat(10001);
+	assert.equal((await svc.search({ query: longQuery, mode: 'keyword' })).total, 1);
+	assert.deepEqual(searchQueries, ['updated', 'updated', longQuery, longQuery]);
 	assert.equal((await svc.listNotes()).items.length, 1);
 	assert.equal((await svc.changes('0')).cursor, '1');
 	assert.deepEqual(writes.map(([method]) => method), ['POST', 'PUT', 'PUT']);
 	assert.equal(writes[0][2].body, '', 'POST carries no user-supplied Markdown body');
 	assert.deepEqual(writes.slice(1).map(([, , body]) => body), [{ body: 'hello' }, { body: 'updated' }]);
+});
+
+test('complete backend collections continue beyond 50 pages until has_more is false', async t => {
+	const pages = [];
+	const url = await server(t, (req, res) => {
+		const target = new URL(req.url, 'http://local');
+		const page = Number(target.searchParams.get('page'));
+		pages.push(page);
+		res.end(JSON.stringify({
+			items: [{ id: String(page).padStart(32, '0'), title: `Tag ${page}`, encryption_applied: 0 }],
+			has_more: page < 51,
+		}));
+	});
+	const tags = await createJoplinClient({ baseUrl: url, token: 'private' }).listAllTags();
+	assert.equal(tags.length, 51);
+	assert.deepEqual(pages, Array.from({ length: 51 }, (_, index) => index + 1));
 });
 
 test('headless status uses its fixed authenticated action, allowlists the summary, and fails explicitly', async t => {
@@ -93,12 +113,13 @@ test('redirects are not followed and never disclose the API token to another ori
 	assert.equal(received, 0);
 });
 
-test('body containing secrets is not retained in errors; request and response limits work', async t => {
+test('body containing secrets is not retained in errors; response bodies are buffered and timeouts remain bounded', async t => {
 	const bad = await server(t, (_req, res) => { res.writeHead(403); res.end('secret-token-and-content'); });
 	const client = createJoplinClient({ baseUrl: bad, token: 'very-secret' });
 	await assert.rejects(client.getNote(noteId), error => error.code === 'backend_authorization_failed' && !error.stack.includes('secret'));
-	const huge = await server(t, (_req, res) => res.end('x'.repeat(100)));
-	await assert.rejects(createJoplinClient({ baseUrl: huge, token: 'x', maxResponseBytes: 10 }).getNote(noteId), code('backend_response_too_large'));
+	const largeResponse = JSON.stringify({ ...note, padding: 'x'.repeat(8 * 1024 * 1024) });
+	const huge = await server(t, (_req, res) => res.end(largeResponse));
+	assert.equal((await createJoplinClient({ baseUrl: huge, token: 'x' }).getNote(noteId)).id, noteId);
 	const slow = await server(t, () => {});
 	await assert.rejects(createJoplinClient({ baseUrl: slow, token: 'x', timeoutMs: 30 }).getNote(noteId), code('backend_unavailable'));
 });

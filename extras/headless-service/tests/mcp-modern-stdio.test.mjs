@@ -4,7 +4,7 @@ import { PassThrough } from 'node:stream';
 import { createAccountRegistry } from '../index.mjs';
 import { createMcpSession, modernProtocolVersion, protocolVersions } from '../src/mcp/session.mjs';
 import { serveStdio } from '../src/mcp/stdio.mjs';
-import { account, backend, noteId, note } from './fixtures.mjs';
+import { account, backend, noteId } from './fixtures.mjs';
 
 const serverInfo = { name: 'joplin-headless', version: '0.2.0' };
 const modernMeta = {
@@ -25,13 +25,13 @@ function createSession(customBackend = backend(), allowWrites = false) {
 	return createMcpSession(service, { allowWrites });
 }
 
-function createWire(session, { maxOutputBytes } = {}) {
+function createWire(session) {
 	const input = new PassThrough();
 	const output = new PassThrough();
 	const responses = [];
 	const waiting = new Map();
 	let buffer = '';
-	const transport = serveStdio(session, { input, output, ...(maxOutputBytes === undefined ? {} : { maxOutputBytes }) });
+	const transport = serveStdio(session, { input, output });
 	output.on('data', chunk => {
 		buffer += chunk.toString('utf8');
 		let boundary;
@@ -126,20 +126,16 @@ test('stdio suppresses a cancelled modern tool reply', async () => {
 	assert.equal(wire.responses.some(response => response.id === 'slow'), false);
 });
 
-test('stdio oversized modern write fallback keeps modern metadata and outcome status', async t => {
-	const customBackend = backend();
-	customBackend.updateNote = async (_id, changes) => ({ ...note, ...changes, updated_time: 101 });
-	const maxOutputBytes = 1024;
-	const wire = createWire(createSession(customBackend, true), { maxOutputBytes });
+test('stdio returns a response larger than the former output cap', async t => {
+	const payload = 'x'.repeat(2 * 1024 * 1024);
+	const fakeSession = {
+		async handle(message) { return { jsonrpc: '2.0', id: message.id, result: { payload } }; },
+		close() {},
+	};
+	const wire = createWire(fakeSession);
 	t.after(() => wire.close());
 
-	const response = await wire.request(request('large', 'tools/call', {
-		name: 'update_note', arguments: { id: noteId, body: 'x'.repeat(5000) },
-	}));
-	assert.equal(response.result.resultType, 'complete');
-	assert.deepEqual(response.result._meta?.['io.modelcontextprotocol/serverInfo'], serverInfo);
-	assert.equal(response.result.isError, true);
-	assert.equal(response.result.structuredContent.error.code, 'tool_response_too_large');
-	assert.equal(response.result.structuredContent.error.outcomeUnknown, true);
-	assert.ok(Buffer.byteLength(`${JSON.stringify(response)}\n`) <= maxOutputBytes);
+	const response = await wire.request(request('large', 'ping'));
+	assert.equal(response.result.payload.length, payload.length);
+	assert.ok(Buffer.byteLength(`${JSON.stringify(response)}\n`) > 2 * 1024 * 1024);
 });

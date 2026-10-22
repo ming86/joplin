@@ -98,12 +98,16 @@ test('HTTP MCP accepts notifications and client responses with empty 202 replies
 	assert.equal(writes, 0);
 });
 
-test('HTTP MCP rejects malformed bodies, unsupported media, versions and oversized requests', async t => {
+test('HTTP MCP rejects malformed bodies, unsupported media and versions, and accepts large requests', async t => {
 	const server = await start(t);
 	for (const raw of ['{broken', JSON.stringify([request(1, 'ping')])]) assert.equal((await exchange(server, undefined, { raw })).status, 400);
 	assert.equal((await exchange(server, request(1, 'ping'), { headers: { 'Content-Type': 'text/plain' } })).status, 415);
 	for (const protocol of [undefined, '2099-01-01']) assert.equal((await exchange(server, request(1, 'tools/list'), { headers: { 'MCP-Protocol-Version': protocol } })).status, 400);
-	assert.equal((await exchange(server, undefined, { raw: ' '.repeat(256 * 1024 + 1) })).status, 413);
+	const largeRequest = request(2, 'ping', { padding: 'x'.repeat(256 * 1024) });
+	assert.ok(Buffer.byteLength(JSON.stringify(largeRequest)) > 256 * 1024);
+	const largeResponse = await exchange(server, largeRequest);
+	assert.equal(largeResponse.status, 200);
+	assert.deepEqual(largeResponse.json.result, {});
 });
 
 test('HTTP MCP scopes identical ids to each POST and bounds total active dispatches at eight', { timeout: 10000 }, async t => {
@@ -193,17 +197,18 @@ test('HTTP client disconnection leaves dispatched write work running', { timeout
 	assert.equal(signal.aborted, false);
 });
 
-test('HTTP bounds an oversized successful write reply and reports its unknown client outcome', async t => {
+test('HTTP returns a successful write reply larger than the former response cap', async t => {
 	const b = backend();
-	const largeNote = { ...note, body: 'x'.repeat(2 * 1024 * 1024) };
+	const body = 'x'.repeat(2 * 1024 * 1024);
+	const largeNote = { ...note, body };
 	let writes = 0;
 	b.getNote = async () => ({ ...largeNote });
 	b.updateNote = async (_id, patch) => { writes++; return { ...largeNote, ...patch }; };
 	const server = await start(t, b, { allowWrites: true });
 	const response = await exchange(server, call(1, 'update_note', { id: noteId, title: 'new title' }));
 	assert.equal(response.status, 200);
-	assert.equal(response.json.result.isError, true);
-	assert.deepEqual(response.json.result.structuredContent.error, { code: 'tool_response_too_large', outcomeUnknown: true });
-	assert.ok(Buffer.byteLength(response.text) < 1024);
+	assert.equal(response.json.result.isError, false);
+	assert.equal(response.json.result.structuredContent.note.body, body);
+	assert.ok(Buffer.byteLength(response.text) > 2 * 1024 * 1024);
 	assert.equal(writes, 1);
 });

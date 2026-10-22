@@ -33,9 +33,9 @@ function assertToolError(result, code) {
 	assert.equal(result.structuredContent.error.code, code);
 }
 
-test('Desktop read tools expose rich metadata and bound default UTF-16 body chunks', async () => {
+test('Desktop read tools expose rich metadata and return full bodies by default with UTF-16-safe slices', async () => {
 	const b = backend();
-	const body = `${'a'.repeat(15999)}😀tail`;
+	const body = `${'a'.repeat(69999)}😀tail`;
 	b.getNote = async () => ({ ...note, body, is_todo: 1, todo_completed: 1234 });
 	b.getNotebook = async () => ({ id: folderId, title: 'Research' });
 	b.getNoteTags = async () => [{ id: workTagId, title: 'Work' }, { id: oldTagId, title: 'Pinned' }];
@@ -51,17 +51,74 @@ test('Desktop read tools expose rich metadata and bound default UTF-16 body chun
 		assert.equal(result.updated_time, note.updated_time);
 		assert.equal(result.body_length, body.length);
 		assert.equal(result.body_offset, 0);
-		assert.equal(result.body_returned_chars, 16001, 'one extra code unit completes the surrogate pair');
-		assert.equal(result.body.length, 16001);
-		assert.equal(result.has_more, true);
-		assert.equal(result.nextOffset, 16001);
-		assert.equal(result.body.endsWith('😀'), true);
+		assert.equal(result.body, body, 'the default read returns the full remaining body');
+		assert.equal(result.body_returned_chars, body.length);
+		assert.equal(result.has_more, false);
+		assert.equal(result.nextOffset, null);
+		assert.equal(result.body.endsWith('tail'), true);
 		const zeroLength = (await invoke(session, 'read_note', { id: noteId, max_chars: 0 }, 3)).structuredContent;
-		assert.equal(zeroLength.body_returned_chars, result.body_returned_chars, 'max_chars: 0 uses the same bounded default');
+		assert.equal(zeroLength.body, body, 'max_chars: 0 returns the full remaining body');
 
-		const legacy = (await invoke(session, 'get_note', { id: noteId, offset: 0, length: 2 }, 4)).structuredContent;
-		assert.equal(legacy.body, 'aa');
+		const positiveLength = (await invoke(session, 'read_note', { id: noteId, max_chars: 70000 }, 4)).structuredContent;
+		assert.equal(positiveLength.body_returned_chars, 70001, 'one extra code unit completes the surrogate pair');
+		assert.equal(positiveLength.body.endsWith('😀'), true);
+		assert.equal(positiveLength.has_more, true);
+		assert.equal(positiveLength.nextOffset, 70001);
+
+		const legacy = (await invoke(session, 'get_note', { id: noteId, offset: 0, length: 70000 }, 5)).structuredContent;
+		assert.equal(legacy.body.length, 70001, 'the positive legacy length alias has no former 65536 ceiling');
 		assert.equal(legacy.notebook_title, 'Research');
+
+		const largeOffset = (await invoke(session, 'read_note', { id: noteId, offset: 128 * 1024 * 1024 + 1 }, 6)).structuredContent;
+		assert.equal(largeOffset.body, '');
+		assert.equal(largeOffset.body_offset, body.length);
+	} finally { session.close(); }
+});
+
+test('MCP note, search, and tag fields accept values beyond the former arbitrary size limits', async () => {
+	const b = backend();
+	const title = 't'.repeat(1025);
+	const longBody = 'b'.repeat(131073);
+	const find = 'f'.repeat(131073);
+	const replace = 'r'.repeat(131073);
+	const query = 'q'.repeat(10001);
+	const longTag = 'g'.repeat(257);
+	let created;
+	let update;
+	let searched;
+	b.createNote = async input => {
+		created = input;
+		return { ...note, title: input.title, body: input.body, parent_id: input.parentId, is_todo: input.is_todo };
+	};
+	b.getNote = async () => ({ ...note, body: find });
+	b.updateNote = async (_id, input) => { update = input; return { ...note, ...input }; };
+	b.search = async value => { searched = value; return { items: [{ ...note, body: 'match' }], hasMore: false }; };
+	b.countSearchResults = async () => 1;
+	b.createTag = async tagTitle => ({ id: tagTitle.length.toString(16).padStart(32, '0'), title: tagTitle });
+	b.addTagToNote = async () => {};
+	b.getNoteTags = async () => [];
+	const session = createSession(b);
+	await ready(session);
+	try {
+		const createdResult = await invoke(session, 'create_note', { title, body: longBody, notebook_id: folderId });
+		assert.equal(createdResult.isError, false);
+		assert.equal(created.title.length, 1025);
+		assert.equal(created.body.length, 131073);
+
+		const updatedResult = await invoke(session, 'update_note', { id: noteId, replace_text: { find, replace } }, 3);
+		assert.equal(updatedResult.isError, false);
+		assert.equal(update.body, replace);
+
+		const searchResult = await invoke(session, 'search_notes', { query }, 4);
+		assert.equal(searchResult.isError, false);
+		assert.equal(searched, query);
+
+		const tags = Array.from({ length: 101 }, (_, index) => `Tag ${index}`);
+		tags[0] = longTag;
+		const tagResult = await invoke(session, 'manage_tags', { note_id: noteId, add: tags }, 5);
+		assert.equal(tagResult.isError, false);
+		assert.equal(tagResult.structuredContent.added.length, 101);
+		assert.equal(tagResult.structuredContent.added[0].length, 257);
 	} finally { session.close(); }
 });
 

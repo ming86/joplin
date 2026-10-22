@@ -171,17 +171,18 @@ test('modern HTTP rejects notification and client-response POSTs while legacy ke
 	}
 });
 
-test('modern HTTP oversized successful write replies remain complete and report an unknown outcome', async t => {
+test('modern HTTP returns complete successful write replies above the former response cap', async t => {
 	const b = backend();
-	const largeNote = { ...note, body: 'x'.repeat(2 * 1024 * 1024) };
+	const body = 'x'.repeat(2 * 1024 * 1024);
+	const largeNote = { ...note, body };
 	let writes = 0;
 	b.getNote = async () => ({ ...largeNote });
 	b.updateNote = async (_id, patch) => { writes++; return { ...largeNote, ...patch }; };
 	const server = await start(t, b, true);
 	const response = await exchange(server, call(1, 'update_note', { id: noteId, title: 'Updated large note' }));
 	assertComplete(response);
-	assert.equal(response.json.result.isError, true);
-	assert.deepEqual(response.json.result.structuredContent.error, { code: 'tool_response_too_large', outcomeUnknown: true });
-	assert.ok(Buffer.byteLength(response.text) < 2048);
+	assert.equal(response.json.result.isError, false);
+	assert.equal(response.json.result.structuredContent.note.body, body);
+	assert.ok(Buffer.byteLength(response.text) > 2 * 1024 * 1024);
 	assert.equal(writes, 1);
 });
