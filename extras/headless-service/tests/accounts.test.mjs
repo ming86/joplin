@@ -41,6 +41,17 @@ test('read-only permission is enforced for both create and update without callin
 	assert.equal(calls, 0);
 });
 
+test('notebook creation preserves supplied title whitespace and rejects blank titles', async () => {
+	let createdInput;
+	const fake = backend();
+	fake.createNotebook = async input => { createdInput = input; return { id: 'c'.repeat(32), title: input.title, parent_id: null }; };
+	const service = createAccountRegistry([account()], { makeBackend: () => fake }).forPrincipal('alice', 'alice');
+	const title = '  New notebook  ';
+	assert.equal((await service.createNotebook({ title })).title, title);
+	assert.deepEqual(createdInput, { title });
+	await assert.rejects(service.createNotebook({ title: ' \t\n ' }), code('invalid_notebook_input'));
+});
+
 test('startup configuration is copied, not shared mutable account state', async () => {
 	const config = account();
 	const registry = createAccountRegistry([config], { makeBackend: c => backend(c.id) });

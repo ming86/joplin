@@ -8,6 +8,7 @@ const movedNotebookId = 'c'.repeat(32);
 const workTagId = 'd'.repeat(32);
 const oldTagId = 'e'.repeat(32);
 const newTagId = 'f'.repeat(32);
+const cafeTagId = '9'.repeat(32);
 const request = (id, method, params) => ({ jsonrpc: '2.0', id, method, ...(params ? { params } : {}) });
 const initialize = () => request(1, 'initialize', { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'parity-test', version: '1' } });
 const call = (id, name, args = {}) => request(id, 'tools/call', { name, arguments: args });
@@ -114,15 +115,32 @@ test('MCP note, search, and tag fields accept values beyond the former arbitrary
 	try {
 		const createdResult = await invoke(session, 'create_note', { title, body: longBody, notebook_id: folderId });
 		assert.equal(createdResult.isError, false);
+		assert.deepEqual(Object.keys(createdResult.structuredContent).sort(), ['id', 'notebook_id', 'title']);
+		assert.equal(createdResult.structuredContent.title, title);
+		assert.ok(!JSON.stringify(createdResult.structuredContent).includes(longBody), 'creation does not echo a large body');
 		assert.equal(created.title.length, 1025);
 		assert.equal(created.body.length, 131073);
 
 		const updatedResult = await update(session, { id: noteId, replace_text: { find, replace } }, 3);
 		assert.equal(updatedResult.isError, false);
+		assert.deepEqual(Object.keys(updatedResult.structuredContent).sort(), ['changed', 'id', 'previous_revision_id', 'revision_id', 'updated_time']);
+		assert.ok(!JSON.stringify(updatedResult.structuredContent).includes(replace), 'updates do not echo a large body');
 		assert.equal(updatePatch.body, replace);
+
+		const bodyWithSmallEdit = `${longBody} unique marker`;
+		b.getNote = async () => ({ ...note, body: bodyWithSmallEdit });
+		const smallEdit = await update(session, { id: noteId, replace_text: { find: 'unique marker', replace: 'updated' } }, 6);
+		assert.equal(smallEdit.isError, false);
+		assert.equal(updatePatch.body, `${longBody} updated`);
+		assert.deepEqual(Object.keys(smallEdit.structuredContent).sort(), ['changed', 'id', 'previous_revision_id', 'revision_id', 'updated_time']);
+		assert.ok(!JSON.stringify(smallEdit.structuredContent).includes(longBody), 'a small edit on a large note returns only revision metadata');
 
 		const searchResult = await invoke(session, 'search_notes', { query }, 4);
 		assert.equal(searchResult.isError, false);
+		assert.equal(Object.hasOwn(searchResult.structuredContent, 'items'), false);
+		assert.deepEqual(Object.keys(searchResult.structuredContent.results[0]).sort(), ['id', 'notebook_id', 'snippet', 'title', 'updated_time']);
+		assert.equal(searchResult.structuredContent.results[0].id, note.id);
+		assert.equal(searchResult.structuredContent.total, 1);
 		assert.equal(searched, query);
 
 		const tags = Array.from({ length: 101 }, (_, index) => `Tag ${index}`);
@@ -196,7 +214,8 @@ test('account service keeps configured and sole notebook defaults outside the MC
 test('notebook counts, notebook creation, tag listing, and case-insensitive tag changes use eligible notes', async () => {
 	const b = backend();
 	const childNotebookId = movedNotebookId;
-	const tags = [{ id: workTagId, title: 'Work' }, { id: oldTagId, title: 'Old' }];
+	const tags = [{ id: workTagId, title: 'Work' }, { id: oldTagId, title: 'Old' }, { id: cafeTagId, title: 'Café' }];
+	const tagLookups = [];
 	let assigned = [tags[0], tags[1]];
 	const summaries = [
 		{ ...note, parent_id: folderId },
@@ -212,6 +231,14 @@ test('notebook counts, notebook creation, tag listing, and case-insensitive tag 
 	b.listNoteSummaries = async () => ({ items: summaries, hasMore: false });
 	b.listAllTags = async () => tags;
 	b.getNoteTags = async () => assigned;
+	b.findTagByTitle = async title => {
+		tagLookups.push(title);
+		return new Map([
+			['work', tags[0]],
+			['OLD', tags[1]],
+			['Cafe\u0301', tags[2]],
+		]).get(title) ?? null;
+	};
 	b.createTag = async title => { const tag = { id: newTagId, title }; tags.push(tag); return tag; };
 	b.addTagToNote = async tagId => { const tag = tags.find(item => item.id === tagId); if (!assigned.some(item => item.id === tagId)) assigned = [...assigned, tag]; };
 	b.removeTagFromNote = async tagId => { assigned = assigned.filter(item => item.id !== tagId); };
@@ -224,14 +251,16 @@ test('notebook counts, notebook creation, tag listing, and case-insensitive tag 
 
 		const createdNotebook = (await invoke(session, 'create_notebook', { title: ' Nested ', parent_id: folderId }, 3)).structuredContent;
 		assert.equal(createdNotebook.id, childNotebookId);
-		assert.equal(createdNotebook.title, 'Nested');
+		assert.equal(createdNotebook.title, ' Nested ');
 
 		const listedTags = (await invoke(session, 'list_tags', {}, 4)).structuredContent.tags;
-		assert.deepEqual(listedTags.map(tag => tag.title), ['Work', 'Old']);
-		const changed = (await invoke(session, 'manage_tags', { note_id: noteId, add: [' work ', ' New '], remove: ['OLD'] }, 5)).structuredContent;
-		assert.deepEqual(changed.added, ['work', 'New']);
+		assert.deepEqual(listedTags.map(tag => tag.title), ['Work', 'Old', 'Café']);
+		const changed = (await invoke(session, 'manage_tags', { note_id: noteId, add: [' work ', ' New ', 'Cafe\u0301'], remove: ['OLD'] }, 5)).structuredContent;
+		assert.deepEqual(changed.added, ['work', 'New', 'Cafe\u0301']);
 		assert.deepEqual(changed.removed, ['OLD']);
-		assert.deepEqual(changed.tags, ['Work', 'New']);
+		assert.deepEqual(changed.tags, ['Work', 'New', 'Café']);
+		assert.deepEqual(tagLookups, ['work', 'New', 'Cafe\u0301', 'OLD']);
+		assert.deepEqual(assigned.map(tag => tag.id), [workTagId, newTagId, cafeTagId], 'native lookup supplies the canonical id for a decomposed Unicode title');
 	} finally { session.close(); }
 });
 
@@ -305,11 +334,14 @@ test('the MCP catalog requires a note revision and preserves embedded attachment
 		const tools = (await session.handle(request(2, 'tools/list'))).result.tools;
 		assert.equal(tools.length, 26);
 		const readSchema = tools.find(tool => tool.name === 'read_note').inputSchema;
-		const updateSchema = tools.find(tool => tool.name === 'update_note').inputSchema;
+		const updateTool = tools.find(tool => tool.name === 'update_note');
+		const updateSchema = updateTool.inputSchema;
 		assert.ok(readSchema.properties.id);
 		assert.deepEqual(updateSchema.required, ['id', 'base_revision_id']);
 		assert.ok(updateSchema.properties.base_revision_id);
 		assert.equal(updateSchema.properties.base_revision_id.pattern, '^[a-f0-9]{32}$');
+		assert.match(updateSchema.properties.body.description, /Prefer partial edits for small changes/);
+		assert.match(updateTool.description, /Prefer partial edits for small changes/);
 
 		const missingRevision = await invoke(session, 'update_note', { id: noteId, title: 'No base revision' }, 3);
 		assertToolError(missingRevision, 'invalid_tool_arguments');
@@ -390,7 +422,8 @@ test('MCP creation keeps Markdown out of POST; native revision updates are condi
 	try {
 		const markdown = '![remote](http://example.invalid/image.png)';
 		const created = (await invoke(session, 'create_note', { title: 'Created', body: markdown, notebook_id: folderId })).structuredContent;
-		assert.equal(created.saved, 'local');
+		assert.deepEqual(Object.keys(created).sort(), ['id', 'notebook_id', 'title']);
+		assert.equal(created.title, 'Created');
 		assert.equal(postBodies, 1);
 		assert.equal(putBodies, 1);
 
@@ -404,7 +437,8 @@ test('MCP creation keeps Markdown out of POST; native revision updates are condi
 
 		const changed = await update(session, { id: noteId, title: 'Native update' }, 4);
 		assert.equal(changed.isError, false);
-		assert.equal(changed.structuredContent.note.title, 'Native update');
+		assert.deepEqual(Object.keys(changed.structuredContent).sort(), ['changed', 'id', 'previous_revision_id', 'revision_id', 'updated_time']);
+		assert.equal(changed.structuredContent.id, noteId);
 		assert.equal(changed.structuredContent.previous_revision_id, '1'.repeat(32));
 		assert.equal(currentRevisionId, '2'.repeat(32));
 
@@ -484,8 +518,7 @@ test('MCP updates preserve HTML note bodies and format for metadata and raw-body
 		assert.equal(updates[0].todo_completed, true);
 		assert.equal(currentNote.body, originalBody);
 		assert.equal(currentNote.markup_language, 2);
-		assert.equal(metadataResult.structuredContent.note.body, originalBody);
-		assert.equal(metadataResult.structuredContent.note.markup_language, 2);
+		assert.deepEqual(Object.keys(metadataResult.structuredContent).sort(), ['changed', 'id', 'previous_revision_id', 'revision_id', 'updated_time']);
 
 		const replacement = '<article><h1>Updated</h1><p>Old text</p></article>';
 		const replaceResult = await update(session, { id: noteId, body: replacement }, 3);
@@ -505,7 +538,8 @@ test('MCP updates preserve HTML note bodies and format for metadata and raw-body
 		assert.deepEqual(updates[2], { prepend: '<!-- start -->', append: '<!-- end -->', replace_text: { find: 'Old text', replace: 'New text' } });
 		assert.equal(currentNote.body, expectedBody);
 		assert.equal(currentNote.markup_language, 2);
-		assert.equal(partialResult.structuredContent.note.markup_language, 2);
+		assert.equal(Object.hasOwn(partialResult.structuredContent, 'note'), false);
+		assert.equal(Object.hasOwn(partialResult.structuredContent, 'body'), false);
 	} finally { session.close(); }
 });
 
@@ -676,7 +710,8 @@ test('keyword search returns an exact eligible total without changing the reques
 		const result = (await invoke(session, 'search_notes', { query: 'needle', page: 2, limit: 1 })).structuredContent;
 		assert.equal(result.total, 2, 'the total counts readable matches from every metadata page');
 		assert.deepEqual(result.results.map(item => item.id), [safeTwo.id], 'results remain limited to the requested search page');
-		assert.deepEqual(result.items.map(item => item.id), [safeTwo.id]);
+		assert.equal(Object.hasOwn(result, 'items'), false);
+		assert.equal(result.results[0].snippet, 'needle in this result');
 		assert.equal(result.hasMore, true);
 		assert.deepEqual(metadataPages, [
 			{ page: 1, fields: 'id,encryption_applied,deleted_time,is_locked' },
@@ -703,6 +738,12 @@ test('real Data API tag associations accept empty success and continue duplicate
 		if (req.method === 'GET' && target.pathname === '/tags') return res.end(JSON.stringify({ items: tags, has_more: false }));
 		if (req.method === 'GET' && target.pathname === `/notes/${noteId}/tags`) {
 			return res.end(JSON.stringify({ items: assigned, has_more: false }));
+		}
+		if (req.method === 'POST' && target.pathname === '/services/headless') {
+			const action = await readJson(req);
+			assert.equal(action.action, 'findTagByTitle');
+			const tag = tags.find(item => item.title === action.title);
+			return res.end(JSON.stringify({ tag: tag ? { id: tag.id, title: tag.title } : null }));
 		}
 		if (req.method === 'POST' && target.pathname === '/tags') {
 			const body = await readJson(req);

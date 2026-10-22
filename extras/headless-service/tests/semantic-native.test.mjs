@@ -59,9 +59,10 @@ test('actual SQLCipher Joplin core -> HTTP fixture embeddings -> encrypted seman
 	await until(async()=> (await client.call('get_status')).structuredContent.semantic.state==='ready','semantic not ready');
 	assert.ok(documentRequests>0);
 	let result=await client.call('search_notes',{query:'feline',mode:'semantic'});
-	assert.equal(result.isError,false);assert.equal(result.structuredContent.executedMode,'semantic');assert.equal(result.structuredContent.items[0].id,note.id);
-	assert.ok(result.structuredContent.items[0].semanticExcerpt);assert.equal(result.structuredContent.items[0].chunk.offsetUnit,'utf8-byte');
-	result=await client.call('search_notes',{query:'feline',mode:'hybrid',notebookId:folder.id});assert.equal(result.structuredContent.executedMode,'hybrid');assert.equal(result.structuredContent.items[0].id,note.id);
+	assert.equal(result.isError,false);assert.equal(result.structuredContent.executedMode,'semantic');assert.equal(result.structuredContent.results[0].id,note.id);
+	assert.equal(result.structuredContent.results[0].provenance,'semantic');assert.equal(typeof result.structuredContent.results[0].score,'number');assert.ok(result.structuredContent.results[0].semanticExcerpt);assert.equal(result.structuredContent.results[0].chunk.offsetUnit,'utf8-byte');
+	result=await client.call('search_notes',{query:'feline',mode:'hybrid',notebookId:folder.id});assert.equal(result.structuredContent.executedMode,'hybrid');assert.equal(result.structuredContent.results[0].id,note.id);
+	assert.equal(result.structuredContent.results[0].provenance,'hybrid');assert.equal(typeof result.structuredContent.results[0].score,'number');
 	assert.equal((await client.request('tools/list')).tools.length,15);
 	t.diagnostic('PASS native core, common HTTP batch response reordering, separate encrypted index, semantic/hybrid MCP read-only search');
 	fail=true;await raw(`/notes/${note.id}`,'PUT',{title:'Dogs',body:'Canine replacement fixture'});
@@ -69,7 +70,7 @@ test('actual SQLCipher Joplin core -> HTTP fixture embeddings -> encrypted seman
 	result=await client.call('search_notes',{query:'Dogs',mode:'hybrid'});assert.equal(result.structuredContent.executedMode,'keyword');
 	assert.ok((await client.call('get_note',{id:note.id})).structuredContent.body.includes('Canine'));
 	fail=false;await until(async()=> (await client.call('get_status')).structuredContent.semantic.state==='ready','provider recovery failed');
-	assert.equal((await client.call('search_notes',{query:'canine',mode:'semantic'})).structuredContent.items[0].id,note.id);
+	assert.equal((await client.call('search_notes',{query:'canine',mode:'semantic'})).structuredContent.results[0].id,note.id);
 	await client.close();assert.equal(client.child.exitCode,0);
 	assert.ok(!fs.readFileSync(databasePath).includes(Buffer.from('Canine replacement fixture')));
 	async function script(name, args) {
@@ -96,9 +97,9 @@ test('actual SQLCipher Joplin core -> HTTP fixture embeddings -> encrypted seman
 
 	client=new StdioTestClient(configFile);await client.initialize();
 	await until(async()=> (await client.call('get_status')).structuredContent.semantic.state==='ready','restart failed');
-	assert.equal((await client.call('search_notes',{query:'canine',mode:'semantic'})).structuredContent.items[0].id,note.id);
+	assert.equal((await client.call('search_notes',{query:'canine',mode:'semantic'})).structuredContent.results[0].id,note.id);
 	await raw(`/notes/${note.id}`,'DELETE');
-	result=await client.call('search_notes',{query:'canine',mode:'semantic'});assert.ok(!result.structuredContent.items.some(n=>n.id===note.id));
+	result=await client.call('search_notes',{query:'canine',mode:'semantic'});assert.ok(!result.structuredContent.results.some(n=>n.id===note.id));
 	await client.close();assert.equal(client.child.exitCode,0);await stop(daemon);assert.equal(daemon.exitCode,0);
 	t.diagnostic('PASS changed-note indexing, quota fallback/recovery, semantic owner restart/key reopen and immediate deleted-result suppression');
 	t.diagnostic('Embedding endpoint was a deterministic HTTP fixture, NOT BGE-M3 or a measured language model. No live provider/relevance claim.');

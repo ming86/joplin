@@ -191,6 +191,7 @@ test('tool schemas reject account switching, arbitrary properties and invalid pa
 	const s = session({}, b); await ready(s);
 	for (const args of [{ id: noteId, accountId: 'bob' }, { id: '../settings' }, { id: noteId, length: 0 }]) assert.equal((await s.handle(call(4, 'get_note', args))).result.isError, true);
 	for (const args of [{ query: 'x', limit: 101 }, { query: '', mode: 'keyword' }, { query: 'x', page: 0 }]) assert.equal((await s.handle(call(5, 'search_notes', args))).result.isError, true);
+	for (const args of [{ page: 1 }, { limit: 1 }]) assert.equal((await s.handle(call(6, 'list_notebooks', args))).result.isError, true);
 	assert.equal(invoked, 0);
 });
 test('create_note requires an explicit notebook and accepts either destination field', async () => {
@@ -240,7 +241,10 @@ test('result identity/previews, Unicode paging and semantic fallback are explici
 	assert.deepEqual(JSON.parse(r.content[0].text), r.structuredContent);
 	r = (await s.handle(call(3, 'search_notes', { query: 'x', mode: 'hybrid' }))).result;
 	assert.equal(r.structuredContent.executedMode, 'keyword'); assert.equal(r.structuredContent.semantic.state, 'unavailable');
-	assert.equal(r.structuredContent.items[0].accountId, 'alice'); assert.ok(!('body' in r.structuredContent.items[0]));
+	assert.equal(Object.hasOwn(r.structuredContent, 'items'), false);
+	assert.equal(r.structuredContent.results[0].id, noteId);
+	assert.equal(r.structuredContent.results[0].snippet, 'alice');
+	assert.ok(!('body' in r.structuredContent.results[0]));
 	r = (await s.handle(call(4, 'search_notes', { query: 'x', mode: 'semantic' }))).result;
 	assert.equal(r.structuredContent.executedMode, null); assert.equal(r.structuredContent.semantic.reason, 'not_implemented');
 });
@@ -258,11 +262,13 @@ test('opt-in writes also require account permission, preserve unknown outcomes a
 	assert.equal((await s.handle(call(4, 'update_note', { id: noteId }))).result.structuredContent.error.code, 'invalid_tool_arguments');
 	assert.equal((await s.handle(call(5, 'update_note', { id: noteId, base_revision_id: revision }))).result.structuredContent.error.code, 'invalid_tool_arguments');
 });
-test('local-save semantics and safe unexpected error output', async () => {
+test('write replies expose revision metadata and unexpected errors stay safe', async () => {
 	const b = backend(); const s = session({ allowWrites: true }, b); await ready(s);
 	const revision = (await s.handle(call(2, 'read_note', { id: noteId }))).result.structuredContent.revision_id;
 	const r = (await s.handle(call(3, 'update_note', { id: noteId, base_revision_id: revision, body: 'new' }))).result;
-	assert.equal(r.structuredContent.saved, 'local'); assert.equal(r.structuredContent.synchronization, 'not_confirmed');
+	assert.deepEqual(Object.keys(r.structuredContent).sort(), ['changed', 'id', 'previous_revision_id', 'revision_id', 'updated_time']);
+	assert.equal(Object.hasOwn(r.structuredContent, 'saved'), false);
+	assert.equal(Object.hasOwn(r.structuredContent, 'synchronization'), false);
 	b.getNote = async () => { throw new Error('secret upstream payload'); };
 	assert.ok(!JSON.stringify(await s.handle(call(4, 'get_note', { id: noteId }))).includes('secret upstream'));
 });

@@ -71,11 +71,15 @@ export function createOutputSchemaTestSession({ allowWrites = true } = {}) {
 		},
 		async listTags() { return { tags: [{ id: tagId, title: 'idea' }] }; },
 		async listNotes() { return { items: [note], hasMore: false }; },
-		async search() {
+		async search({ mode = 'keyword' } = {}) {
+			const hybridFields = mode === 'semantic' || mode === 'hybrid' ? {
+				provenance: mode, score: 0.875, semanticExcerpt: 'Body 🔧',
+				chunk: { ordinal: 0, start: 0, end: 8, offsetUnit: 'utf8-byte' },
+			} : {};
 			return {
-				accountId, requestedMode: 'keyword', executedMode: 'keyword',
-				semantic: { state: 'unavailable', reason: 'not_implemented' },
-				items: [{ ...note, provenance: 'keyword' }], hasMore: false, total: 1,
+				accountId, requestedMode: mode, executedMode: mode,
+				semantic: mode === 'keyword' ? { state: 'unavailable', reason: 'not_implemented' } : { state: 'ready' },
+				items: [{ ...note, body: 'Body 🔧', ...hybridFields }], hasMore: false, total: 1,
 			};
 		},
 		async readNoteWithRevision(id) {
@@ -186,6 +190,18 @@ test('every enabled catalog tool publishes an output schema without changing inp
 		}
 		assert.equal(readonly.results.size, 15);
 		assert.equal(writable.results.size, 26);
+		const listNotebooks = writableByName.get('list_notebooks');
+		assert.deepEqual(listNotebooks.inputSchema.properties, {});
+		assert.deepEqual(Object.keys(listNotebooks.outputSchema.anyOf[0].properties), ['notebooks']);
+		assert.equal(listNotebooks.outputSchema.anyOf[0].additionalProperties, false);
+		const createNote = writableByName.get('create_note').outputSchema.anyOf[0];
+		assert.deepEqual(Object.keys(createNote.properties), ['id', 'title', 'notebook_id']);
+		assert.deepEqual(createNote.required, ['id', 'title', 'notebook_id']);
+		assert.equal(createNote.additionalProperties, false);
+		const updateNote = writableByName.get('update_note').outputSchema.anyOf[0];
+		assert.deepEqual(Object.keys(updateNote.properties), ['id', 'updated_time', 'revision_id', 'previous_revision_id', 'changed']);
+		assert.deepEqual(updateNote.required, ['id', 'updated_time', 'revision_id', 'previous_revision_id', 'changed']);
+		assert.equal(updateNote.additionalProperties, false);
 	} finally {
 		readonlySession.close();
 		writableSession.close();
@@ -211,6 +227,44 @@ test('tool output samples preserve aliases, nullable history, semantic errors, a
 		assert.equal(schemas.get('read_note').properties.is_todo.type, 'boolean');
 		assert.equal(schemas.get('get_note').properties.is_todo.type, 'number');
 		assert.deepEqual(schemas.get('read_note').properties.nextOffset.type, ['number', 'null']);
+
+		const notebooks = results.get('list_notebooks').structuredContent;
+		assert.deepEqual(Object.keys(notebooks), ['notebooks']);
+		assert.deepEqual(Object.keys(schemas.get('list_notebooks').properties), ['notebooks']);
+		const created = results.get('create_note').structuredContent;
+		assert.deepEqual(Object.keys(created).sort(), ['id', 'notebook_id', 'title']);
+		assert.equal(Object.hasOwn(created, 'body'), false);
+		const updated = results.get('update_note').structuredContent;
+		assert.deepEqual(Object.keys(updated).sort(), ['changed', 'id', 'previous_revision_id', 'revision_id', 'updated_time']);
+		assert.equal(Object.hasOwn(updated, 'body'), false);
+
+		const keywordSearch = results.get('search_notes').structuredContent;
+		assert.equal(Object.hasOwn(keywordSearch, 'items'), false);
+		assert.equal(keywordSearch.requestedMode, 'keyword');
+		assert.equal(keywordSearch.executedMode, 'keyword');
+		assert.equal(keywordSearch.semantic.state, 'unavailable');
+		assert.equal(keywordSearch.hasMore, false);
+		assert.equal(keywordSearch.total, 1);
+		assert.deepEqual(Object.keys(keywordSearch.results[0]).sort(), ['id', 'notebook_id', 'snippet', 'title', 'updated_time']);
+		assert.equal(keywordSearch.results[0].id, noteId);
+		assert.equal(keywordSearch.results[0].snippet, 'Body 🔧');
+		assert.equal(Object.hasOwn(schemas.get('search_notes').properties, 'items'), false);
+		for (const field of ['results', 'total', 'hasMore', 'requestedMode', 'executedMode', 'semantic']) assert.ok(schemas.get('search_notes').properties[field], field);
+		const hybridResponse = await session.handle({
+			jsonrpc: '2.0', id: 200, method: 'tools/call',
+			params: { name: 'search_notes', arguments: { query: 'Body', mode: 'hybrid' } },
+		});
+		const hybridSearch = hybridResponse.result.structuredContent;
+		assert.equal(Object.hasOwn(hybridSearch, 'items'), false);
+		assert.equal(hybridSearch.requestedMode, 'hybrid');
+		assert.equal(hybridSearch.executedMode, 'hybrid');
+		assert.equal(hybridSearch.semantic.state, 'ready');
+		assert.deepEqual(Object.keys(hybridSearch.results[0]).sort(), ['chunk', 'id', 'notebook_id', 'provenance', 'score', 'semanticExcerpt', 'snippet', 'title', 'updated_time']);
+		assert.equal(hybridSearch.results[0].provenance, 'hybrid');
+		assert.equal(hybridSearch.results[0].score, 0.875);
+		assert.equal(hybridSearch.results[0].chunk.offsetUnit, 'utf8-byte');
+		const searchRowSchema = schemas.get('search_notes').properties.results.items;
+		for (const field of ['score', 'provenance', 'semanticExcerpt', 'chunk']) assert.ok(searchRowSchema.properties[field], field);
 
 		const revisionList = results.get('list_note_revisions').structuredContent;
 		assert.equal(revisionList.items[0].parent_revision_id, null);

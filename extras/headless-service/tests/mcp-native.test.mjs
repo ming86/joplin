@@ -79,8 +79,9 @@ test('MCP over stdio -> actual encrypted Joplin API, FTS, E2EE filesystem sync a
 	assert.equal((await mcp.request('tools/list')).tools.length, 26);
 	const marker = `mcpacceptance${randomBytes(6).toString('hex')}`;
 	let result = await mcp.call('create_note', { parentId: notebook.id, title: 'MCP temporary note', body: `${marker} initial 笔记` });
-	assert.equal(result.isError, false, JSON.stringify(result)); const noteId = result.structuredContent.note.id;
-	assert.equal(result.structuredContent.synchronization, 'not_confirmed');
+	assert.equal(result.isError, false, JSON.stringify(result));
+	assert.deepEqual(Object.keys(result.structuredContent).sort(), ['id', 'notebook_id', 'title']);
+	const noteId = result.structuredContent.id;
 	const conflicts = await mcp.call('list_conflicts');
 	assert.equal(conflicts.isError, false, JSON.stringify(conflicts));
 	assert.deepEqual(conflicts.structuredContent.items, []);
@@ -93,6 +94,7 @@ test('MCP over stdio -> actual encrypted Joplin API, FTS, E2EE filesystem sync a
 	assert.match(initialRead.structuredContent.revision_id, /^[a-f0-9]{32}$/);
 	const initialRevisionId = initialRead.structuredContent.revision_id;
 	result = await mcp.call('update_note', { id: noteId, base_revision_id: initialRevisionId, body: `${marker} revised 😀` }); assert.equal(result.isError, false);
+	assert.deepEqual(Object.keys(result.structuredContent).sort(), ['changed', 'id', 'previous_revision_id', 'revision_id', 'updated_time']);
 	assert.equal(result.structuredContent.previous_revision_id, initialRevisionId);
 	assert.notEqual(result.structuredContent.revision_id, initialRevisionId);
 	result = await mcp.call('get_note', { id: noteId }); assert.equal(result.structuredContent.body, `${marker} revised 😀`);
@@ -228,7 +230,7 @@ test('MCP over stdio -> actual encrypted Joplin API, FTS, E2EE filesystem sync a
 	assert.equal(extensionlessRenamedRead.content[1].resource.mimeType, 'text/plain');
 	assert.equal(extensionlessRenamedRead.content[1].resource.blob, extensionlessBytes.toString('base64'));
 
-	await until(async () => (await mcp.call('search_notes', { query: marker })).structuredContent.items.some(n => n.id === noteId), 'MCP change not in real FTS');
+	await until(async () => (await mcp.call('search_notes', { query: marker })).structuredContent.results.some(n => n.id === noteId), 'MCP change not in real FTS');
 	assert.equal((await mcp.call('search_notes', { query: marker, mode: 'semantic' })).structuredContent.semantic.state, 'unavailable');
 	t.diagnostic('PASS MCP initialization, revision history/conflicts, maintenance, attachments and FTS through actual encrypted core');
 	await until(() => fs.existsSync(path.join(syncPath, `${noteId}.md`)), 'MCP change did not synchronize autonomously');

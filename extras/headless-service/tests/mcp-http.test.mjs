@@ -197,18 +197,18 @@ test('HTTP client disconnection leaves dispatched write work running', { timeout
 	assert.equal(signal.aborted, false);
 });
 
-test('HTTP returns a successful write reply larger than the former response cap', async t => {
+test('HTTP keeps a small edit to a large note response compact', async t => {
 	const b = backend();
-	const body = 'x'.repeat(2 * 1024 * 1024);
+	const body = `${'x'.repeat(2 * 1024 * 1024)}needle`;
 	const largeNote = { ...note, body };
 	let writes = 0;
 	b.getNote = async () => ({ ...largeNote });
 	b.updateNote = async (_id, patch) => { writes++; return { ...largeNote, ...patch }; };
 	const server = await start(t, b, { allowWrites: true });
-	const response = await exchange(server, call(1, 'update_note', { id: noteId, base_revision_id: initialRevisionId, title: 'new title' }));
+	const response = await exchange(server, call(1, 'update_note', { id: noteId, base_revision_id: initialRevisionId, replace_text: { find: 'needle', replace: 'updated' } }));
 	assert.equal(response.status, 200);
 	assert.equal(response.json.result.isError, false);
-	assert.equal(response.json.result.structuredContent.note.body, body);
-	assert.ok(Buffer.byteLength(response.text) > 2 * 1024 * 1024);
+	assert.deepEqual(Object.keys(response.json.result.structuredContent).sort(), ['changed', 'id', 'previous_revision_id', 'revision_id', 'updated_time']);
+	assert.ok(Buffer.byteLength(response.text) < 10_000, 'the reply does not echo the large updated note body');
 	assert.equal(writes, 1);
 });

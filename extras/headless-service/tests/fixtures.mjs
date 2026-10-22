@@ -24,6 +24,7 @@ export function account(id = 'alice') {
 export function backend(id = 'alice') {
 	let revisionSequence = 2n;
 	let currentRevisionId = initialRevisionId;
+	const tagsByTitle = new Map();
 	return {
 		async status() { return structuredClone(headlessStatus); },
 		async getNote() { return { ...note, body: id }; },
@@ -84,7 +85,12 @@ export function backend(id = 'alice') {
 		async updateNote(_id, input) { return { ...note, ...input, parent_id: input.parentId ?? note.parent_id, updated_time: 101 }; },
 		async deleteNote() {},
 		async createNotebook(input) { return { id: 'c'.repeat(32), title: input.title, parent_id: input.parentId ?? null }; },
-		async createTag(title) { return { id: 'd'.repeat(32), title }; },
+		async findTagByTitle(title) { return tagsByTitle.get(title) ?? null; },
+		async createTag(title) {
+			const tag = { id: 'd'.repeat(32), title };
+			tagsByTitle.set(title, tag);
+			return tag;
+		},
 		async addTagToNote() {},
 		async removeTagFromNote() {},
 		async search() { return { items: [{ ...note, body: id }], hasMore: false }; },

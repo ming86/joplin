@@ -69,7 +69,7 @@ test('actual clipping HTTP process: lost reply/restart reconciliation, literal t
 	const keyFile=path.join(dir,'semantic-key'),mcpConfig=path.join(dir,'mcp.json');fs.writeFileSync(keyFile,randomBytes(32).toString('hex'),{mode:0o600});
 	fs.writeFileSync(mcpConfig,JSON.stringify({accountId:'acceptance',baseUrl:api,apiTokenFile:apiFile,allowWrites:false,semanticDatabasePath:path.join(dir,'semantic.db'),semantic:{enabled:true,keyFile,sqliteModule,pollMs:100,embedding:{protocol:'openai-embeddings',baseUrl:embedding+'/v1',model:'fixture-not-a-model',remoteProcessing:false,space:{id:'clip-test',revision:'fixture-v1',dimensions:2,preprocessingVersion:'title-body-v1'}}}}));
 	mcp=new StdioTestClient(mcpConfig);await mcp.initialize();await until(async()=> (await mcp.call('get_status')).structuredContent.semantic.state==='ready','semantic indexing failed');
-	const search=await mcp.call('search_notes',{query:marker,mode:'hybrid',notebookId:folder.id});assert.equal(search.isError,false);assert.equal(search.structuredContent.executedMode,'hybrid');assert.equal(search.structuredContent.items[0].id,result.noteId);
+	const search=await mcp.call('search_notes',{query:marker,mode:'hybrid',notebookId:folder.id});assert.equal(search.isError,false);assert.equal(search.structuredContent.executedMode,'hybrid');assert.equal(search.structuredContent.results[0].id,result.noteId);
 	await mcp.close();assert.equal(mcp.child.exitCode,0);
 	await raw(`/notes/${result.noteId}`,'DELETE');const deletedReplay=await fetch(clipBase+'/v1/clips',{method:'POST',headers,body:JSON.stringify(input)});assert.equal(deletedReplay.status,409);await deletedReplay.text();
 	await stop(service);await stop(daemon);assert.equal(service.exitCode,0);assert.equal(daemon.exitCode,0);

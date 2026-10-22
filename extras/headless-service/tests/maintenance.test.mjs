@@ -14,7 +14,8 @@ test('maintenance client uses fixed Joplin routes and native notebook update act
 	const request = async (...args) => {
 		calls.push(args);
 		const [route, , method, body] = args;
-		if (route === 'services/headless') return { id: notebookId, title: 'Updated', parent_id: parentId };
+		if (route === 'services/headless' && body.action === 'maintenanceUpdateNotebook') return { id: notebookId, title: 'Updated', parent_id: parentId };
+		if (route === 'services/headless' && body.action === 'findTagByTitle') return { tag: { id: tagId, title: 'Canonical' } };
 		if (route === `tags/${tagId}` && method === 'GET') return { id: tagId, title: 'Old', encryption_applied: 0 };
 		if (route === `tags/${tagId}` && method === 'PUT') return { id: tagId, title: body.title, encryption_applied: 0 };
 		return null;
@@ -24,15 +25,33 @@ test('maintenance client uses fixed Joplin routes and native notebook update act
 	assert.deepEqual(await client.updateNotebook(notebookId, { title: 'Updated', parent_id: parentId }), {
 		id: notebookId, title: 'Updated', parent_id: parentId,
 	});
+	assert.deepEqual(await client.findTagByTitle('  canonical  '), { id: tagId, title: 'Canonical' });
 	await client.deleteNotebook(notebookId);
 	assert.deepEqual(await client.getTag(tagId), { id: tagId, title: 'Old' });
 	assert.deepEqual(await client.updateTag(tagId, { title: 'New' }), { id: tagId, title: 'New' });
-	assert.deepEqual(calls.map(([route, params, method, body]) => ({ route, params, method, body })), [
+	assert.deepEqual(calls.map(([route, params, method, body, signal, options]) => ({
+		route, params, method, body,
+		...(signal === undefined ? {} : { signal }),
+		...(options === undefined ? {} : { options }),
+	})), [
 		{ route: 'services/headless', params: {}, method: 'POST', body: { action: 'maintenanceUpdateNotebook', id: notebookId, title: 'Updated', parent_id: parentId } },
+		{ route: 'services/headless', params: {}, method: 'POST', body: { action: 'findTagByTitle', title: '  canonical  ' }, options: { writeOperation: false } },
 		{ route: `folders/${notebookId}`, params: {}, method: 'DELETE', body: undefined },
 		{ route: `tags/${tagId}`, params: { fields: 'id,title,encryption_applied' }, method: 'GET', body: undefined },
 		{ route: `tags/${tagId}`, params: {}, method: 'PUT', body: { title: 'New' } },
 	]);
+});
+
+test('maintenance client accepts a missing native tag and rejects malformed lookup results', async () => {
+	const missing = createMaintenanceClient(async () => ({ tag: null }));
+	assert.equal(await missing.findTagByTitle('Missing'), null);
+
+	const malformed = createMaintenanceClient(async () => ({ tag: { id: 'wrong', title: 'Wrong' } }));
+	await assert.rejects(malformed.findTagByTitle('Wrong'), { code: 'invalid_backend_response' });
+	await assert.rejects(createMaintenanceClient(async () => null).findTagByTitle('Missing'), { code: 'invalid_backend_response' });
+
+	const unavailable = createMaintenanceClient(async () => { throw new ServiceError('tag_unavailable'); });
+	await assert.rejects(unavailable.findTagByTitle('Private'), { code: 'tag_unavailable' });
 });
 
 test('maintenance client rejects encrypted tags and marks invalid write responses uncertain', async () => {
@@ -53,6 +72,7 @@ function maintenanceBackend() {
 		async updateNotebook(id, patch) { calls.push(['updateNotebook', id, patch]); return { id, title: patch.title ?? 'Notebook', parent_id: patch.parent_id ?? '' }; },
 		async deleteNotebook(id) { calls.push(['deleteNotebook', id]); },
 		async createTag(title) { calls.push(['createTag', title]); return { id: tagId, title }; },
+		async findTagByTitle(title) { calls.push(['findTagByTitle', title]); return null; },
 		async getTag(id) { calls.push(['getTag', id]); return { id, title: 'Old' }; },
 		async updateTag(id, patch) { calls.push(['updateTag', id, patch]); return { id, title: patch.title }; },
 	};

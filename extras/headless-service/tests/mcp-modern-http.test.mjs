@@ -101,8 +101,8 @@ test('modern HTTP discovers, lists, reads and saves through the account service 
 	const saved = await exchange(server, call(4, 'create_note', { parentId: folderId, title: 'Modern HTTP', body: 'Saved once' }));
 	assertComplete(saved);
 	assert.equal(saved.json.result.isError, false);
-	assert.equal(saved.json.result.structuredContent.saved, 'local');
-	assert.equal(saved.json.result.structuredContent.note.body, 'Saved once');
+	assert.deepEqual(Object.keys(saved.json.result.structuredContent).sort(), ['id', 'notebook_id', 'title']);
+	assert.equal(saved.json.result.structuredContent.title, 'Modern HTTP');
 	assert.equal(writes, 1);
 	const encodedName = await exchange(server, call(5, 'get_status'), { 'Mcp-Name': '=?base64?Z2V0X3N0YXR1cw==?=' });
 	assertComplete(encodedName);
@@ -171,18 +171,18 @@ test('modern HTTP rejects notification and client-response POSTs while legacy ke
 	}
 });
 
-test('modern HTTP returns complete successful write replies above the former response cap', async t => {
+test('modern HTTP keeps a small edit to a large note response compact', async t => {
 	const b = backend();
-	const body = 'x'.repeat(2 * 1024 * 1024);
+	const body = `${'x'.repeat(2 * 1024 * 1024)}needle`;
 	const largeNote = { ...note, body };
 	let writes = 0;
 	b.getNote = async () => ({ ...largeNote });
 	b.updateNote = async (_id, patch) => { writes++; return { ...largeNote, ...patch }; };
 	const server = await start(t, b, true);
-	const response = await exchange(server, call(1, 'update_note', { id: noteId, base_revision_id: initialRevisionId, title: 'Updated large note' }));
+	const response = await exchange(server, call(1, 'update_note', { id: noteId, base_revision_id: initialRevisionId, replace_text: { find: 'needle', replace: 'updated' } }));
 	assertComplete(response);
 	assert.equal(response.json.result.isError, false);
-	assert.equal(response.json.result.structuredContent.note.body, body);
-	assert.ok(Buffer.byteLength(response.text) > 2 * 1024 * 1024);
+	assert.deepEqual(Object.keys(response.json.result.structuredContent).sort(), ['changed', 'id', 'previous_revision_id', 'revision_id', 'updated_time']);
+	assert.ok(Buffer.byteLength(response.text) < 10_000, 'the reply does not echo the large updated note body');
 	assert.equal(writes, 1);
 });
