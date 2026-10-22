@@ -68,17 +68,24 @@ export default class BaseItem extends BaseModel {
 	private static syncShareCache_: ShareState | null = null;
 	/** Optional service notification for completed local writes to exposed syncable models. */
 	private static localChangeHandler_: (()=> void) | null = null;
+	/** Process-local counter for locally persisted outgoing changes. */
+	private static localChangeGeneration_ = 0;
 
 	/** Install or remove the headless service's local-save notification. */
 	public static setLocalChangeHandler(handler: (()=> void) | null) {
 		BaseItem.localChangeHandler_ = handler;
 	}
 
-	/** Notify after persistence, excluding incoming sync and decryption writes. */
-	private static notifyLocalChange(changeSource: number, itemCount = 1) {
+	/** Return the current process-local counter for locally persisted outgoing changes. */
+	public static localChangeGeneration(): number {
+		return BaseItem.localChangeGeneration_;
+	}
+
+	/** Advance the local outgoing-change counter once per successful batch, and optionally schedule sync. */
+	protected static notifyLocalChange(changeSource: number | null | undefined, itemCount = 1, scheduleSync = true) {
 		if (!itemCount || changeSource === ItemChange.SOURCE_SYNC) return;
-		if (![BaseModel.TYPE_NOTE, BaseModel.TYPE_FOLDER, BaseModel.TYPE_TAG, BaseModel.TYPE_NOTE_TAG, BaseModel.TYPE_RESOURCE].includes(this.modelType())) return;
-		BaseItem.localChangeHandler_?.();
+		BaseItem.localChangeGeneration_++;
+		if (scheduleSync) BaseItem.localChangeHandler_?.();
 	}
 
 
@@ -1045,6 +1052,7 @@ export default class BaseItem extends BaseModel {
 			if (!ids.length) continue;
 
 			await this.db().exec(`UPDATE sync_items SET force_sync = 1 WHERE item_id IN (${this.escapeIdsForSql(ids)})`);
+			this.notifyLocalChange(null, ids.length);
 		}
 	}
 
@@ -1069,10 +1077,12 @@ export default class BaseItem extends BaseModel {
 
 	public static async forceSync(itemId: string) {
 		await this.db().exec('UPDATE sync_items SET force_sync = 1 WHERE item_id = ?', [itemId]);
+		this.notifyLocalChange(null);
 	}
 
 	public static async forceSyncAll() {
 		await this.db().exec('UPDATE sync_items SET force_sync = 1');
+		this.notifyLocalChange(null);
 	}
 
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any -- save() accepts any BaseItemEntity subclass plus disable-readonly options; subclasses override with stricter per-entity types
@@ -1105,8 +1115,8 @@ export default class BaseItem extends BaseModel {
 		}
 
 		const saved = await super.save(o, options);
-		// Attachment writes finish their blob work after saving metadata and notify at that boundary.
-		if (this.modelType() !== BaseModel.TYPE_RESOURCE) this.notifyLocalChange(options.changeSource);
+		// Resource changes count as local outgoing work during prep, but the blob action schedules sync only after its file write completes.
+		this.notifyLocalChange(options.changeSource, 1, this.modelType() !== BaseModel.TYPE_RESOURCE);
 		return saved;
 	}
 

@@ -1057,6 +1057,8 @@ export default class Note extends BaseItem {
 					originalItem: notes[i],
 				});
 			}
+
+			if (toTrash) this.notifyLocalChange(changeSource, processIds.length);
 		}
 	}
 
