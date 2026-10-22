@@ -143,14 +143,6 @@ function makeSnippet(bodyText, query) {
 	return prefix + normalised.slice(start, end).trim() + suffix;
 }
 
-/** Slice the full notebook set into the legacy sidecar page shape. */
-function notebookPage(notebooks, requestedPage, requestedLimit) {
-	const pageNumber = requestedPage ?? 1;
-	const pageLimit = requestedLimit ?? 20;
-	const start = (pageNumber - 1) * pageLimit;
-	return { items: notebooks.slice(start, start + pageLimit), hasMore: start + pageLimit < notebooks.length };
-}
-
 /** Register the Desktop-compatible tool catalog plus the headless utilities. */
 export function createTools(service, { allowWrites = false } = {}) {
 	const tools = new Map();
@@ -162,13 +154,10 @@ export function createTools(service, { allowWrites = false } = {}) {
 	}
 
 	add('get_status', 'Return the Joplin account email and local binding ID, plus semantic index state, live sync details, and decryption worker state and last-reported batch.', object({}), (_args, signal) => service.status(signal));
-	add('list_notebooks', 'List all readable notebooks (folders) with their ids, titles, parent ids and note counts. The notebooks field contains the complete list; items contains the requested page, and hasMore indicates whether a later page remains. Use parent_id to reconstruct the notebook tree.', object({
-		page: { ...page, description: 'Page number for items; defaults to 1. The notebooks field always contains the complete list.' },
-		limit: { ...limit, description: 'Maximum number of notebooks in the items page; defaults to 20.' },
-	}), async (args, signal) => {
+	add('list_notebooks', 'List all readable notebooks (folders) with their ids, titles, parent ids and note counts. Use parent_id to reconstruct the notebook tree.', object({}), async (_args, signal) => {
 		const result = await service.listAllNotebooks(signal);
-		const legacyPage = notebookPage(result.notebooks, args.page, args.limit);
-		return { ...result, items: legacyPage.items, hasMore: legacyPage.hasMore };
+		// This Desktop-compatible tool exposes the complete notebook list without sidecar pagination metadata.
+		return { notebooks: result.notebooks };
 	});
 	add('list_tags', 'List all readable tags, including tags with no attached notes, with their ids and titles.', object({}), (_args, signal) => service.listTags(signal));
 	add('list_notes', 'List readable notes with short previews. Use notebookId to filter to a notebook, page and limit to select a page, and read_note to retrieve full content.', object({
@@ -218,20 +207,24 @@ export function createTools(service, { allowWrites = false } = {}) {
 		notebookId: { ...id, description: 'Optional notebook id filter for semantic or hybrid search. Requires a configured, available semantic engine; use list_notebooks to find ids.' },
 	}, ['query']), async (args, signal) => {
 		const result = await service.search({ ...args, limit: args.limit ?? 20 }, signal);
-		const { total, ...legacyResult } = result;
-		const notes = result.items;
-		const results = notes.map(note => ({
+		const { items, ...metadata } = result;
+		const includeSearchMetadata = args.mode === 'semantic' || args.mode === 'hybrid';
+		// Keep one Desktop-style row per match; semantic modes add their engine details to that row.
+		const results = items.map(note => ({
 			id: note.id,
 			title: note.title,
 			notebook_id: note.parent_id ?? note.notebook_id ?? null,
 			updated_time: note.updated_time,
 			snippet: makeSnippet(note.body ?? '', args.query),
+			...(includeSearchMetadata ? Object.fromEntries(
+				['score', 'provenance', 'semanticExcerpt', 'chunk']
+					.filter(key => Object.hasOwn(note, key))
+					.map(key => [key, note[key]]),
+			) : {}),
 		}));
 		return {
-			...legacyResult,
+			...metadata,
 			results,
-			...(Number.isSafeInteger(total) ? { total } : {}),
-			items: notes.map(summary),
 		};
 	});
 	add('semantic_search_notes', [
@@ -311,9 +304,6 @@ export function createTools(service, { allowWrites = false } = {}) {
 					id: note.id,
 					title: note.title,
 					notebook_id: note.notebook_id ?? note.parent_id ?? null,
-					note,
-					saved: 'local',
-					synchronization: 'not_confirmed',
 				};
 			}, createAnnotations);
 
@@ -321,7 +311,7 @@ export function createTools(service, { allowWrites = false } = {}) {
 			id: { ...id, description: 'The note id to update.' },
 			base_revision_id: { ...id, description: 'The revision_id from read_note for the exact note state this update was based on. If the note changed and the update conflicts, reread it, reconcile the requested change, then submit the new revision_id.' },
 			title: { ...title, description: 'New note title.' },
-			body: { ...body, description: 'Full replacement body in the note\'s existing Markdown or HTML format. If provided, this takes precedence over append, prepend and replace_text.' },
+			body: { ...body, description: 'Full replacement body in the note\'s existing Markdown or HTML format. Prefer partial edits for small changes; use body for rewrites. If provided, body takes precedence over append, prepend and replace_text.' },
 			append: { ...body, description: 'Raw text to append to the existing body when body is omitted.' },
 			prepend: { ...body, description: 'Raw text to insert at the start of the existing body when body is omitted.' },
 			replace_text: {
@@ -335,7 +325,7 @@ export function createTools(service, { allowWrites = false } = {}) {
 			todo_completed: { type: 'boolean', description: 'For a to-do note, true marks it complete and false reopens it.' },
 		}, ['id', 'base_revision_id']);
 		updateSchema.anyOf = [{ required: ['title'] }, { required: ['body'] }, { required: ['append'] }, { required: ['prepend'] }, { required: ['replace_text'] }, { required: ['notebook_id'] }, { required: ['todo_completed'] }];
-	add('update_note', 'Update only the supplied note fields; omitted fields remain unchanged. Pass base_revision_id from read_note to identify the exact note state this change is based on. On note_conflict, reread and reconcile the change before retrying. Body operations edit Markdown or HTML directly and preserve the note\'s existing format. For a full body replacement, pass body. When body is omitted, prepend, append and replace_text are applied in that order; the text to find must occur exactly once.', updateSchema, async ({ id: noteId, ...changes }, signal) => {
+	add('update_note', 'Update only the supplied note fields; omitted fields remain unchanged. Pass base_revision_id from read_note to identify the exact note state this change is based on. On note_conflict, reread and reconcile the change before retrying. Body operations edit Markdown or HTML directly and preserve the note\'s existing format. Prefer partial edits for small changes; use body for rewrites. When body is omitted, prepend, append and replace_text are applied in that order; the text to find must occur exactly once.', updateSchema, async ({ id: noteId, ...changes }, signal) => {
 			const note = await service.updateNoteWithRevision(noteId, changes, signal);
 			return {
 				id: note.id ?? noteId,
@@ -343,9 +333,6 @@ export function createTools(service, { allowWrites = false } = {}) {
 				revision_id: note.revision_id,
 				previous_revision_id: note.previous_revision_id,
 				changed: note.changed,
-				note,
-				saved: 'local',
-				synchronization: 'not_confirmed',
 			};
 		}, updateAnnotations);
 

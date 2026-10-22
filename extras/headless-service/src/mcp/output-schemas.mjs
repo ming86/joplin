@@ -3,6 +3,8 @@ import { maintenanceAttachmentOutputSchemas } from './maintenance-attachment-out
 
 /** Describe an output record without closing fields retained from backend records. */
 const object = (properties, required = Object.keys(properties)) => ({ type: 'object', properties, required });
+/** Describe a fixed public result whose keys are part of its exact contract. */
+const exactObject = (properties, required = Object.keys(properties)) => ({ ...object(properties, required), additionalProperties: false });
 /** Describe a list of values with the same output contract. */
 const array = items => ({ type: 'array', items });
 /** Text supplied by the service or native Joplin backend. */
@@ -29,8 +31,6 @@ const noteProperties = {
 	markup_language: { type: 'number', description: 'Native Joplin markup language value.' },
 	encryption_applied: number, deleted_time: time, is_locked: number, accountId,
 };
-/** Account-bound note metadata, preserving optional backend fields. */
-const note = object(noteProperties, ['id', 'accountId']);
 /** Note list metadata with the body replaced by a short preview. */
 const { body: _body, ...summaryProperties } = noteProperties;
 /** Preview offsets and lengths use JavaScript UTF-16 code units. */
@@ -72,11 +72,12 @@ const status = object({
 		missingMasterKey: boolean, disabledItemCount: number,
 	}),
 });
-/** Search rows preserve scoring and chunk metadata when the engine supplies them. */
-const searchSummary = object({ ...summary.properties,
+/** A single Desktop-style search row, optionally enriched for semantic modes. */
+const searchResult = exactObject({
+	id: string, title: string, notebook_id: nullableString, updated_time: time, snippet: string,
 	provenance: { type: 'string', enum: ['keyword', 'semantic', 'hybrid'] }, score: number, semanticExcerpt: string,
-	chunk: object({ ordinal: number, start: { type: 'number', description: 'Start offset in UTF-8 bytes.' }, end: { type: 'number', description: 'End offset in UTF-8 bytes.' }, offsetUnit: { const: 'utf8-byte', type: 'string' } }),
-}, [...summary.required, 'provenance']);
+	chunk: exactObject({ ordinal: number, start: { type: 'number', description: 'Start offset in UTF-8 bytes.' }, end: { type: 'number', description: 'End offset in UTF-8 bytes.' }, offsetUnit: { const: 'utf8-byte', type: 'string' } }),
+}, ['id', 'notebook_id', 'snippet']);
 /** Body slicing fields common to read_note and its numeric legacy alias. */
 const readProperties = {
 	...noteProperties, revision_id: string, previous_revision_id: nullableString, changed: boolean,
@@ -92,25 +93,20 @@ const readProperties = {
 };
 /** Required fields synthesized by the read tool in addition to the service identity. */
 const readRequired = ['id', 'accountId', 'revision_id', 'body', 'notebook_id', 'notebook_title', 'tags', 'is_todo', 'todo_completed', 'body_length', 'body_offset', 'body_returned_chars', 'has_more', 'offset', 'nextOffset', 'totalLength', 'offsetUnit'];
-/** Native revision update result, with account identity retained on its nested note. */
-const updatedNote = object({ ...noteProperties, revision_id: string, previous_revision_id: nullableString, changed: boolean }, ['id', 'accountId', 'revision_id', 'previous_revision_id', 'changed']);
-/** Existing local save acknowledgement; synchronization is not confirmed by these writes. */
-const saveProperties = { saved: { type: 'string', const: 'local' }, synchronization: { type: 'string', const: 'not_confirmed' } };
-
 /** Success contracts for the core tools, including the defined Desktop semantic result. */
 const coreOutputSchemas = {
 	get_status: status,
-	list_notebooks: object({ accountId, notebooks: array(countedNotebook), items: array(countedNotebook), hasMore: boolean }),
+	list_notebooks: exactObject({ notebooks: array(countedNotebook) }),
 	list_tags: object({ tags: array(object({ id: string, title: string })) }),
 	list_notes: object({ items: array(summary), hasMore: boolean }),
-	search_notes: object({
+	search_notes: exactObject({
 		accountId, requestedMode: { type: 'string', enum: ['keyword', 'semantic', 'hybrid'] },
 		executedMode: { type: ['string', 'null'], enum: ['keyword', 'semantic', 'hybrid', null] }, semantic,
-		items: array(searchSummary), hasMore: boolean,
-		results: array(object({ id: string, title: string, notebook_id: nullableString, updated_time: time, snippet: string }, ['id', 'notebook_id', 'snippet'])),
+		hasMore: boolean,
+		results: array(searchResult),
 		total: { type: 'integer', description: 'Exact eligible keyword match count when supported by the backend.' },
 		candidateWindow: { type: 'number', description: 'Number of candidates considered from each search source.' }, truncated: boolean, notebookId: string,
-	}, ['accountId', 'requestedMode', 'executedMode', 'semantic', 'items', 'hasMore', 'results']),
+	}, ['accountId', 'requestedMode', 'executedMode', 'semantic', 'hasMore', 'results']),
 	semantic_search_notes: { ...object({ results: array(object({
 		note_id: string, title: nullableString, notebook_id: nullableString,
 		chunk_index: { type: 'number', description: 'Chunk index within the source note.' }, chunk_text: string,
@@ -118,8 +114,8 @@ const coreOutputSchemas = {
 	})), total: { type: 'number', description: 'Number of returned matching chunks.' } }), description: 'On success, returns ranked note chunks with source ids, matching text and similarity scores.' },
 	read_note: object({ ...readProperties, is_todo: boolean, todo_completed: boolean }, readRequired),
 	get_note: object(readProperties, readRequired),
-	create_note: object({ id: string, title: string, notebook_id: nullableString, note: object({ ...note.properties, notebook_id: string }, note.required), ...saveProperties }, ['id', 'notebook_id', 'note', 'saved', 'synchronization']),
-	update_note: object({ id: string, updated_time: time, revision_id: string, previous_revision_id: nullableString, changed: boolean, note: updatedNote, ...saveProperties }, ['id', 'revision_id', 'previous_revision_id', 'changed', 'note', 'saved', 'synchronization']),
+	create_note: exactObject({ id: string, title: string, notebook_id: string }),
+	update_note: exactObject({ id: string, updated_time: time, revision_id: string, previous_revision_id: nullableString, changed: boolean }),
 	delete_note: object({ id: string, trashed: { type: 'boolean', const: true } }),
 	create_notebook: object({
 		...notebook.properties,
