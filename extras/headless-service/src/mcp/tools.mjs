@@ -332,6 +332,7 @@ export function createTools(service, { allowWrites = false } = {}) {
 				const known = error instanceof ServiceError;
 				return toolResult({ error: {
 					code: known ? error.code : 'operation_failed',
+					...(known && error.code === 'validation_error' && error.message !== error.code ? { message: error.message } : {}),
 					outcomeUnknown: known && error.outcomeUnknown,
 					...(known && error.outcomeUnknown ? { action: 'Inspect the note/list before retrying. The write may have committed; no automatic retry was performed.' } : {}),
 				} }, true);

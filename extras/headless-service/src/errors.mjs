@@ -1,7 +1,12 @@
-// Deliberately do not retain upstream errors, URLs, tokens or response payloads.
+// Discard upstream errors, URLs, tokens and arbitrary payloads; only recognized validation text is retained.
 export class ServiceError extends Error {
-	constructor(code, outcomeUnknown = false) {
-		super(code);
+	/**
+	 * @param {string} code Stable machine-readable service error code.
+	 * @param {boolean} outcomeUnknown Whether a write may have committed.
+	 * @param {string} message Safe public message, defaulting to the code.
+	 */
+	constructor(code, outcomeUnknown = false, message = code) {
+		super(message);
 		this.name = 'ServiceError';
 		this.code = code;
 		this.outcomeUnknown = outcomeUnknown;

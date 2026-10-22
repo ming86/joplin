@@ -140,7 +140,16 @@ export function createJoplinClient(config) {
 				body: body ? JSON.stringify(body) : undefined,
 			});
 			if (!response.ok) {
-				await response.body?.cancel();
+				if (response.status === 400) {
+					let payload;
+					try { payload = await response.json(); } catch { /* A malformed 400 stays a generic request failure. */ }
+					if (payload && typeof payload === 'object' && !Array.isArray(payload)
+						&& payload.code === 'validation_error' && typeof payload.error === 'string' && payload.error.length > 0) {
+						throw new ServiceError('validation_error', false, payload.error);
+					}
+				} else {
+					await response.body?.cancel();
+				}
 				if (writing && response.status >= 500) throw new ServiceError('write_outcome_unknown', true);
 				throw new ServiceError(response.status === 404 ? 'not_found' : response.status === 401 || response.status === 403 ? 'backend_authorization_failed' : 'backend_request_failed');
 			}

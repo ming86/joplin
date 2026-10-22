@@ -1,4 +1,11 @@
-export class ServiceError extends Error { constructor(code: string, outcomeUnknown?: boolean); readonly code: string; readonly outcomeUnknown: boolean; retryAfterMs?: number; }
+/** Service failure with a stable code and an optional safe public message. */
+export class ServiceError extends Error {
+    /** @param code Stable machine-readable code. @param outcomeUnknown Whether a write may have committed. @param message Safe public message, defaulting to the code. */
+    constructor(code: string, outcomeUnknown?: boolean, message?: string);
+    readonly code: string;
+    readonly outcomeUnknown: boolean;
+    retryAfterMs?: number;
+}
 export type EmbeddingPurpose = 'document' | 'query';
 export interface EmbeddingSpace {
     id: string;
