@@ -13,6 +13,23 @@ const body = { type: 'string' };
 /** Build a closed object schema so callers cannot smuggle extra selectors. */
 const object = (properties, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
 
+/** Complete shorthand required-only anyOf branches for clients that inspect branches independently. */
+function completeRequiredOnlyAnyOfBranches(schema) {
+	if (schema.type !== 'object' || !schema.properties || !Array.isArray(schema.anyOf)) return schema;
+	return {
+		...schema,
+		anyOf: schema.anyOf.map(branch => {
+			if (Object.keys(branch).length !== 1 || !Array.isArray(branch.required)) return branch;
+			return {
+				type: schema.type,
+				properties: schema.properties,
+				required: [...new Set([...(schema.required ?? []), ...branch.required])],
+				additionalProperties: schema.additionalProperties,
+			};
+		}),
+	};
+}
+
 const readAnnotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 const createAnnotations = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
 const updateAnnotations = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false };
@@ -140,7 +157,7 @@ export function createTools(service, { allowWrites = false } = {}) {
 	/** Store each definition with its runner and MCP safety annotations. */
 	function add(name, description, inputSchema, run, annotations = readAnnotations) {
 		tools.set(name, {
-			definition: { name, description, inputSchema, outputSchema: getToolOutputSchema(name), annotations: { ...annotations } }, run,
+			definition: { name, description, inputSchema: completeRequiredOnlyAnyOfBranches(inputSchema), outputSchema: getToolOutputSchema(name), annotations: { ...annotations } }, run,
 		});
 	}
 
