@@ -930,6 +930,8 @@ export default class Note extends BaseItem {
 		syncDebugLog.info('Save Note: N:', o);
 
 		let savedNote = await super.save(o, options);
+		// A rejected conditional save must not consume another save's original collector snapshot.
+		if (oldNote && !oldNote.encryption_applied) this.revisionService().markChangedSinceCollection(o.id);
 
 		if (isNoteLockEnabled() && !!options?.useNoteLock && NoteLockNote.isLocking(o, oldNote)) {
 			await ItemChange.waitForAllSaved();

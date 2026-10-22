@@ -2,7 +2,7 @@ import ItemChange from '../models/ItemChange';
 import Note from '../models/Note';
 import Folder from '../models/Folder';
 import Setting from '../models/Setting';
-import Revision from '../models/Revision';
+import Revision, { RevisionContent } from '../models/Revision';
 import BaseModel, { DeleteOptions } from '../BaseModel';
 import ItemChangeUtils from './ItemChangeUtils';
 import shim from '../shim';
@@ -14,6 +14,7 @@ import { MarkupLanguage } from '../../renderer';
 import { substrWithEllipsis } from '../string-utils';
 const { sprintf } = require('sprintf-js');
 import { wrapError } from '../errorUtils';
+import { Mutex } from 'async-mutex';
 
 const logger = Logger.create('RevisionService');
 
@@ -27,6 +28,8 @@ export default class RevisionService extends BaseService {
 	private maintenanceTimer2_: ReturnType<typeof shim.setInterval> = null;
 	private isCollecting_ = false;
 	public isRunningInBackground_ = false;
+	/** Serializes local capture, collection and pruning while their parent chains are being prepared. */
+	private revisionMutex_ = new Mutex();
 
 	public static instance() {
 		if (this.instance_) return this.instance_;
@@ -48,12 +51,19 @@ export default class RevisionService extends BaseService {
 		return Date.now() - Setting.value('revisionService.oldNoteInterval');
 	}
 
+	/** Whether a successful note save has occurred since collection; querying does not mark it. */
 	public changedSinceCollection(noteId: string) {
-		if (this.changedSinceCollectionCache_.has(noteId)) return true;
+		return this.changedSinceCollectionCache_.has(noteId);
+	}
 
+	/** Mark only a successfully saved note as having an outstanding collector change. */
+	public markChangedSinceCollection(noteId: string) {
 		this.changedSinceCollectionCache_.add(noteId);
+	}
 
-		return false;
+	/** Coordinate native local history operations; callbacks must not acquire this lock recursively. */
+	public async withRevisionLock<T>(action: ()=> Promise<T>): Promise<T> {
+		return this.revisionMutex_.runExclusive(action);
 	}
 
 	public removeChangedSinceCollection(noteId: string) {
@@ -75,38 +85,36 @@ export default class RevisionService extends BaseService {
 		return md;
 	}
 
+	/** Normalize exactly the fields native revision diffs retain, excluding automatic timestamps. */
+	public noteRevisionContent(note: NoteEntity): RevisionContent {
+		return { title: note.title || '', body: note.body || '', metadata: this.noteMetadata_(note) };
+	}
+
+	/** Build an unsaved native diff; null means the tracked snapshot matches its parent. */
+	public prepareNoteRevision(note: NoteEntity, parent: RevisionEntity, parentContent: RevisionContent, itemUpdatedTime = note.updated_time): RevisionEntity {
+		const content = this.noteRevisionContent(note);
+		const revision: RevisionEntity = {
+			parent_id: parent?.id || '',
+			item_type: BaseModel.TYPE_NOTE,
+			item_id: note.id,
+			// Captures can be newer than a subsequently synced note. Keep native parent selection
+			// and timestamp-based reconstruction ordered even when the note's timestamp is earlier.
+			item_updated_time: Math.max(itemUpdatedTime, parent ? parent.item_updated_time + 1 : 0),
+			title_diff: Revision.createTextPatch(parentContent?.title || '', content.title),
+			body_diff: Revision.createTextPatch(parentContent?.body || '', content.body),
+			metadata_diff: Revision.createObjectPatch(parentContent?.metadata || {}, content.metadata),
+		};
+		return Revision.isEmptyRevision(revision) ? null : revision;
+	}
+
 	public async createNoteRevision_(note: NoteEntity, parentRevId: string = null, bypassInterval = false): Promise<RevisionEntity> {
 		try {
 			const parentRev = parentRevId ? await Revision.load(parentRevId) : await Revision.latestRevision(BaseModel.TYPE_NOTE, note.id);
 
-			const output: RevisionEntity = {
-				parent_id: '',
-				item_type: BaseModel.TYPE_NOTE,
-				item_id: note.id,
-				item_updated_time: note.updated_time,
-			};
-
-			const noteMd = this.noteMetadata_(note);
-			const noteTitle = note.title ? note.title : '';
-			const noteBody = note.body ? note.body : '';
-
-			if (!parentRev) {
-				output.title_diff = Revision.createTextPatch('', noteTitle);
-				output.body_diff = Revision.createTextPatch('', noteBody);
-				output.metadata_diff = Revision.createObjectPatch({}, noteMd);
-			} else {
-				if (!bypassInterval && Date.now() - parentRev.updated_time < Setting.value('revisionService.intervalBetweenRevisions')) return null;
-
-				const merged = await Revision.mergeDiffs(parentRev);
-				output.parent_id = parentRev.id;
-				output.title_diff = Revision.createTextPatch(merged.title, noteTitle);
-				output.body_diff = Revision.createTextPatch(merged.body, noteBody);
-				output.metadata_diff = Revision.createObjectPatch(merged.metadata, noteMd);
-			}
-
-			if (Revision.isEmptyRevision(output)) return null;
-
-			return Revision.save(output);
+			if (parentRev && !bypassInterval && Date.now() - parentRev.updated_time < Setting.value('revisionService.intervalBetweenRevisions')) return null;
+			const parentContent = parentRev ? await Revision.mergeDiffs(parentRev) : null;
+			const output = this.prepareNoteRevision(note, parentRev, parentContent);
+			return output ? Revision.save(output) : null;
 		} catch (error) {
 			const newError = wrapError(`Could not create revision for note: ${note.id}`, error);
 			throw newError;
@@ -115,8 +123,16 @@ export default class RevisionService extends BaseService {
 
 	public async collectRevisions() {
 		if (this.isCollecting_) return;
-
 		this.isCollecting_ = true;
+		try {
+			await this.withRevisionLock(() => this.collectRevisions_());
+		} finally {
+			this.isCollecting_ = false;
+		}
+	}
+
+	/** Collect under the shared capture lock, retaining the ordinary sampled-history behavior. */
+	private async collectRevisions_() {
 
 		await ItemChange.waitForAllSaved();
 
@@ -157,9 +173,14 @@ export default class RevisionService extends BaseService {
 							const oldNote = change.before_change_item ? JSON.parse(change.before_change_item) : null;
 
 							if (note) {
+								const latest = await Revision.latestRevision(BaseModel.TYPE_NOTE, note.id);
+								const latestContent = latest ? await Revision.mergeDiffs(latest) : null;
+								// Immediate MCP capture already retained both sides. Do not append the queued old
+								// snapshot after that newer result when the collector later sees its ItemChange.
+								const alreadyCaptured = latest && latest.item_updated_time >= note.updated_time && !this.prepareNoteRevision(note, latest, latestContent);
 								let oldNoteSaved = false;
 
-								if (oldNote && oldNote.updated_time < this.oldNoteCutOffDate_()) {
+								if (!alreadyCaptured && oldNote && oldNote.updated_time < this.oldNoteCutOffDate_()) {
 									// This is where we save the original version of this old note
 									// We need to use the more recent timestamp, because if the last update was a long time ago, the revision could get immediately removed by the cleaner
 									// We also want to avoid creating 2 revisions with exactly the same timestamp, so deduct 1 ms from the timestamp on the old revision to avoid this
@@ -172,7 +193,7 @@ export default class RevisionService extends BaseService {
 									}
 								}
 
-								const rev = await this.createNoteRevision_(note, null, oldNoteSaved);
+								const rev = alreadyCaptured ? null : await this.createNoteRevision_(note, null, oldNoteSaved);
 								if (rev) logger.debug(sprintf('collectRevisions: Saved revision %s (Last rev was more than %d ms ago)', rev.id, Setting.value('revisionService.intervalBetweenRevisions')));
 								doneNoteIds.push(noteId);
 
@@ -232,13 +253,11 @@ export default class RevisionService extends BaseService {
 		await Setting.saveAll();
 		await ItemChangeUtils.deleteProcessedChanges();
 
-		this.isCollecting_ = false;
-
 		logger.info(`collectRevisions: Created revisions for ${doneNoteIds.length} notes`);
 	}
 
 	public async deleteOldRevisions(ttl: number) {
-		return Revision.deleteOldRevisions(ttl);
+		return this.withRevisionLock(() => Revision.deleteOldRevisions(ttl));
 	}
 
 	public async revisionNote(revisions: RevisionEntity[], index: number) {
@@ -371,14 +390,18 @@ export default class RevisionService extends BaseService {
 
 	public async deleteHistoryForNote(noteIds: string | string[], options: DeleteOptions) {
 		const ids = Array.isArray(noteIds) ? noteIds : [noteIds];
-		await Revision.deleteHistoryForNote(ids, options);
-		await this.resetHistoryState_(ids);
+		await this.withRevisionLock(async () => {
+			await Revision.deleteHistoryForNote(ids, options);
+			await this.resetHistoryState_(ids);
+		});
 	}
 
 	public async deleteUnencryptedHistoryForNote(noteIds: string | string[], options: DeleteOptions) {
 		const ids = Array.isArray(noteIds) ? noteIds : [noteIds];
-		await Revision.deleteUnencryptedHistoryForNote(ids, options);
-		await this.resetHistoryState_(ids);
+		await this.withRevisionLock(async () => {
+			await Revision.deleteUnencryptedHistoryForNote(ids, options);
+			await this.resetHistoryState_(ids);
+		});
 	}
 
 	private async resetHistoryState_(noteIds: string[]) {

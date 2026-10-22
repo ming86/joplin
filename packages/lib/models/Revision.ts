@@ -5,6 +5,7 @@ const DiffMatchPatch = require('diff-match-patch');
 import * as ArrayUtils from '../ArrayUtils';
 import JoplinError from '../JoplinError';
 import time from '../time';
+import isNoteLockEnabled from '../services/noteLock/isNoteLockEnabled';
 const { sprintf } = require('sprintf-js');
 
 const dmp = new DiffMatchPatch();
@@ -12,6 +13,24 @@ const dmp = new DiffMatchPatch();
 export interface ObjectPatch {
 	new: Record<string, unknown>;
 	deleted: string[];
+}
+
+/** The title, body and native tracked metadata reconstructed from a revision chain. */
+export interface RevisionContent {
+	/** Historical note title. */
+	title: string;
+	/** Historical note body in its original markup format. */
+	body: string;
+	/** Note fields retained by native revision history. */
+	metadata: Record<string, unknown>;
+}
+
+/** A reconstructed snapshot and the exact persisted revision rows used to produce it. */
+export interface RevisionReconstruction {
+	/** Complete native note content. */
+	content: RevisionContent;
+	/** Persisted ancestry, from its root through the requested revision. */
+	revisions: RevisionEntity[];
 }
 
 export default class Revision extends BaseItem {
@@ -298,6 +317,48 @@ export default class Revision extends BaseItem {
 		}
 
 		return output;
+	}
+
+	/** Reconstruct API-visible history, refusing unavailable ancestors and partially applied patches. */
+	public static async mergeDiffsStrict(revision: RevisionEntity): Promise<RevisionContent> {
+		return (await this.reconstructWithDependencies(revision)).content;
+	}
+
+	/** Preserve the source rows so a capture transaction can verify its reconstructed ancestry. */
+	public static async reconstructWithDependencies(revision: RevisionEntity): Promise<RevisionReconstruction> {
+		const ancestors: RevisionEntity[] = [];
+		const seen = new Set<string>();
+		let current = revision;
+		while (current) {
+			if (seen.has(current.id) || current.item_type !== revision.item_type || current.item_id !== revision.item_id) {
+				throw new JoplinError('Revision history has an invalid parent chain.', 'revision_history_broken');
+			}
+			seen.add(current.id);
+			if (current.encryption_applied !== 0) throw new JoplinError('Revision history is encrypted.', 'revision_encrypted');
+			if (isNoteLockEnabled() && current.is_locked) throw new JoplinError('A locked revision cannot be accessed through the API.', 'revision_forbidden');
+			ancestors.push(current);
+			if (!current.parent_id) break;
+			current = await this.load(current.parent_id);
+			if (!current) throw new JoplinError('A revision history ancestor is unavailable.', 'revision_history_broken');
+		}
+
+		const output: RevisionContent = { title: '', body: '', metadata: {} };
+		try {
+			// Follow parent IDs rather than a timestamp-sorted subset, and verify every text patch applied.
+			for (const ancestor of ancestors.reverse()) {
+				for (const field of ['title', 'body'] as const) {
+					const patch = field === 'title' ? ancestor.title_diff : ancestor.body_diff;
+					const parsed = this.isLegacyPatch(patch) ? dmp.patch_fromText(patch) : this.parsePatch(patch);
+					const [value, applied] = dmp.patch_apply(parsed, output[field]);
+					if (applied.some((success: boolean) => !success)) throw new Error('A revision text patch could not be applied.');
+					output[field] = value;
+				}
+				output.metadata = this.applyObjectPatch(output.metadata, ancestor.metadata_diff);
+			}
+		} catch {
+			throw new JoplinError('Revision history could not be reconstructed.', 'revision_history_broken');
+		}
+		return { content: output, revisions: ancestors };
 	}
 
 	private static async findAllRevisionsToKeep(itemType: ModelType, itemId: string, cutOffDate: number) {
