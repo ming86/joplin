@@ -28,6 +28,7 @@ import { HeadlessConfig, headlessArgv } from './headless/config';
 import HeadlessDatabaseDriver from './headless/DatabaseDriver';
 import { createProfileDirectory, prepareProfile } from './headless/profile';
 import { runService } from './headless/runService';
+import { createHeadlessActionApi } from './headless/status';
 
 type FolderOrNoteType = ModelType.Note | ModelType.Folder | 'folderOrNote';
 
@@ -90,7 +91,10 @@ export class Application extends BaseApplication {
 		const logger = new Logger();
 		logger.setLevel(Logger.LEVEL_NONE);
 		clipper.setLogger(logger);
-		clipper.initialize();
+		clipper.initialize(createHeadlessActionApi(
+			() => this.store().getState(),
+			async () => (await DecryptionWorker.instance().decryptionDisabledItems()).length,
+		));
 		clipper.setDispatch(action => this.dispatch(action));
 		await runService({
 			start: async () => {
