@@ -7,6 +7,7 @@ export const initialRevisionId = '0'.repeat(31) + '1';
 export const space = { id: 'test-space-v1', revision: 'fake-weights-v1', dimensions: 2, preprocessingVersion: 'title-body-v1' };
 export const note = { id: noteId, parent_id: folderId, title: 'Test', body: 'Unicode 笔记', created_time: 50, updated_time: 100, is_todo: 0, todo_completed: 0, markup_language: 1, encryption_applied: 0, deleted_time: 0, is_locked: 0 };
 export const headlessStatus = {
+	accountEmail: 'alice@example.test',
 	observedAt: 1000,
 	serviceStartedAt: 900,
 	sync: { running: false, pending: false, report: null },

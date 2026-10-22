@@ -58,7 +58,7 @@ test('complete backend collections continue beyond 50 pages until has_more is fa
 });
 
 test('headless status uses its fixed authenticated action, allowlists the summary, and fails explicitly', async t => {
-	let fail = false;
+	let fail = false, accountEmail = 'alice@example.test';
 	const url = await server(t, async (req, res) => {
 		const target = new URL(req.url, 'http://local');
 		assert.equal(target.pathname, '/services/headless');
@@ -67,6 +67,7 @@ test('headless status uses its fixed authenticated action, allowlists the summar
 		assert.deepEqual(await readJson(req), { action: 'status' });
 		if (fail) { res.writeHead(503); return res.end('private upstream error'); }
 		res.end(JSON.stringify({
+			accountEmail,
 			observedAt: 2000,
 			serviceStartedAt: 1000,
 			sync: {
@@ -84,12 +85,17 @@ test('headless status uses its fixed authenticated action, allowlists the summar
 	const status = await service.status();
 	assert.deepEqual(status, {
 		accountId: 'alice',
+		accountEmail: 'alice@example.test',
 		semantic: { state: 'unavailable', reason: 'not_implemented', embeddingSpaceId: 'test-space-v1' },
 		observedAt: 2000,
 		serviceStartedAt: 1000,
 		sync: { running: true, pending: false, report: { state: 'in_progress', startTime: 1500, completedTime: null, counters: { noteConflict: 2, updateLocal: 3 }, errorCount: 1 } },
 		decryption: { state: 'started', batch: { itemIndex: 1, itemCount: 8 }, missingMasterKey: true, disabledItemCount: 4 },
 	});
+	accountEmail = null;
+	assert.equal((await service.status()).accountEmail, null);
+	accountEmail = 42;
+	await assert.rejects(service.status(), code('invalid_backend_response'));
 	fail = true;
 	await assert.rejects(service.status(), code('backend_request_failed'));
 });

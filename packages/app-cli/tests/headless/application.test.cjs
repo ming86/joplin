@@ -5,6 +5,12 @@ const load = require('./loadSource.cjs');
 // Exercise the real application wiring with fake Joplin workers. These are not sync integration tests.
 function fixture() {
 	const events = [];
+	const settingValues = {
+		'sync.target': 9,
+		'sync.9.username': 'server@example.invalid',
+		'sync.10.username': 'cloud-internal-user-id',
+		'sync.10.userEmail': 'cloud@example.invalid',
+	};
 	class Base {
 		store() { return { getState: () => ({
 			syncStarted: false, syncPending: true, syncReport: { errors: [] },
@@ -51,6 +57,7 @@ function fixture() {
 		'@joplin/lib/services/ResourceService': { runInBackground: () => events.push('resources') },
 		'@joplin/lib/services/RevisionService': { instance: () => ({ runInBackground: () => events.push('revisions') }) },
 		'@joplin/lib/models/Setting': {
+			value: key => settingValues[key],
 			saveAll: async () => events.push('save-settings'),
 			cancelScheduleSave: () => events.push('cancel-settings-timer'),
 		},
@@ -72,11 +79,11 @@ function fixture() {
 	const app = new Application();
 	app.stdout = () => events.push('ready');
 	app.database_ = { close: async () => events.push('close-db') };
-	return { app, events, Driver, clipper: instance };
+	return { app, events, Driver, clipper: instance, settingValues };
 }
 
 test('headless application wires one owner: initialize, listen, drain sync/workers, flush and close', async () => {
-	const { app, events, clipper } = fixture();
+	const { app, events, clipper, settingValues } = fixture();
 	app.headlessConfig_ = { databaseKey: Buffer.alloc(32) };
 	app.headlessInitialized_ = true;
 	await app.runHeadlessService();
@@ -89,8 +96,13 @@ test('headless application wires one owner: initialize, listen, drain sync/worke
 	assert.equal(app.backgroundServicesEnabled(), false);
 	const summary = await clipper.actions.headless().status();
 	assert.equal(summary.sync.pending, false);
+	assert.equal(summary.accountEmail, 'server@example.invalid');
 	assert.equal(summary.decryption.disabledItemCount, 1);
 	assert.ok(!JSON.stringify(summary).includes('never-exposed'));
+	settingValues['sync.target'] = 10;
+	assert.equal((await clipper.actions.headless().status()).accountEmail, 'cloud@example.invalid');
+	settingValues['sync.target'] = 6;
+	assert.equal((await clipper.actions.headless().status()).accountEmail, null);
 	await app.stopHeadless();
 	assert.equal(events.filter(value => value === 'close-db').length, 1);
 });

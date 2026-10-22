@@ -1,7 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const load = require('./loadSource.cjs');
-const { summarizeHeadlessState, createHeadlessActionApi } = load('packages/app-cli/app/headless/status.ts');
+const { summarizeHeadlessState, createHeadlessActionApi, getHeadlessAccountEmail } = load('packages/app-cli/app/headless/status.ts');
 
 /** Supply only the Redux fields read by the status boundary. */
 function state() {
@@ -23,6 +23,7 @@ test('status distinguishes an absent report, live activity, and the retained rep
 	};
 	current.syncPending = true;
 	const summary = summarizeHeadlessState(current, 2, 100);
+	assert.equal(summary.accountEmail, null);
 	assert.deepEqual(summary.sync, {
 		running: false, pending: true,
 		report: { state: 'in_progress', startTime: 1000, completedTime: 2000,
@@ -44,6 +45,30 @@ test('decryption exposes only the active batch and existing missing-key and disa
 	});
 	current.decryptionWorker.state = 'idle';
 	assert.equal(summarizeHeadlessState(current, 3, 100).decryption.batch, null);
+});
+
+test('status reports the configured email for the live sync target', async () => {
+	const settings = {
+		'sync.target': 9,
+		'sync.9.username': 'server@example.invalid',
+		'sync.10.username': 'cloud-internal-user-id',
+		'sync.10.userEmail': 'cloud@example.invalid',
+	};
+	const actions = createHeadlessActionApi(state, async () => 0,
+		() => getHeadlessAccountEmail(key => settings[key]));
+	const status = actions.headless().status;
+
+	assert.equal((await status()).accountEmail, 'server@example.invalid');
+	settings['sync.target'] = 10;
+	assert.equal((await status()).accountEmail, 'cloud@example.invalid');
+	settings['sync.target'] = 6;
+	assert.equal((await status()).accountEmail, null);
+	settings['sync.target'] = 9;
+	settings['sync.9.username'] = '  ';
+	assert.equal((await status()).accountEmail, null);
+	settings['sync.target'] = 10;
+	settings['sync.10.userEmail'] = '';
+	assert.equal((await status()).accountEmail, null);
 });
 
 /** Use the real REST router and authentication with unrelated entity routes isolated. */
@@ -74,7 +99,7 @@ test('fixed headless status action uses REST token authentication and excludes o
 		status: async () => ({ overridden: true }),
 		probe: async () => ({ registered: true }),
 	};
-	const actions = createHeadlessActionApi(state, async () => { reads++; return 2; }, extraActions);
+	const actions = createHeadlessActionApi(state, async () => { reads++; return 2; }, () => null, extraActions);
 	assert.equal(Object.getPrototypeOf(actions), null);
 	assert.equal(Object.getPrototypeOf(actions.headless()), null);
 	const router = api(actions);
@@ -84,6 +109,7 @@ test('fixed headless status action uses REST token authentication and excludes o
 	assert.equal(reads, 0);
 	const summary = await router.route('POST', 'services/headless', { token: 'private-token' }, body);
 	assert.equal(summary.decryption.disabledItemCount, 2);
+	assert.equal(summary.accountEmail, null);
 	assert.equal(reads, 1);
 	const probe = await router.route('POST', 'services/headless', { token: 'private-token' }, JSON.stringify({ action: 'probe' }));
 	assert.deepEqual(probe, { registered: true });
@@ -95,6 +121,6 @@ test('fixed headless status action uses REST token authentication and excludes o
 });
 
 test('status acquisition failures propagate without a substitute count or report', async () => {
-	const actions = createHeadlessActionApi(state, async () => { throw new Error('lookup failed: /private/profile'); });
+	const actions = createHeadlessActionApi(state, async () => { throw new Error('lookup failed: /private/profile'); }, () => null);
 	await assert.rejects(actions.headless().status(), { message: 'Headless status unavailable.' });
 });

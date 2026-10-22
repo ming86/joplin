@@ -55,6 +55,7 @@ test('get_status returns sync/decryption details, forwards cancellation, and rep
 	const result = (await s.handle(call(2, 'get_status'))).result;
 	assert.equal(result.isError, false);
 	assert.equal(result.structuredContent.accountId, 'alice');
+	assert.equal(result.structuredContent.accountEmail, headlessStatus.accountEmail);
 	assert.deepEqual(result.structuredContent.sync, headlessStatus.sync);
 	assert.deepEqual(result.structuredContent.decryption, headlessStatus.decryption);
 	assert.equal(seenSignal instanceof AbortSignal, true);
@@ -63,6 +64,28 @@ test('get_status returns sync/decryption details, forwards cancellation, and rep
 	assert.equal(failure.isError, true);
 	assert.equal(failure.structuredContent.error.code, 'backend_request_failed');
 	s.close();
+});
+test('get_status carries the core email through real HTTP transport into MCP structured content', async t => {
+	const url = await server(t, async (req, res) => {
+		const target = new URL(req.url, 'http://local');
+		assert.equal(target.pathname, '/services/headless');
+		assert.equal(target.searchParams.get('token'), 'alice-private-token');
+		assert.equal(req.method, 'POST');
+		assert.deepEqual(await readJson(req), { action: 'status' });
+		res.setHeader('Content-Type', 'application/json');
+		res.end(JSON.stringify({ ...headlessStatus, accountEmail: 'joplin.user@example.test' }));
+	});
+	const config = account(); config.joplin.baseUrl = url;
+	const service = createAccountRegistry([config]).forPrincipal('alice', 'alice');
+	const s = createMcpSession(service); await ready(s);
+	try {
+		const result = (await s.handle(call(2, 'get_status'))).result;
+		assert.equal(result.isError, false);
+		assert.equal(result.structuredContent.accountEmail, 'joplin.user@example.test');
+		assert.equal(result.structuredContent.accountId, 'alice');
+		const tool = (await s.handle(request(3, 'tools/list'))).result.tools.find(item => item.name === 'get_status');
+		assert.ok(tool.outputSchema.anyOf[0].required.includes('accountEmail'));
+	} finally { s.close(); }
 });
 test('invalid envelopes and ids; unknown methods; no response or tool execution for notifications', async () => {
 	let writes = 0; const b = backend(); b.createNote = async () => { writes++; };

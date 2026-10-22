@@ -60,7 +60,7 @@ export function createOutputSchemaTestSession({ allowWrites = true } = {}) {
 	const service = {
 		async status() {
 			return {
-				accountId, semantic: { state: 'unavailable', reason: 'not_implemented' },
+				accountId, accountEmail: 'alice@example.test', semantic: { state: 'unavailable', reason: 'not_implemented' },
 				observedAt: 3, serviceStartedAt: 1,
 				sync: { running: false, pending: false, report: null },
 				decryption: { state: 'idle', batch: null, missingMasterKey: false, disabledItemCount: 0 },
@@ -197,6 +197,11 @@ test('tool output samples preserve aliases, nullable history, semantic errors, a
 	try {
 		const { tools, results, errorSamples } = await callOutputSchemaSamples(session);
 		const schemas = new Map(tools.map(tool => [tool.name, tool.outputSchema.anyOf[0]]));
+		const status = results.get('get_status').structuredContent;
+		assert.equal(status.accountEmail, 'alice@example.test');
+		assert.equal(status.accountId, accountId);
+		assert.deepEqual(schemas.get('get_status').properties.accountEmail.type, ['string', 'null']);
+		assert.ok(schemas.get('get_status').required.includes('accountEmail'));
 		const modernRead = results.get('read_note').structuredContent;
 		const legacyRead = results.get('get_note').structuredContent;
 		assert.equal(typeof modernRead.is_todo, 'boolean');
