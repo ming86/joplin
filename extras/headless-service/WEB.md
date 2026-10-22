@@ -135,8 +135,9 @@ editor's format. The supported document is Unicode Markdown, not a binary-file e
 ## Save, retry and concurrency
 
 A success means the requested content was read back from the local headless client. The UI says
-“Saved locally” or “Requested content confirmed locally”, **not** “synchronized”. The API currently
-observes core reachability and semantic state; synchronization is explicitly `not_observed`.
+“Saved locally” or “Requested content confirmed locally”, **not** “synchronized”. The API reports
+core reachability, semantic state, and current sync and decryption activity. Its sync report is
+process-wide and does not confirm that a particular local write has synchronized.
 
 Each create operation has a stable ID and content receipt. After a lost response the page keeps the
 same operation and immutable submitted fields; “Retry same save” sends exactly that request. A

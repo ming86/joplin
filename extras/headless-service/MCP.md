@@ -40,7 +40,7 @@ Then inspect `/mcp` in Codex and ask it to list notebooks, search for a known sy
 
 | Tool | Behavior |
 | --- | --- |
-| `get_status` | Account ID and semantic index status, including availability and indexing progress when supplied by the configured engine. |
+| `get_status` | Bound account ID and semantic index state, plus the core process's current sync activity, latest sync report, and decryption worker state. Sync details include pending work, report timestamps, available operation/fetch counters, and an error count. Decryption details include the last-reported worker batch while active, whether a master key is missing, and the count of disabled records. A new decryption run may still show the previous batch until fresh progress arrives. |
 | `list_notebooks` | The complete safe notebook list, with note counts. Legacy `page`/`limit` inputs and `items`/`hasMore` output fields remain available for existing callers. |
 | `list_notes` | Paged readable notes with short previews. |
 | `search_notes` | Joplin query syntax, including `notebook:`, `tag:`, `title:`, `body:`, `any:`, `type:`, `iscompleted:`, `created:`, `updated:`, `due:`, `sourceurl:`, and `resource:` filters. Combine filters with spaces and prefix a filter with `-` to negate it. Returns a snippet window up to 240 characters around the first non-filter keyword; ellipses mark omitted text. The optional `mode` supports the existing `keyword`, `semantic`, and `hybrid` behavior. |
@@ -52,6 +52,8 @@ Then inspect `/mcp` in Codex and ask it to list notebooks, search for a known sy
 | `create_notebook` | Only with `allowWrites: true`: creates a notebook, optionally under a readable parent notebook. |
 | `list_tags` | Lists readable tag IDs and titles. |
 | `manage_tags` | Only with `allowWrites: true`: adds or removes tag titles on an eligible note; adding a missing title creates that tag. |
+
+`observedAt` and `serviceStartedAt` are Unix epoch milliseconds. The report is kept in memory and resets when the process restarts; `sync.running` reports live activity, while `report.state` can lag. Decryption batch indices are zero-based. While the worker is started, `batch` is the last-reported batch and may still describe the previous run until fresh progress arrives.
 
 The built-in keyword search returns `total` as the exact count of matching readable notes across all search pages, not the number on the returned page. The count scans note metadata and excludes encrypted, deleted, or locked notes. The existing semantic and hybrid modes on `search_notes` remain separate and may work when the headless semantic engine is configured; configuring that engine does not enable the dedicated `semantic_search_notes` handler.
 
