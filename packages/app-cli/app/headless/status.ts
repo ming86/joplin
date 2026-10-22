@@ -12,7 +12,7 @@ const syncCounterNames = [
 export interface HeadlessStatus {
 	/** Epoch milliseconds when the live state was read. */
 	observedAt: number;
-	/** Configured email for the selected Joplin sync account, or null when unavailable. */
+	/** Authenticated profile email for the selected Joplin Server account, or null when unavailable. */
 	accountEmail: string | null;
 	/** Epoch milliseconds when this headless service initialized; reports reset on restart. */
 	serviceStartedAt: number;
@@ -54,14 +54,29 @@ export interface HeadlessStatus {
 	};
 }
 
-/** Return the configured email from the selected sync target's local settings. */
-export function getHeadlessAccountEmail(readSetting: (key: string)=> unknown): string | null {
-	const target = readSetting('sync.target');
-	const emailSetting = target === 9 ? 'sync.9.username' : target === 10 ? 'sync.10.userEmail' : null;
-	if (!emailSetting) return null;
+/** The authenticated API methods needed to read the current account profile. */
+interface HeadlessAccountApi {
+	/** User ID from the loaded server session. */
+	userId: string;
+	/** Load or refresh the server session. */
+	loadSession(): Promise<void>;
+	/** Read a JSON API resource. */
+	exec(method: string, path: string): Promise<{ email?: unknown }>;
+}
 
-	const email = readSetting(emailSetting);
-	return typeof email === 'string' && email.trim() ? email : null;
+/** Return the authenticated profile email for a selected Joplin Server variant. */
+export async function getHeadlessAccountEmail(
+	syncTargetId: unknown,
+	getApi: ()=> Promise<HeadlessAccountApi>,
+): Promise<string | null> {
+	if (typeof syncTargetId !== 'number' || ![9, 10, 11].includes(syncTargetId)) return null;
+
+	const api = await getApi();
+	await api.loadSession();
+	if (!api.userId) return null;
+
+	const user = await api.exec('GET', `api/users/${api.userId}`);
+	return typeof user?.email === 'string' && user.email.trim() ? user.email : null;
 }
 
 /** Select a finite, nonnegative number without forwarding arbitrary report values. */
@@ -112,7 +127,7 @@ export function summarizeHeadlessState(
 export function createHeadlessActionApi(
 	getState: ()=> State,
 	getDisabledItemCount: ()=> Promise<number>,
-	getAccountEmail: ()=> string | null,
+	getAccountEmail: ()=> Promise<string | null>,
 	extraActions: Record<string, unknown> = Object.create(null),
 ) {
 	const serviceStartedAt = Date.now();
@@ -122,7 +137,8 @@ export function createHeadlessActionApi(
 		status: async () => {
 			try {
 				const disabledItemCount = await getDisabledItemCount();
-				return summarizeHeadlessState(getState(), disabledItemCount, serviceStartedAt, getAccountEmail());
+				const accountEmail = await getAccountEmail();
+				return summarizeHeadlessState(getState(), disabledItemCount, serviceStartedAt, accountEmail);
 			} catch {
 				// REST returns exception messages, so acquisition errors must not expose database details.
 				throw new Error('Headless status unavailable.');

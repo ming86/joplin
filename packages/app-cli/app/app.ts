@@ -108,7 +108,10 @@ export class Application extends BaseApplication {
 		clipper.initialize(createHeadlessActionApi(
 			() => ({ ...this.store().getState(), syncPending: reg.syncSchedulingPending() ?? this.store().getState().syncPending }),
 			async () => (await DecryptionWorker.instance().decryptionDisabledItems()).length,
-			() => getHeadlessAccountEmail(key => Setting.value(key)),
+			async () => getHeadlessAccountEmail(Setting.value('sync.target'), async () => {
+				const fileApi = await reg.syncTarget().fileApi();
+				return fileApi.driver().api();
+			}),
 			extraActions,
 		));
 		clipper.setDispatch(action => this.dispatch(action));
