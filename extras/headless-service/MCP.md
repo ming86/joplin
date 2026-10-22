@@ -78,7 +78,7 @@ When `create_note` receives a non-empty body, it first creates an empty note and
 
 When Joplin rejects a save through its model validation, MCP returns `validation_error` with the validation message and `outcomeUnknown: false`. This applies to a rejected update or the initial create request. A validation failure during the second request of note creation retains the partial-create handling described above.
 
-The server returns JSON both in MCP text content and `structuredContent`. `read_attachment` additionally returns bytes in an embedded resource block, without duplicating base64 in its JSON metadata. Tool input rejects extra fields, including `accountId`, `baseUrl`, `token` and arbitrary Joplin properties. No tool changes which account is bound. Annotations describe reads/writes but are hints, not the permission boundary.
+The server returns JSON both in MCP text content and `structuredContent`. Every registered tool publishes an `outputSchema` describing its success and structured-error result shapes. The `read_attachment` output schema covers its JSON metadata; file bytes are returned in an embedded resource block without duplicating base64 in the metadata. Tool input rejects extra fields, including `accountId`, `baseUrl`, `token` and arbitrary Joplin properties. No tool changes which account is bound. Annotations describe reads/writes but are hints, not the permission boundary.
 
 ## Authorization and writes
 
