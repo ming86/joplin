@@ -16,10 +16,29 @@ function tagResult(data) {
 	return { id: data.id, title: data.title, encryption_applied: data.encryption_applied };
 }
 
+/** Validate and unwrap the safe nullable tag envelope returned by the native action. */
+function tagLookupResult(data) {
+	requireValue(data && typeof data === 'object' && !Array.isArray(data)
+		&& Object.hasOwn(data, 'tag'), 'invalid_backend_response');
+	if (data.tag === null) return null;
+	requireValue(data.tag && typeof data.tag === 'object' && !Array.isArray(data.tag)
+		&& typeof data.tag.id === 'string' && /^[a-f0-9]{32}$/.test(data.tag.id)
+		&& typeof data.tag.title === 'string', 'invalid_backend_response');
+	return { id: data.tag.id, title: data.tag.title };
+}
+
 /** Make fixed maintenance calls over the authenticated Joplin Data API request function. */
 export function createMaintenanceClient(request) {
 	requireValue(typeof request === 'function');
 	return Object.freeze({
+		/** Find a tag using Joplin's native title matching rules. */
+		async findTagByTitle(title, signal) {
+			requireValue(typeof title === 'string' && title.trim().length > 0, 'invalid_tag_input');
+			const data = await request('services/headless', {}, 'POST', {
+				action: 'findTagByTitle', title,
+			}, signal, { writeOperation: false });
+			return tagLookupResult(data);
+		},
 		/** Update a notebook through native model logic so moves retain Joplin's nesting rules. */
 		async updateNotebook(id, input, signal) {
 			const notebookId = identifier(id);

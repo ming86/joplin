@@ -484,6 +484,8 @@ export interface JoplinBackend {
     deleteNotebook(id: string, signal?: AbortSignal): Promise<void>;
     /** Read safe tag metadata by id. */
     getTag(id: string, signal?: AbortSignal): Promise<Tag>;
+    /** Find the oldest matching tag using Tag.loadByTitle's trimming, SQLite NOCASE collation and NFC fallback. */
+    findTagByTitle(title: string, signal?: AbortSignal): Promise<Tag | null>;
     /** Rename a tag using Joplin's native title validation. */
     updateTag(id: string, input: { title: string }, signal?: AbortSignal): Promise<Tag>;
     /** Return safe tag metadata currently attached to a note. */
@@ -719,7 +721,7 @@ export interface AccountService {
     listConflicts(input?: ConflictListInput, signal?: AbortSignal): Promise<AccountConflictPage>;
     /** Read both current sides of one device-local note conflict. */
     readConflict(input: ConflictReadInput, signal?: AbortSignal): Promise<AccountConflictReadResult>;
-    /** Add and remove tags by trimmed, case-insensitive title. */
+    /** Add and remove tags using Joplin's native title lookup. */
     manageTags(input: ManageTagsInput, signal?: AbortSignal): Promise<ManageTagsResult>;
     /** List all readable tags. */
     listTags(signal?: AbortSignal): Promise<TagListResult>;

@@ -282,16 +282,13 @@ export function createAccountRegistry(configurations, factories = {}) {
 					if (!add.length && !remove.length) throw new ServiceError('tag_change_required');
 					const current = await backend().getNote(noteId, signal);
 					if (!eligible(current)) throw new ServiceError('note_unavailable');
-					const knownTags = new Map((await backend().listAllTags(signal)).map(tag => [tag.title.trim().toLowerCase(), tag]));
 					const added = [];
 					for (const title of add) {
 						const trimmed = title.trim();
 						if (!trimmed) continue;
-						const key = trimmed.toLowerCase();
-						let tag = knownTags.get(key);
-						if (!tag) {
+						let tag = await backend().findTagByTitle(trimmed, signal);
+						if (tag === null) {
 							tag = await backend().createTag(trimmed, signal);
-							knownTags.set(tag.title.trim().toLowerCase(), tag);
 						}
 						await backend().addTagToNote(tag.id, noteId, signal);
 						added.push(trimmed);
@@ -300,7 +297,7 @@ export function createAccountRegistry(configurations, factories = {}) {
 					for (const title of remove) {
 						const trimmed = title.trim();
 						if (!trimmed) continue;
-						const tag = knownTags.get(trimmed.toLowerCase());
+						const tag = await backend().findTagByTitle(trimmed, signal);
 						if (tag) {
 							await backend().removeTagFromNote(tag.id, noteId, signal);
 							removed.push(trimmed);
