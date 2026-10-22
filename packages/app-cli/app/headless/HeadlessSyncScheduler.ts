@@ -22,8 +22,8 @@ interface PendingSync {
 export default class HeadlessSyncScheduler implements SyncSchedulingPolicy {
 	/** Fixed lightweight remote-check clock; native runs do not reset it. */
 	private pollInterval_: ReturnType<typeof shim.setInterval> | null = null;
-	/** Fixed ordinary full-sync clock; native runs do not reset it. */
-	private fullInterval_: ReturnType<typeof shim.setInterval> | null = null;
+	/** Delay until the next periodic full sync after the previous one settles. */
+	private fullTimeout_: ReturnType<typeof shim.setTimeout> | null = null;
 	/** One wake-up for the current pending deadline. */
 	private timeout_: ReturnType<typeof shim.setTimeout> | null = null;
 	/** The only waiting request; later requests merge into it. */
@@ -33,13 +33,13 @@ export default class HeadlessSyncScheduler implements SyncSchedulingPolicy {
 	/** Shutdown prevents callbacks and synchronizer follow-ups from reviving the scheduler. */
 	private stopped_ = false;
 
-	/** Bind native execution and pending status. Both intervals are measured in milliseconds. */
+	/** Bind native execution and pending status. Cadences are measured in milliseconds. */
 	public constructor(
 		private readonly run_: (options: SyncStartOptions, wifiCheck: boolean)=> Promise<unknown>,
 		private readonly pendingChanged_: (pending: boolean)=> void,
 		private readonly intervalMs_: number,
 		private readonly reportError_: ()=> void,
-		/** Ordinary full-sync cadence; defaults to two minutes. */
+		/** Wait after a periodic full sync settles before starting another; defaults to two minutes. */
 		private readonly fullIntervalMs_ = 120000,
 	) {}
 
@@ -141,15 +141,31 @@ export default class HeadlessSyncScheduler implements SyncSchedulingPolicy {
 		}
 	}
 
-	/** Run remote checks and full syncs on independent fixed clocks. */
+	/** Run remote checks on a fixed clock and full syncs after completion-based delays. */
 	public setupRecurrentSync() {
-		if (this.stopped_ || this.pollInterval_ || this.fullInterval_) return;
+		if (this.stopped_ || this.pollInterval_ || this.fullTimeout_) return;
 		this.pollInterval_ = shim.setInterval(() => {
 			void this.scheduleRecurring_({ remoteChangesOnly: true });
 		}, this.intervalMs_);
-		this.fullInterval_ = shim.setInterval(() => {
-			void this.scheduleRecurring_({});
+		this.scheduleNextFullSync_();
+	}
+
+	/** Start the next full-sync delay; only a settled periodic full sync calls this again. */
+	private scheduleNextFullSync_() {
+		if (this.stopped_ || this.fullTimeout_) return;
+		this.fullTimeout_ = shim.setTimeout(() => {
+			this.fullTimeout_ = null;
+			void this.runPeriodicFullSync_();
 		}, this.fullIntervalMs_);
+	}
+
+	/** Wait for the full request, including any coalesced work, before restarting its delay. */
+	private async runPeriodicFullSync_() {
+		try {
+			await this.scheduleRecurring_({});
+		} finally {
+			this.scheduleNextFullSync_();
+		}
 	}
 
 	/** Keep periodic errors reported while joining the same coalesced request. */
@@ -165,10 +181,10 @@ export default class HeadlessSyncScheduler implements SyncSchedulingPolicy {
 	public stop() {
 		this.stopped_ = true;
 		if (this.pollInterval_) shim.clearInterval(this.pollInterval_);
-		if (this.fullInterval_) shim.clearInterval(this.fullInterval_);
+		if (this.fullTimeout_) shim.clearTimeout(this.fullTimeout_);
 		if (this.timeout_) shim.clearTimeout(this.timeout_);
 		this.pollInterval_ = null;
-		this.fullInterval_ = null;
+		this.fullTimeout_ = null;
 		this.timeout_ = null;
 		for (const caller of this.request_?.resolve ?? []) caller.resolve();
 		this.request_ = null;
