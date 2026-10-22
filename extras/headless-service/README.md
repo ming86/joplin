@@ -8,11 +8,11 @@ The trusted application constructs `createAccountRegistry(configurations)`, auth
 
 **This is not an authenticator or a network server.** Never fill `verifiedSubject` from an unverified request or MCP tool argument. The configured Joplin API credential still has broad upstream powers. Read/write permissions here constrain application methods, not the raw private Data API. Keep that API private. Configuration/grants are static for this initial process; changing grants requires restarting the application. Live revocation, signup and worker provisioning belong to the operational multi-user phase.
 
-Read operations: notebook/note listing, note lookup, keyword search, note changes. Small write operations: create Markdown note, update title/body. HTML imports, arbitrary paths/routes, deletion, resource upload and administration are deliberately not exposed by this increment. This is not a permanent exclusion of those features. Reads/search suppress encrypted, trashed and locked notes; pages may contain fewer visible items while `hasMore` still reflects upstream pagination. Lists are not transactional snapshots.
+Read operations include notebook/note listing, note lookup, keyword search and note changes. Write operations include creating Markdown notes, updating existing notes, moving notes between notebooks, moving notes to Trash, creating notebooks and managing tags. Body updates operate on the stored text and preserve the note's existing Markdown or HTML format. HTML import/conversion, arbitrary paths/routes, resource upload and administration are not exposed. Reads/search suppress encrypted, trashed and locked notes; pages may contain fewer visible items while `hasMore` still reflects upstream pagination. Lists are not transactional snapshots.
 
 The HTTP adapter talks to the actual Data API request shapes inspected in the pinned source. It uses `PUT` for partial updates, query-token authorization and cursor-based `/events`. URL and token come only from trusted configuration. Redirects are rejected, request timeouts are enforced, and extra response fields are filtered. Only explicitly marked HTTP 400 model validation messages are passed to callers; other upstream error bodies and stacks are not copied into application errors. It logs no note payload or token. HTTP is allowed for loopback; explicitly permit other private HTTP only when the deployment accepts that transport. HTTPS is supported.
 
-A POST/PUT transport failure, server error or unusable success response can mean the change committed. The error reports `write_outcome_unknown`; there is **no automatic mutation retry** and no idempotency/atomic stale-write guarantee. The pre-update eligibility read is best effort, not compare-and-swap. Initial Markdown updates apply only to Markdown notes; unsupported formats stay read-only through this adapter.
+A POST/PUT transport failure, server error or unusable success response can mean the change committed. The error reports `write_outcome_unknown`; there is **no automatic mutation retry** and no idempotency/atomic stale-write guarantee. The pre-update eligibility read is best effort, not compare-and-swap.
 
 ## Search and embedding contracts
 
@@ -80,7 +80,7 @@ A successful `PASS phase15-account-smoke` against the real compiled core complet
 
 ## Phase 2A: MCP entry point
 
-`mcp.mjs` exposes this account-bound service over stdio, read-only by default, with optional Markdown create/update tools. See [MCP.md](MCP.md) for the configuration, tool contract, transport scope, native integration test and remaining selected-host check. This adds no package dependencies, public HTTP listener or semantic indexer, and does not change the Joplin CLI core.
+`mcp.mjs` exposes this account-bound service over stdio, read-only by default, with optional write tools. New notes use Markdown; updates preserve the existing note format. See [MCP.md](MCP.md) for the configuration, tool contract, transport scope, native integration test and remaining selected-host check. This adds no package dependencies, public HTTP listener or semantic indexer, and does not change the Joplin CLI core.
 
 
 ## Phase 2B semantic retrieval
