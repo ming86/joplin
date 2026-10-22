@@ -5,8 +5,14 @@ interface SqliteDatabase {
 	close(cb: ()=> void): void;
 	get(sql: string, params: SqlParams | Record<string, unknown>, cb: (error: Error | null, row: unknown)=> void): void;
 	all(sql: string, params: SqlParams | Record<string, unknown>, cb: (error: Error | null, rows: unknown)=> void): void;
-	run(sql: string, params: SqlParams | Record<string, unknown>, cb: (error: Error | null)=> void): void;
+	run(sql: string, params: SqlParams | Record<string, unknown>, cb: (this: SqliteRunResult, error: Error | null)=> void): void;
 	loadExtension(path: string, cb: (error: Error | null)=> void): void;
+}
+
+/** Metadata supplied as the sqlite3 run callback's receiver. */
+interface SqliteRunResult {
+	/** Number of rows inserted, updated, or deleted by the statement. */
+	changes: number;
 }
 
 interface ErrorWithCode extends Error {
@@ -86,13 +92,13 @@ export class DatabaseDriverNode {
 
 	public exec(sql: string, params: SqlParams | null = null) {
 		const queryParams = params ?? {};
-		return new Promise<void>((resolve, reject) => {
-			this.db_.run(sql, queryParams, error => {
+		return new Promise<SqliteRunResult>((resolve, reject) => {
+			this.db_.run(sql, queryParams, function(error) {
 				if (error) {
 					reject(error);
 					return;
 				}
-				resolve();
+				resolve({ changes: this.changes });
 			});
 		});
 	}

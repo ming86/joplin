@@ -22,6 +22,10 @@ export type SqlParams = any[];
 export interface SqlQuery {
 	sql: string;
 	params?: SqlParams;
+	/** Required affected row count, checked by transactionExecBatch before the next query. */
+	expectedChanges?: number;
+	/** Required result row count for a read-only assertion, checked inside transactionExecBatch. */
+	expectedRowCount?: number;
 }
 
 export type StringOrSqlQuery = string | SqlQuery;

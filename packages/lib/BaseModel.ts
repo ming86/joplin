@@ -607,6 +607,16 @@ class BaseModel {
 			delete temp.id;
 
 			query = Database.updateQuery(this.tableName(), temp, where);
+			if (options.expectedItem) {
+				// IS compares both values and NULL without weakening the condition for
+				// nullable columns. Ignore model metadata that is not stored in the table.
+				for (const fieldName of fieldNames) {
+					if (!Object.prototype.hasOwnProperty.call(options.expectedItem, fieldName)) continue;
+					query.sql += ` AND ${this.db().escapeField(fieldName)} IS ?`;
+					query.params.push(options.expectedItem[fieldName]);
+				}
+				query.expectedChanges = 1;
+			}
 		}
 
 		query.id = modelId;

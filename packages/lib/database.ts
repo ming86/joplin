@@ -11,6 +11,18 @@ import { Mutex } from 'async-mutex';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- See above
 export type Row = Record<string, any>;
 
+/** A conditional model update no longer matches the row loaded by its caller. */
+export class ConditionalSaveConflictError extends Error {
+	/** Stable identifier used by callers to distinguish a stale save from a database failure. */
+	public readonly code = 'conditionalSaveConflict';
+
+	/** Creates a conflict without exposing the persisted item contents. */
+	public constructor() {
+		super('The item changed before it could be saved');
+		this.name = 'ConditionalSaveConflictError';
+	}
+}
+
 export default class Database {
 
 	public static TYPE_UNKNOWN = 0;
@@ -24,7 +36,8 @@ export default class Database {
 	private driver_: any;
 	private logger_ = new Logger();
 	private logExcludedQueryTypes_: string[] = [];
-	private batchTransactionMutex_ = new Mutex();
+	/** Owns connection access, including ordinary queries while a transaction is running. */
+	private connectionMutex_ = new Mutex();
 	private profilingEnabled_ = false;
 	private queryId_ = 1;
 
@@ -115,6 +128,11 @@ export default class Database {
 	}
 
 	public async tryCall(callName: string, inputSql: StringOrSqlQuery, inputParams: SqlParams) {
+		return this.connectionMutex_.runExclusive(() => this.tryCallUnlocked(callName, inputSql, inputParams));
+	}
+
+	/** Executes a driver call while the caller owns connectionMutex_. */
+	private async tryCallUnlocked(callName: string, inputSql: StringOrSqlQuery, inputParams: SqlParams) {
 		let sql: string = null;
 		let params: SqlParams = null;
 
@@ -210,30 +228,44 @@ export default class Database {
 	public async transactionExecBatch(queries: StringOrSqlQuery[]) {
 		if (queries.length <= 0) return;
 
-		if (queries.length === 1) {
-			const q = this.wrapQuery(queries[0]);
-			await this.exec(q.sql, q.params);
+		await this.connectionMutex_.runExclusive(async () => {
+			const wrappedQueries = queries.map(query => this.wrapQuery(query));
+			if (wrappedQueries.length === 1 && wrappedQueries[0].expectedChanges === undefined && wrappedQueries[0].expectedRowCount === undefined) {
+				await this.execQueryUnlocked(wrappedQueries[0]);
+				return;
+			}
+
+			await this.tryCallUnlocked('exec', 'BEGIN TRANSACTION', null);
+			try {
+				for (const query of wrappedQueries) await this.execQueryUnlocked(query);
+				await this.tryCallUnlocked('exec', 'COMMIT', null);
+			} catch (error) {
+				try {
+					await this.tryCallUnlocked('exec', 'ROLLBACK', null);
+				} catch (rollbackError) {
+					throw new Error(`Transaction failed: ${error.message}; rollback failed: ${rollbackError.message}`);
+				}
+				throw error;
+			}
+		});
+	}
+
+	/** Runs one batch query and checks its row count before any following query can execute. */
+	private async execQueryUnlocked(query: SqlQuery) {
+		if (query.expectedRowCount !== undefined) {
+			const rows = await this.tryCallUnlocked('selectAll', query.sql, query.params);
+			if (rows.length !== query.expectedRowCount) throw new ConditionalSaveConflictError();
 			return;
 		}
 
-		// There can be only one transaction running at a time so use a	mutex
-		const release = await this.batchTransactionMutex_.acquire();
+		const result = await this.tryCallUnlocked('exec', query.sql, query.params);
+		if (query.expectedChanges === undefined) return;
 
-		try {
-			await this.exec('BEGIN TRANSACTION');
-
-			for (let i = 0; i < queries.length; i++) {
-				const query = this.wrapQuery(queries[i]);
-				await this.exec(query.sql, query.params);
-			}
-
-			await this.exec('COMMIT');
-		} catch (error) {
-			await this.exec('ROLLBACK');
-			throw error;
-		} finally {
-			release();
-		}
+		// Some platform drivers return no execution result. Read SQLite's connection-local
+		// count while still owning the connection so it describes this exact statement.
+		const changes = typeof result?.changes === 'number' ? result.changes :
+			(await this.tryCallUnlocked('selectOne', 'SELECT changes() AS changes', null)).changes;
+		if (changes !== query.expectedChanges) throw new ConditionalSaveConflictError();
 	}
 
 	public static enumId(type: string, s: string) {

@@ -45,6 +45,8 @@ export interface FolderLoadOptions extends LoadOptions {
 export interface SaveOptions {
 	isNew?: boolean;
 	oldItem?: Record<string, unknown>;
+	/** Full persisted row loaded by an internal caller; fail an update if any supplied table field has changed. */
+	expectedItem?: object;
 	fields?: string[];
 	userSideValidation?: boolean;
 	nextQueries?: SqlQuery[];

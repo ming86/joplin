@@ -1,5 +1,6 @@
 export interface SqlCipherConnection {
-	exec(sql: string): Promise<void>;
+	/** Executes a statement; initialization does not consume driver execution metadata. */
+	exec(sql: string): Promise<unknown>;
 	selectOne(sql: string): Promise<unknown>;
 }
 
