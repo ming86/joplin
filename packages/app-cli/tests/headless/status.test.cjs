@@ -47,28 +47,30 @@ test('decryption exposes only the active batch and existing missing-key and disa
 	assert.equal(summarizeHeadlessState(current, 3, 100).decryption.batch, null);
 });
 
-test('status reports the configured email for the live sync target', async () => {
-	const settings = {
-		'sync.target': 9,
-		'sync.9.username': 'server@example.invalid',
-		'sync.10.username': 'cloud-internal-user-id',
-		'sync.10.userEmail': 'cloud@example.invalid',
-	};
-	const actions = createHeadlessActionApi(state, async () => 0,
-		() => getHeadlessAccountEmail(key => settings[key]));
-	const status = actions.headless().status;
+test('status resolves the authenticated Joplin Server profile email instead of the login ID', async () => {
+	for (const targetId of [9, 10, 11]) {
+		const calls = [];
+		const api = {
+			userId: 'server-owner-uuid',
+			async loadSession() { calls.push('loadSession'); },
+			async exec(method, path) {
+				calls.push([method, path]);
+				return { email: 'owner@example.invalid' };
+			},
+		};
 
-	assert.equal((await status()).accountEmail, 'server@example.invalid');
-	settings['sync.target'] = 10;
-	assert.equal((await status()).accountEmail, 'cloud@example.invalid');
-	settings['sync.target'] = 6;
-	assert.equal((await status()).accountEmail, null);
-	settings['sync.target'] = 9;
-	settings['sync.9.username'] = '  ';
-	assert.equal((await status()).accountEmail, null);
-	settings['sync.target'] = 10;
-	settings['sync.10.userEmail'] = '';
-	assert.equal((await status()).accountEmail, null);
+		assert.equal(await getHeadlessAccountEmail(targetId, async () => api), 'owner@example.invalid');
+		assert.deepEqual(calls, ['loadSession', ['GET', 'api/users/server-owner-uuid']]);
+	}
+});
+
+test('status returns null for unsupported sync targets without creating a server API', async () => {
+	let apiCreated = false;
+	assert.equal(await getHeadlessAccountEmail(6, async () => {
+		apiCreated = true;
+		throw new Error('should not be called');
+	}), null);
+	assert.equal(apiCreated, false);
 });
 
 /** Use the real REST router and authentication with unrelated entity routes isolated. */
@@ -120,7 +122,11 @@ test('fixed headless status action uses REST token authentication and excludes o
 	await assert.rejects(router.route('GET', 'services/headless', { token: 'private-token' }, body));
 });
 
-test('status acquisition failures propagate without a substitute count or report', async () => {
-	const actions = createHeadlessActionApi(state, async () => { throw new Error('lookup failed: /private/profile'); }, () => null);
+test('profile lookup failures remain generic through the status action', async () => {
+	const actions = createHeadlessActionApi(state, async () => 0, () => getHeadlessAccountEmail(9, async () => ({
+		userId: 'owner-uuid',
+		async loadSession() {},
+		async exec() { throw new Error('lookup failed: /private/profile'); },
+	})));
 	await assert.rejects(actions.headless().status(), { message: 'Headless status unavailable.' });
 });

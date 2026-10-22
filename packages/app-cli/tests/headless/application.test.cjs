@@ -5,11 +5,12 @@ const load = require('./loadSource.cjs');
 // Exercise the real application wiring with fake Joplin workers. These are not sync integration tests.
 function fixture() {
 	const events = [];
+	const profileCalls = [];
 	const settingValues = {
 		'sync.target': 9,
-		'sync.9.username': 'server@example.invalid',
+		'sync.9.username': 'app-client-uuid',
 		'sync.10.username': 'cloud-internal-user-id',
-		'sync.10.userEmail': 'cloud@example.invalid',
+		'sync.10.userEmail': 'cached@example.invalid',
 	};
 	class Base {
 		store() { return { getState: () => ({
@@ -66,10 +67,20 @@ function fixture() {
 			setSyncSchedulingPolicy: factory => events.push(factory ? 'attach-sync-policy' : 'detach-sync-policy'),
 			syncSchedulingPending: () => false,
 			cancelTimers: async () => events.push('cancel-sync-timers'),
-			syncTarget: () => ({ syncStarted: async () => true, synchronizer: async () => ({
-				cancel: async () => events.push('cancel-sync'),
-				waitForSyncToFinish: async () => events.push('drain-sync'),
-			}) }),
+			syncTarget: () => ({
+				fileApi: async () => ({ driver: () => ({ api: () => ({
+					userId: 'server-owner-uuid',
+					async loadSession() { profileCalls.push('loadSession'); },
+					async exec(method, path) {
+						profileCalls.push([method, path]);
+						return { email: settingValues['sync.target'] === 9 ? 'server@example.invalid' : 'cloud@example.invalid' };
+					},
+				}) }) }),
+				syncStarted: async () => true, synchronizer: async () => ({
+					cancel: async () => events.push('cancel-sync'),
+					waitForSyncToFinish: async () => events.push('drain-sync'),
+				}),
+			}),
 		} },
 		'./headless/runService': { runService: async operations => {
 			await operations.start(); operations.ready(); await operations.stop();
@@ -79,11 +90,11 @@ function fixture() {
 	const app = new Application();
 	app.stdout = () => events.push('ready');
 	app.database_ = { close: async () => events.push('close-db') };
-	return { app, events, Driver, clipper: instance, settingValues };
+	return { app, events, profileCalls, Driver, clipper: instance, settingValues };
 }
 
 test('headless application wires one owner: initialize, listen, drain sync/workers, flush and close', async () => {
-	const { app, events, clipper, settingValues } = fixture();
+	const { app, events, profileCalls, clipper, settingValues } = fixture();
 	app.headlessConfig_ = { databaseKey: Buffer.alloc(32) };
 	app.headlessInitialized_ = true;
 	await app.runHeadlessService();
@@ -97,12 +108,15 @@ test('headless application wires one owner: initialize, listen, drain sync/worke
 	const summary = await clipper.actions.headless().status();
 	assert.equal(summary.sync.pending, false);
 	assert.equal(summary.accountEmail, 'server@example.invalid');
+	assert.deepEqual(profileCalls, ['loadSession', ['GET', 'api/users/server-owner-uuid']]);
 	assert.equal(summary.decryption.disabledItemCount, 1);
 	assert.ok(!JSON.stringify(summary).includes('never-exposed'));
 	settingValues['sync.target'] = 10;
 	assert.equal((await clipper.actions.headless().status()).accountEmail, 'cloud@example.invalid');
+	assert.deepEqual(profileCalls.slice(-2), ['loadSession', ['GET', 'api/users/server-owner-uuid']]);
 	settingValues['sync.target'] = 6;
 	assert.equal((await clipper.actions.headless().status()).accountEmail, null);
+	assert.equal(profileCalls.length, 4);
 	await app.stopHeadless();
 	assert.equal(events.filter(value => value === 'close-db').length, 1);
 });
