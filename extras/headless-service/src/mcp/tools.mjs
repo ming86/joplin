@@ -244,14 +244,16 @@ export function createTools(service, { allowWrites = false } = {}) {
 	add('get_note', readDescription + ' This backward-compatible alias for read_note returns is_todo and todo_completed as numeric values.', readSchema, (args, signal) => readNote(args, signal, true));
 
 	if (allowWrites) {
-		add('create_note', 'Create a note in a readable notebook and return the created note id and details. If notebook_id and parentId are omitted, the configured default notebook or the only readable notebook is used.',
-			object({
-				title: { ...title, description: 'Note title.' },
-				body: { ...body, description: 'Note body in Markdown.' },
-				notebook_id: { ...id, description: 'Optional notebook id. Use list_notebooks to find ids.' },
-				parentId: { ...id, description: 'Legacy alias for notebook_id.' },
-				is_todo: { type: 'boolean', description: 'Set to true to create the note as a to-do.' },
-			}, ['title']), async (args, signal) => {
+		const createNoteSchema = object({
+			title: { ...title, description: 'Note title.' },
+			body: { ...body, description: 'Note body in Markdown.' },
+			notebook_id: { ...id, description: 'Notebook id. Provide this or parentId. Use list_notebooks to find ids.' },
+			parentId: { ...id, description: 'Legacy alias for notebook_id. Provide this or notebook_id.' },
+			is_todo: { type: 'boolean', description: 'Set to true to create the note as a to-do.' },
+		}, ['title']);
+		createNoteSchema.anyOf = [{ required: ['notebook_id'] }, { required: ['parentId'] }];
+		add('create_note', 'Create a note in a readable notebook. Provide notebook_id or the legacy parentId alias; use list_notebooks to find notebook ids.',
+			createNoteSchema, async (args, signal) => {
 				const note = await service.createNote(args, signal);
 				return {
 					id: note.id,
@@ -309,6 +311,12 @@ export function createTools(service, { allowWrites = false } = {}) {
 		async call(name, args = {}, signal) {
 			const tool = tools.get(name);
 			if (!tool) throw new ServiceError('unknown_tool');
+			// Keep the public schema and local validation aligned while returning the documented error code.
+			const missingCreateNoteDestination = name === 'create_note'
+				&& args && typeof args === 'object' && !Array.isArray(args)
+				&& !Object.hasOwn(args, 'notebook_id') && !Object.hasOwn(args, 'parentId')
+				&& validate({ ...tool.definition.inputSchema, anyOf: undefined }, args);
+			if (missingCreateNoteDestination) return toolResult({ error: { code: 'notebook_id_required' } }, true);
 			// Preserve the legacy empty_note_update response while validating all other fields normally.
 			const valid = validate(tool.definition.inputSchema, args)
 				|| (name === 'update_note' && args && typeof args === 'object' && !Array.isArray(args)
