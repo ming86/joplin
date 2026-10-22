@@ -209,6 +209,8 @@ export interface NewNotebook {
 }
 export interface Change { id: number; itemId: string; itemType?: number; type: number; createdTime?: number; }
 export interface JoplinBackend {
+    /** Read the fixed in-memory synchronization and decryption summary. */
+    status(signal?: AbortSignal): Promise<HeadlessStatusSummary>;
     listNotebooks(options?: PageOptions, signal?: AbortSignal): Promise<Page<Notebook>>;
     /** Return every safe notebook using the backend's capped pagination. */
     listAllNotebooks?(signal?: AbortSignal): Promise<Notebook[]>;
@@ -246,6 +248,89 @@ export interface SemanticStatus {
     lastReconciledAt?: number | null; providerRetryAt?: number | null;
     usage?: { inputTokens: number; preparedBytes: number; successfulRequests: number };
 }
+/** Sync report counters available in the fixed core status summary. */
+export interface SyncCounters {
+    /** Conflicts reported for generic items. */
+    itemConflict?: number;
+    /** Note conflicts reported by synchronization. */
+    noteConflict?: number;
+    /** Resource conflicts reported by synchronization. */
+    resourceConflict?: number;
+    /** Items created on the remote target. */
+    createRemote?: number;
+    /** Items updated on the remote target. */
+    updateRemote?: number;
+    /** Items deleted from the remote target. */
+    deleteRemote?: number;
+    /** Items created in the local database. */
+    createLocal?: number;
+    /** Items updated in the local database. */
+    updateLocal?: number;
+    /** Items deleted from the local database. */
+    deleteLocal?: number;
+    /** Total items scheduled for fetching. */
+    fetchingTotal?: number;
+    /** Items fetched so far. */
+    fetchingProcessed?: number;
+}
+/** The most recent synchronization report retained in core memory. */
+export interface SyncReportSummary {
+    /** Last Redux report state; it can remain `in_progress` after a sync completes. */
+    state: 'idle' | 'in_progress' | null;
+    /** Unix epoch milliseconds when the report began, or null before the first sync. */
+    startTime: number | null;
+    /** Unix epoch milliseconds when the report completed, or null if it has not completed. */
+    completedTime: number | null;
+    /** Available conflict, local/remote change, and fetch progress counters. */
+    counters: SyncCounters;
+    /** Number of sync errors, without exposing error text. */
+    errorCount: number;
+}
+/** Live synchronization activity and the latest in-memory report. */
+export interface SyncStatusSummary {
+    /** Whether a synchronization is running now. */
+    running: boolean;
+    /** Whether another synchronization is waiting to run. */
+    pending: boolean;
+    /** Last in-memory synchronization report, or null before the first report. */
+    report: SyncReportSummary | null;
+}
+/** The batch represented by the decryption worker's reported progress. */
+export interface DecryptionBatchSummary {
+	/** Zero-based item index within the reported batch. */
+    itemIndex: number;
+	/** Number of items in the reported batch. */
+    itemCount: number;
+}
+/** Live decryption worker state and the counts exposed by core. */
+export interface DecryptionStatusSummary {
+    /** Current worker state, or null when no state has been recorded. */
+    state: 'idle' | 'started' | null;
+	/** Last reported batch while the worker is started; a new run may still show the previous batch until progress arrives. */
+    batch: DecryptionBatchSummary | null;
+    /** Whether at least one master key is unavailable. */
+    missingMasterKey: boolean;
+    /** Number of records disabled by the decryption worker. */
+    disabledItemCount: number;
+}
+/** Fixed core process status fields that exclude note and error contents. */
+export interface HeadlessStatusSummary {
+    /** Unix epoch milliseconds when this summary was observed. */
+    observedAt: number;
+    /** Unix epoch milliseconds when this headless service process started. */
+    serviceStartedAt: number;
+    /** Current sync activity and the latest report. */
+    sync: SyncStatusSummary;
+    /** Current decryption worker state. */
+    decryption: DecryptionStatusSummary;
+}
+/** Account-bound status combining core process state with the local semantic index. */
+export interface AccountStatus extends HeadlessStatusSummary {
+    /** Account selected by the configured registry binding. */
+    accountId: string;
+    /** Semantic index state for this account. */
+    semantic: SemanticStatus;
+}
 export interface SearchInput extends PageOptions { query: string; mode?: 'keyword' | 'semantic' | 'hybrid'; notebookId?: string; }
 export interface SearchResult {
     accountId: string; requestedMode: 'keyword' | 'semantic' | 'hybrid'; executedMode: 'keyword' | 'semantic' | 'hybrid' | null;
@@ -272,7 +357,8 @@ export interface CreatedAccountNote extends AccountNote {
 }
 export interface AccountService {
     readonly accountId: string;
-    status(): { accountId: string; semantic: SemanticStatus };
+    /** Read account-bound semantic state and the core process status summary. */
+    status(signal?: AbortSignal): Promise<AccountStatus>;
     listNotebooks(options?: PageOptions, signal?: AbortSignal): Promise<Page<Notebook & { accountId: string }>>;
     /** Return all readable notebooks with counts from eligible note metadata. */
     listAllNotebooks(signal?: AbortSignal): Promise<NotebookListResult>;

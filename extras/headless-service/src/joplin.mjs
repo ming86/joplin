@@ -4,6 +4,13 @@ import { ServiceError, requireValue, identifier, pagination } from './errors.mjs
 const noteFields = 'id,parent_id,title,body,created_time,updated_time,is_todo,todo_completed,markup_language,encryption_applied,deleted_time,is_locked';
 /** Prevents an unexpectedly large account collection from becoming an unbounded scan. */
 const maximumPages = 50;
+/** Status counters exposed by the fixed headless status contract. */
+const statusCounterFields = [
+	'itemConflict', 'noteConflict', 'resourceConflict',
+	'createRemote', 'updateRemote', 'deleteRemote',
+	'createLocal', 'updateLocal', 'deleteLocal',
+	'fetchingTotal', 'fetchingProcessed',
+];
 
 export function endpoint(value, allowInsecureHttp = false) {
 	let url;
@@ -30,6 +37,63 @@ function noteResult(data) {
 function pageResult(data, map) {
 	requireValue(data && Array.isArray(data.items) && typeof data.has_more === 'boolean', 'invalid_backend_response');
 	return { items: data.items.map(map), hasMore: data.has_more };
+}
+
+/** Validate and allowlist the headless service's live sync/decryption summary. */
+function headlessStatusResult(data) {
+	const timestamp = value => Number.isSafeInteger(value) && value >= 0;
+	const nullableTimestamp = value => value === null || timestamp(value);
+	const count = value => Number.isSafeInteger(value) && value >= 0;
+	const reportStates = ['idle', 'in_progress', null];
+	requireValue(data && typeof data === 'object' && timestamp(data.observedAt) && timestamp(data.serviceStartedAt)
+		&& data.sync && typeof data.sync === 'object' && typeof data.sync.running === 'boolean' && typeof data.sync.pending === 'boolean'
+		&& data.decryption && typeof data.decryption === 'object'
+		&& (data.decryption.state === null || data.decryption.state === 'idle' || data.decryption.state === 'started')
+		&& typeof data.decryption.missingMasterKey === 'boolean' && count(data.decryption.disabledItemCount), 'invalid_backend_response');
+
+	let report = null;
+	if (data.sync.report !== null) {
+		const input = data.sync.report;
+		requireValue(input && typeof input === 'object' && reportStates.includes(input.state)
+			&& nullableTimestamp(input.startTime) && nullableTimestamp(input.completedTime)
+			&& input.counters && typeof input.counters === 'object' && !Array.isArray(input.counters)
+			&& count(input.errorCount), 'invalid_backend_response');
+		const counters = {};
+		for (const key of statusCounterFields) {
+			if (!Object.hasOwn(input.counters, key)) continue;
+			requireValue(count(input.counters[key]), 'invalid_backend_response');
+			counters[key] = input.counters[key];
+		}
+		report = {
+			state: input.state,
+			startTime: input.startTime,
+			completedTime: input.completedTime,
+			counters,
+			errorCount: input.errorCount,
+		};
+	}
+
+	let batch = null;
+	if (data.decryption.batch !== null) {
+		const input = data.decryption.batch;
+		requireValue(input && typeof input === 'object' && count(input.itemIndex) && count(input.itemCount), 'invalid_backend_response');
+		batch = { itemIndex: input.itemIndex, itemCount: input.itemCount };
+	}
+	return {
+		observedAt: data.observedAt,
+		serviceStartedAt: data.serviceStartedAt,
+		sync: {
+			running: data.sync.running,
+			pending: data.sync.pending,
+			report: report,
+		},
+		decryption: {
+			state: data.decryption.state,
+			batch,
+			missingMasterKey: data.decryption.missingMasterKey,
+			disabledItemCount: data.decryption.disabledItemCount,
+		},
+	};
 }
 
 /** Maps the supported note patch fields to the private Data API request shape. */
@@ -65,11 +129,11 @@ export function createJoplinClient(config) {
 	requireValue(Number.isSafeInteger(maxResponseBytes) && maxResponseBytes > 0 && maxResponseBytes <= 128 * 1024 * 1024);
 
 	/** Sends one authenticated Data API request and preserves uncertain write outcomes. */
-	async function request(route, params = {}, method = 'GET', body, signal, { allowEmptyPost = false } = {}) {
+	async function request(route, params = {}, method = 'GET', body, signal, { allowEmptyPost = false, writeOperation = method !== 'GET' } = {}) {
 		const url = new URL(route, baseUrl);
 		for (const [key, value] of Object.entries(params)) url.searchParams.set(key, String(value));
 		url.searchParams.set('token', token);
-		const writing = method !== 'GET';
+		const writing = writeOperation;
 		if (signal?.aborted) throw new ServiceError('request_cancelled');
 		const timeout = AbortSignal.timeout(timeoutMs);
 		const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
@@ -155,6 +219,10 @@ export function createJoplinClient(config) {
 	}
 
 	return Object.freeze({
+		/** Reads the core process's in-memory synchronization and decryption summary. */
+		async status(signal) {
+			return headlessStatusResult(await request('services/headless', {}, 'POST', { action: 'status' }, signal, { writeOperation: false }));
+		},
 		// Metadata-only browser enumeration. Body retrieval remains an explicit operation.
 		async listNoteSummaries(options = {}, signal) {
 			const { notebookId, ...page } = options;

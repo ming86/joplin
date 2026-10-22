@@ -109,7 +109,7 @@ export function createTools(service, { allowWrites = false } = {}) {
 		});
 	}
 
-	add('get_status', 'Return the bound account id and semantic index status, including its availability and indexing progress when provided by the configured engine.', object({}), () => service.status());
+	add('get_status', 'Return the bound account id and semantic index state, plus live sync details and the decryption worker state and last-reported batch.', object({}), (_args, signal) => service.status(signal));
 	add('list_notebooks', 'List all readable notebooks (folders) with their ids, titles, parent ids and note counts. The notebooks field contains the complete list; items and hasMore provide one page in the sidecar format. Use parent_id to reconstruct the notebook tree.', object({
 		page: { ...page, description: 'Page number for the items sidecar. The notebooks field always contains the complete list.' },
 		limit: { ...limit, description: 'Maximum number of notebooks in the items sidecar page.' },

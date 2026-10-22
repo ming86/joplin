@@ -63,7 +63,7 @@ async function refreshStatus() {
 	try {
 		const result = await api('/api/status'); if (e !== epoch) return;
 		accountStatus = result; $('connection').textContent = result.core === 'reachable' ? 'Client reachable' : 'Client unavailable';
-		$('service-status').textContent = `Semantic index: ${result.semantic.state}. Synchronization: not observed.`; controls();
+		$('service-status').textContent = `Semantic index: ${result.semantic.state}. Sync running: ${result.sync.running ? 'yes' : 'no'}; pending: ${result.sync.pending ? 'yes' : 'no'}.`; controls();
 	} catch (error) { if (authenticated) $('connection').textContent = 'Service unavailable'; }
 }
 async function notebooks(append = false) {

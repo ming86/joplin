@@ -12,7 +12,7 @@ export async function prepareSemanticCheck(runtime, waitMs) {
 		await runtime.engine.runOnce({ rescan, signal });
 		rescan = false;
 		if (signal.aborted) break;
-		const state = runtime.service.status().semantic;
+		const state = runtime.engine.status();
 		if (state.state === 'ready') return state;
 		if (state.state === 'unavailable') throw new ServiceError('semantic_unavailable');
 		try { await delay(250, undefined, { signal }); } catch { break; }

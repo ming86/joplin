@@ -42,9 +42,8 @@ export function createWebService({ account, namespace, allowWrites = false, rend
 	}
 	return Object.freeze({
 		async status(signal) {
-			let core = 'reachable';
-			try { await account.listNoteSummaries({ limit: 1 }, signal); } catch { core = 'unavailable'; }
-			return { ...account.status(), allowWrites, core, synchronization: 'not_observed', maxBodyBytes: MAX_BODY_BYTES };
+			const status = await account.status(signal);
+			return { ...status, allowWrites, core: 'reachable', maxBodyBytes: MAX_BODY_BYTES };
 		},
 		notebooks(options, signal) { return account.listNotebooks(pagination(options), signal); },
 		notes(options = {}, signal) {

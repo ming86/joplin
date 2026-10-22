@@ -108,7 +108,11 @@ export function createAccountRegistry(configurations, factories = {}) {
 			const semanticStatus = Object.freeze({ state: 'unavailable', reason: 'not_implemented', ...(config.embedding ? { embeddingSpaceId: config.embedding.space.id } : {}) });
 			return Object.freeze({
 				accountId,
-				status() { permit('read'); return { accountId, semantic: semantic()?.status() ?? semanticStatus }; },
+				async status(signal) {
+					permit('read');
+					const semanticState = semantic()?.status() ?? semanticStatus;
+					return { accountId, semantic: semanticState, ...await backend().status(signal) };
+				},
 				async listNotebooks(options, signal) {
 					permit('read'); const result = await backend().listNotebooks(options, signal);
 					return { ...result, items: result.items.map(identity) };
