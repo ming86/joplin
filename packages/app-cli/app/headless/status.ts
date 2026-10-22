@@ -90,11 +90,16 @@ export function summarizeHeadlessState(state: State, disabledItemCount: number, 
 	};
 }
 
-/** Register only the read-only status action; acquisition failures reject with a fixed public message. */
-export function createHeadlessActionApi(getState: ()=> State, getDisabledItemCount: ()=> Promise<number>) {
+/** Register the read-only status action and fixed additional headless actions. */
+export function createHeadlessActionApi(
+	getState: ()=> State,
+	getDisabledItemCount: ()=> Promise<number>,
+	extraActions: Record<string, unknown> = Object.create(null),
+) {
 	const serviceStartedAt = Date.now();
 	// Null prototypes keep inherited object methods outside the service/action allowlist.
-	const actions = Object.assign(Object.create(null), {
+	// Put status last so callers cannot replace the reserved action.
+	const actions = Object.assign(Object.create(null), extraActions, {
 		status: async () => {
 			try {
 				const disabledItemCount = await getDisabledItemCount();
