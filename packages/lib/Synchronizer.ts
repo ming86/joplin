@@ -59,6 +59,8 @@ export interface SyncStartOptions {
 	onProgress?: (report: ProgressReport)=> void;
 	context?: SyncContext;
 	syncSteps?: string[];
+	/** For headless server targets, check remote changes before a normal full sync and skip item sync when unchanged. */
+	remoteChangesOnly?: boolean;
 	throwOnError?: boolean;
 	saveContextHandler?: (newContext: SyncContext)=> void;
 }
@@ -412,12 +414,16 @@ export default class Synchronizer {
 
 		const lastContext = options.context ? options.context : {};
 
-		const syncSteps = options.syncSteps ? options.syncSteps : ['update_remote', 'delete_remote', 'delta'];
+		let syncSteps = options.syncSteps ? options.syncSteps : ['update_remote', 'delete_remote', 'delta'];
 
 		// The default is to log errors, but when testing it's convenient to be able to catch and verify errors
 		const throwOnError = options.throwOnError === true;
 
 		const syncTargetId = this.api().syncTargetId();
+		const checkRemoteChangesFirst = options.remoteChangesOnly && Setting.value('isHeadless') && this.isFullSync(syncSteps) &&
+			['joplinServer', 'joplinCloud', 'joplinServerSaml'].some(name => SyncTargetRegistry.nameToId(name) === syncTargetId);
+		const localChangeGeneration = checkRemoteChangesFirst ? BaseItem.localChangeGeneration() : null;
+		let skippedUnchangedPoll = false;
 
 		this.syncTargetIsLocked_ = false;
 		this.cancelling_ = false;
@@ -425,6 +431,40 @@ export default class Synchronizer {
 		const synchronizationId = time.unixMs().toString();
 
 		const outputContext = { ...lastContext };
+
+		/** Persist a completed delta page using the same compact context as ordinary sync. */
+		const saveDeltaContext = (context: PaginatedList['context']) => {
+			if (!options.saveContextHandler) return;
+			const deltaToSave = { ...context };
+			// These caches can be large and are rebuilt the next time synchronization starts.
+			delete deltaToSave.statsCache;
+			delete deltaToSave.statIdsCache;
+			options.saveContextHandler({ delta: deltaToSave });
+		};
+
+		/** Fetch a delta page without applying its items or advancing the saved context. */
+		const fetchDelta = async (context: unknown) => {
+			let localItemMetadata: Map<string, RemoteItemMetadata> = null;
+			const listResult: PaginatedList = await this.apiCall('delta', '', {
+				context: context,
+
+				// Drivers without a delta API compare the remote files with local synced IDs.
+				// Native delta drivers do not call either of these callbacks.
+				allItemIdsHandler: async () => BaseItem.syncedItemIds(syncTargetId),
+				allItemMetadataHandler: async () => {
+					localItemMetadata = await BaseItem.remoteItemMetadata(syncTargetId);
+					return localItemMetadata;
+				},
+				wipeOutFailSafe: Setting.value('sync.wipeOutFailSafe'),
+				logger: logger,
+			});
+
+			// A missing target can otherwise look like deletions when a directory moves or
+			// loses access during sync. Validate it after every fetched page, including polls.
+			// https://github.com/laurent22/joplin/issues/11489
+			await checkSyncTargetIsValid(this.api());
+			return { listResult, localItemMetadata };
+		};
 
 		this.progressReport_.startTime = time.unixMs();
 
@@ -577,6 +617,22 @@ export default class Synchronizer {
 				this.syncTargetIsLocked_ = true;
 				void this.cancel();
 			});
+
+			if (checkRemoteChangesFirst && !this.cancelling()) {
+				const { listResult } = await fetchDelta(lastContext.delta || null);
+				if (!listResult.items.length && !listResult.hasMore && !this.cancelling() && localChangeGeneration === BaseItem.localChangeGeneration()) {
+					// Only an empty terminal page is safe to consume before outgoing changes.
+					// Preparation can itself change share metadata or E2EE flags; those writes
+					// must take the ordinary upload path even when the remote page is empty.
+					saveDeltaContext(listResult.context);
+					outputContext.delta = listResult.context;
+					syncSteps = [];
+					skippedUnchangedPoll = true;
+					logger.info('Remote poll found no changes; skipping item synchronization');
+				}
+				// Otherwise discard the probe cursor. Outgoing conflict handling must run
+				// before applying remote changes from the original saved context.
+			}
 
 			// ========================================================================
 			// 2. DELETE_REMOTE
@@ -900,36 +956,7 @@ export default class Synchronizer {
 				while (true) {
 					if (this.cancelling() || hasCancelled) break;
 
-					let localItemMetadata: Map<string, RemoteItemMetadata> = null;
-					const listResult: PaginatedList = await this.apiCall('delta', '', {
-						context: context,
-
-						// allItemIdsHandler() provides a way for drivers that don't have a delta API to
-						// still provide delta functionality by comparing the items they have to the items
-						// the client has. Very inefficient but that's the only possible workaround.
-						// It's a function so that it is only called if the driver needs these IDs. For
-						// drivers with a delta functionality it's a noop.
-						allItemIdsHandler: async () => {
-							return BaseItem.syncedItemIds(syncTargetId);
-						},
-
-						// This is only used by the basic delta
-						allItemMetadataHandler: async () => {
-							localItemMetadata = await BaseItem.remoteItemMetadata(syncTargetId);
-							return localItemMetadata;
-						},
-
-						wipeOutFailSafe: Setting.value('sync.wipeOutFailSafe'),
-
-						logger: logger,
-					});
-
-					// Ensure that if the sync target directory has changed, lost access, or has been purged by some external process while the sync is running, that a failsafe error is triggered where info.json and .sync/version.txt can no longer be found
-					// This check is more reliable than checking the count of items alone, as it is possible for sync items become segmented between 2 directories, possibly by the target directory changing during sync
-					// This scenario is possible with OneDrive sync, see https://github.com/laurent22/joplin/issues/11489
-					// This check while the sync is running is only necessary for the delta step of the sync, as this is where local deletions are calculated by comparing the local database and the sync target. These deletions are driven by the listResult field to determine which remote items exist
-					// As long as we check that info.json still exists after each time the listResult field is repopulated, there should not be a risk of unwanted deletions when failsafe is enabled, unless the target directory is directly manipulated by the user
-					await checkSyncTargetIsValid(this.api());
+					const { listResult, localItemMetadata } = await fetchDelta(context);
 
 					const supportsDeltaWithItems = getSupportsDeltaWithItems(listResult);
 
@@ -1164,14 +1191,7 @@ export default class Synchronizer {
 					// items being synced twice as an update. If the local and remote items are identical
 					// the update will simply be skipped.
 					if (!hasCancelled) {
-						if (options.saveContextHandler) {
-							const deltaToSave = { ...listResult.context };
-							// Remove these two variables because they can be large and can be rebuilt
-							// the next time the sync is started.
-							delete deltaToSave.statsCache;
-							delete deltaToSave.statIdsCache;
-							options.saveContextHandler({ delta: deltaToSave });
-						}
+						saveDeltaContext(listResult.context);
 
 						if (!listResult.hasMore) {
 							newDeltaContext = listResult.context;
@@ -1314,7 +1334,7 @@ export default class Synchronizer {
 		// If there are any un-synced outgoing changes made up to the point just before the sync completes, then trigger the sync again to reduce the likelihood
 		// that the user will close or minimise the app when there are un-synced changes, because the sync is reported as completed.
 		// IMPORTANT: This must be the very last step in the sync, to avoid any window to allow an un-synced change to get missed
-		if (!hasErrors && !hasCaughtError && !cancelledBeforeClearedState && !this.cancelling()) {
+		if (!skippedUnchangedPoll && !hasErrors && !hasCaughtError && !cancelledBeforeClearedState && !this.cancelling()) {
 			const result = await BaseItem.itemsThatNeedSync(syncTargetId, 100, () => this.cancelling());
 
 			if (result.items.length > 0) {
