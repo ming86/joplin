@@ -21,11 +21,10 @@ export async function openMcpRuntime(filename, { background = true, transport = 
 	const config = loaded.semanticConfig;
 	if (config === undefined || config.enabled === false) return { ...loaded, close: async () => {} };
 	requireValue(config && config.enabled === true && Object.keys(config).every(key => ['enabled', 'sqliteModule', 'keyFile', 'embedding', 'chunks', 'pollMs', 'rescanMs', 'batchSize', 'rebuild'].includes(key)), 'invalid_semantic_configuration');
-	requireValue(config.embedding && Object.keys(config.embedding).every(key => ['protocol', 'baseUrl', 'model', 'remoteProcessing', 'allowInsecureHttp', 'apiKeyFile', 'space', 'timeoutMs', 'maxInputBytes', 'maxBatch', 'maxResponseBytes'].includes(key)), 'invalid_embedding_configuration');
+	requireValue(config.embedding && Object.keys(config.embedding).every(key => ['protocol', 'baseUrl', 'model', 'remoteProcessing', 'allowInsecureHttp', 'apiKeyFile', 'space', 'timeoutMs', 'maxBatch'].includes(key)), 'invalid_embedding_configuration');
 	requireValue(config.rebuild === undefined || typeof config.rebuild === 'boolean');
 	const account = loaded.accountConfig;
 	const chunks = chunkSettings(config.chunks);
-	requireValue(chunks.maxBytes + Buffer.byteLength(account.embedding.space.documentPrefix ?? '') <= (config.embedding.maxInputBytes ?? 8192), 'chunk_exceeds_embedding_limit');
 	requireValue((config.batchSize ?? 16) <= (config.embedding.maxBatch ?? 16), 'embedding_batch_too_large');
 	let engine; let close = async () => {};
 	try {

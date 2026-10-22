@@ -10,14 +10,12 @@ export function createEmbeddingTransport(config, fetchImpl = fetch) {
 	requireValue(typeof config.remoteProcessing === 'boolean' && (local || config.remoteProcessing), 'remote_processing_not_allowed');
 	requireValue(typeof config.model === 'string' && config.model.length > 0);
 	const timeoutMs = config.timeoutMs ?? 30000;
-	const maxInputBytes = config.maxInputBytes ?? 8192;
 	const maxBatch = config.maxBatch ?? 16;
-	const maxResponseBytes = config.maxResponseBytes ?? 16 * 1024 * 1024;
-	for (const [n, maximum] of [[timeoutMs, 120000], [maxInputBytes, 1048576], [maxBatch, 128], [maxResponseBytes, 64 * 1024 * 1024]]) requireValue(Number.isSafeInteger(n) && n > 0 && n <= maximum);
+	for (const [n, maximum] of [[timeoutMs, 120000], [maxBatch, 128]]) requireValue(Number.isSafeInteger(n) && n > 0 && n <= maximum);
 	requireValue(config.apiKey === undefined || (typeof config.apiKey === 'string' && config.apiKey.length > 0 && !/[\r\n]/.test(config.apiKey)));
 	return async (input, _purpose, signal) => {
 		requireValue(Array.isArray(input) && input.length > 0 && input.length <= maxBatch, 'embedding_batch_too_large');
-		requireValue(input.every(text => typeof text === 'string' && text.length > 0 && Buffer.byteLength(text) <= maxInputBytes), 'embedding_input_too_large');
+		requireValue(input.every(text => typeof text === 'string' && text.length > 0));
 		if (signal?.aborted) throw new ServiceError('request_cancelled');
 		const combined = AbortSignal.any([AbortSignal.timeout(timeoutMs), ...(signal ? [signal] : [])]);
 		try {
@@ -34,14 +32,12 @@ export function createEmbeddingTransport(config, fetchImpl = fetch) {
 				if (Number.isFinite(delay) && delay > 0) error.retryAfterMs = Math.min(delay, 24 * 3600000);
 				throw error;
 			}
-			const parts = []; let size = 0;
+			const parts = [];
 			if (response.body) {
 				const reader = response.body.getReader();
 				try {
 					while (true) {
 						const { done, value } = await reader.read(); if (done) break;
-						size += value.length;
-						if (size > maxResponseBytes) { await reader.cancel(); throw new ServiceError('embedding_response_too_large'); }
 						parts.push(Buffer.from(value));
 					}
 				} finally { reader.releaseLock(); }

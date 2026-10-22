@@ -22,7 +22,6 @@
       "allowInsecureHttp": true,
       "apiKeyFile": "/run/secrets/ovms-embedding-api-token",
       "timeoutMs": 30000,
-      "maxInputBytes": 8192,
       "maxBatch": 16,
       "space": {
         "id": "granite-embedding-311m-multilingual-r2-384-v1",
