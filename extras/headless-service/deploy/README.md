@@ -36,7 +36,7 @@ Provide the MCP container with a private JSON config and separate private files 
   "accountId": "personal",
   "baseUrl": "http://127.0.0.1:41190",
   "apiTokenFile": "/run/secrets/joplin-api-token",
-  "allowWrites": false,
+  "allowWrites": true,
   "listenHost": "0.0.0.0",
   "listenPort": 41191,
   "bearerTokenFile": "/run/secrets/joplin-mcp-bearer",
@@ -44,7 +44,7 @@ Provide the MCP container with a private JSON config and separate private files 
 }
 ```
 
-Set the core profile's `api.port` to `41190` so it matches the MCP `baseUrl`. The MCP listener uses `0.0.0.0` inside the shared pod so Podman can publish its port on the VPS loopback interface. `allowedOrigins` is an exact allowlist for requests that include an `Origin` header; it does not authenticate clients. `allowWrites` is false in the generated config. No semantic-search configuration is required for this deployment. See [MCP.md](../MCP.md) for the full transport and configuration behavior.
+Set the core profile's `api.port` to `41190` so it matches the MCP `baseUrl`. The MCP listener uses `0.0.0.0` inside the shared pod so Podman can publish its port on the VPS loopback interface. `allowedOrigins` is an exact allowlist for requests that include an `Origin` header; it does not authenticate clients. The generated config sets `allowWrites` to true, enabling all five write tools and exposing 12 tools in total for Desktop parity in this deployment. No semantic-search configuration is required for this deployment. See [MCP.md](../MCP.md) for the full transport and configuration behavior.
 
 ## Health and deployment scope
 
