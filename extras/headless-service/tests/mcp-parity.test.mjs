@@ -243,8 +243,8 @@ test('MCP write catalog carries mutation annotations and rejects unsafe note sta
 		const names = new Set(tools.map(tool => tool.name));
 		for (const name of ['get_status', 'list_notebooks', 'list_notes', 'search_notes', 'semantic_search_notes', 'read_note', 'get_note', 'list_tags']) assert.ok(names.has(name), name);
 		for (const name of ['create_note', 'update_note', 'delete_note', 'create_notebook', 'manage_tags', 'update_notebook', 'delete_notebook', 'create_tag', 'rename_tag', 'create_attachment', 'update_attachment']) assert.ok(!names.has(name), name);
-		for (const name of ['list_note_revisions', 'read_note_revision', 'compare_note_revisions', 'list_note_attachments', 'read_attachment']) assert.ok(names.has(name), name);
-		assert.equal(tools.length, 13);
+		for (const name of ['list_note_revisions', 'read_note_revision', 'compare_note_revisions', 'list_conflicts', 'read_conflict', 'list_note_attachments', 'read_attachment']) assert.ok(names.has(name), name);
+		assert.equal(tools.length, 15);
 	} finally { readonly.close(); }
 
 	const writable = createSession();
@@ -252,7 +252,7 @@ test('MCP write catalog carries mutation annotations and rejects unsafe note sta
 	try {
 		const tools = (await writable.handle(request(2, 'tools/list'))).result.tools;
 		const byName = new Map(tools.map(tool => [tool.name, tool]));
-		assert.equal(tools.length, 24);
+		assert.equal(tools.length, 26);
 		assert.deepEqual(byName.get('update_note').inputSchema.required, ['id', 'base_revision_id']);
 		assert.equal(byName.get('update_note').annotations.destructiveHint, true);
 		assert.equal(byName.get('delete_note').annotations.destructiveHint, true);
@@ -303,7 +303,7 @@ test('the MCP catalog requires a note revision and preserves embedded attachment
 	await ready(session);
 	try {
 		const tools = (await session.handle(request(2, 'tools/list'))).result.tools;
-		assert.equal(tools.length, 24);
+		assert.equal(tools.length, 26);
 		const readSchema = tools.find(tool => tool.name === 'read_note').inputSchema;
 		const updateSchema = tools.find(tool => tool.name === 'update_note').inputSchema;
 		assert.ok(readSchema.properties.id);
