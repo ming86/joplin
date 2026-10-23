@@ -92,6 +92,9 @@ test('catalog publishes a fixed file-input object and object output variants', a
 	assert.deepEqual(update._meta, { 'openai/fileParams': ['body_file'] });
 	assert.deepEqual(Object.keys(update.inputSchema.properties.body_file.properties), ['download_url', 'file_id', 'mime_type', 'file_name']);
 	assert.deepEqual(update.inputSchema.properties.body_file.required, ['download_url', 'file_id']);
+	assert.match(update.inputSchema.properties.body_file.description, /body_size_bytes and body_sha256.*edited local file byte count.*SHA-256/);
+	assert.match(update.description, /File-update acknowledgments include body_length, body_size_bytes and body_sha256/);
+	assert.match(update.description, /edited local file byte count.*SHA-256/);
 	assert.equal(update.inputSchema.type, 'object');
 	assert.deepEqual(update.inputSchema.required, ['id', 'base_revision_id']);
 	assert.equal(update.inputSchema.additionalProperties, false);
@@ -99,7 +102,7 @@ test('catalog publishes a fixed file-input object and object output variants', a
 	assert.equal(Object.hasOwn(update.inputSchema, 'anyOf'), false);
 	for (const name of ['read_note', 'get_note']) {
 		const definition = tools.list().find(tool => tool.name === name);
-		assert.deepEqual(definition.inputSchema.properties.output.enum, ['inline', 'file']);
+		assert.deepEqual(definition.inputSchema.properties.output.enum, ['inline', 'file', 'metadata']);
 		assert.equal(definition.outputSchema.type, 'object');
 		const success = definition.outputSchema.anyOf[0];
 		assert.equal(success.type, 'object');
@@ -112,6 +115,16 @@ test('catalog publishes a fixed file-input object and object output variants', a
 		for (const field of [...success.required, ...file.required]) assert.ok(Object.hasOwn(value, field), field);
 		for (const field of success.properties.file.required) assert.ok(Object.hasOwn(value.file, field), field);
 	}
+	const updateOutput = update.outputSchema.anyOf[0];
+	assert.deepEqual(updateOutput.required, ['id', 'updated_time', 'revision_id', 'previous_revision_id', 'changed']);
+	for (const field of ['body_length', 'body_size_bytes', 'body_sha256']) assert.ok(updateOutput.properties[field], field);
+	assert.deepEqual(updateOutput.anyOf, [
+		{ not: { anyOf: [{ required: ['body_length'] }, { required: ['body_size_bytes'] }, { required: ['body_sha256'] }] } },
+		{ required: ['body_length', 'body_size_bytes', 'body_sha256'] },
+	]);
+	assert.match(updateOutput.properties.body_length.description, /UTF-16/);
+	assert.equal(updateOutput.properties.body_size_bytes.type, 'integer');
+	assert.equal(updateOutput.properties.body_sha256.pattern, '^[a-f0-9]{64}$');
 });
 
 test('fixed update input rejects empty changes and accepts metadata-only changes', async t => {
@@ -130,8 +143,9 @@ test('fixed update input rejects empty changes and accepts metadata-only changes
 	}
 });
 
-test('file body update forwards exact downloaded text and native revision with compact output', async t => {
-	const body = '\uFEFF# edited 🔧\r\n' + 'complete body\n'.repeat(200000);
+test('file body update returns measurements for the saved body, not the downloaded text', async t => {
+	const submittedBody = '\uFEFF# submitted 🔧\r\n' + 'complete body\n'.repeat(200000);
+	const savedBody = '\uFEFF# returned native snapshot 🪵\r\nSaved complete body\n';
 	const signal = new AbortController().signal;
 	let saved;
 	const { tools } = fixture(t, {
@@ -139,13 +153,66 @@ test('file body update forwards exact downloaded text and native revision with c
 			assert.equal(id, noteId);
 			assert.equal(receivedSignal, signal);
 			saved = changes;
-			return { ...note, body, updated_time: 20, revision_id: nextRevisionId, previous_revision_id: revisionId, changed: true };
+			return { ...note, body: savedBody, updated_time: 20, revision_id: nextRevisionId, previous_revision_id: revisionId, changed: true };
 		},
-	}, { readBodyFile: async (file, receivedSignal) => { assert.deepEqual(file, bodyFile); assert.equal(receivedSignal, signal); return body; } });
+	}, { readBodyFile: async (file, receivedSignal) => { assert.deepEqual(file, bodyFile); assert.equal(receivedSignal, signal); return submittedBody; } });
 	const result = await tools.call('update_note', { id: noteId, base_revision_id: revisionId, body_file: bodyFile, title: 'Edited', todo_completed: true }, signal);
-	assert.deepEqual(saved, { base_revision_id: revisionId, body, title: 'Edited', todo_completed: true });
-	assert.deepEqual(result.structuredContent, { id: noteId, updated_time: 20, revision_id: nextRevisionId, previous_revision_id: revisionId, changed: true });
-	assert.equal(result.content[0].text.includes('complete body'), false);
+	assert.deepEqual(saved, { base_revision_id: revisionId, body: submittedBody, title: 'Edited', todo_completed: true });
+	assert.deepEqual(result.structuredContent, {
+		id: noteId, updated_time: 20, revision_id: nextRevisionId, previous_revision_id: revisionId, changed: true,
+		body_length: savedBody.length,
+		body_size_bytes: Buffer.byteLength(savedBody, 'utf8'),
+		body_sha256: createHash('sha256').update(savedBody, 'utf8').digest('hex'),
+	});
+	assert.notEqual(result.structuredContent.body_sha256, createHash('sha256').update(submittedBody, 'utf8').digest('hex'));
+	assert.equal(result.content[0].text.includes('Saved complete body'), false);
+});
+
+test('file body no-op acknowledgments measure the returned unchanged saved body', async t => {
+	const { tools } = fixture(t, {
+		async updateNoteWithRevision(_id, changes) {
+			assert.deepEqual(changes, { base_revision_id: revisionId, body: note.body });
+			return { ...note, changed: false };
+		},
+	}, { readBodyFile: async () => note.body });
+	const result = await tools.call('update_note', { id: noteId, base_revision_id: revisionId, body_file: bodyFile });
+	assert.equal(result.isError, false);
+	assert.deepEqual(result.structuredContent, {
+		id: noteId, updated_time: 10, revision_id: revisionId, previous_revision_id: null, changed: false,
+		body_length: note.body.length,
+		body_size_bytes: Buffer.byteLength(note.body, 'utf8'),
+		body_sha256: createHash('sha256').update(note.body, 'utf8').digest('hex'),
+	});
+});
+
+test('file body updates report unknown outcome when the saved snapshot has no usable body', async t => {
+	let writes = 0;
+	const savedSnapshots = [
+		{ ...note, body: undefined },
+		{ ...note, body: null },
+		{ ...note, body: Buffer.from('not a decoded body') },
+	];
+	const { tools } = fixture(t, {
+		async updateNoteWithRevision() {
+			return savedSnapshots[writes++];
+		},
+	}, { readBodyFile: async () => 'submitted body' });
+	for (let index = 0; index < savedSnapshots.length; index++) {
+		const result = await tools.call('update_note', { id: noteId, base_revision_id: revisionId, body_file: bodyFile });
+		assert.equal(result.isError, true);
+		assert.equal(result.structuredContent.error.code, 'write_outcome_unknown');
+		assert.equal(result.structuredContent.error.outcomeUnknown, true);
+		assert.match(result.structuredContent.error.action, /may have committed/);
+	}
+	assert.equal(writes, savedSnapshots.length);
+});
+
+test('non-file update acknowledgments retain their original compact fields', async t => {
+	const { tools } = fixture(t);
+	const result = await tools.call('update_note', { id: noteId, base_revision_id: revisionId, title: 'Edited' });
+	assert.deepEqual(result.structuredContent, {
+		id: noteId, updated_time: 20, revision_id: nextRevisionId, previous_revision_id: revisionId, changed: true,
+	});
 });
 
 test('body_file conflicts never download or save, while inline body precedence is retained', async t => {

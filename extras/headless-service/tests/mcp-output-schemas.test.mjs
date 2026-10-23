@@ -199,7 +199,10 @@ test('every enabled catalog tool publishes an output schema without changing inp
 		assert.deepEqual(createNote.required, ['id', 'title', 'notebook_id']);
 		assert.equal(createNote.additionalProperties, false);
 		const updateNote = writableByName.get('update_note').outputSchema.anyOf[0];
-		assert.deepEqual(Object.keys(updateNote.properties), ['id', 'updated_time', 'revision_id', 'previous_revision_id', 'changed']);
+		assert.deepEqual(Object.keys(updateNote.properties), [
+			'id', 'updated_time', 'revision_id', 'previous_revision_id', 'changed',
+			'body_length', 'body_size_bytes', 'body_sha256',
+		]);
 		assert.deepEqual(updateNote.required, ['id', 'updated_time', 'revision_id', 'previous_revision_id', 'changed']);
 		assert.equal(updateNote.additionalProperties, false);
 	} finally {

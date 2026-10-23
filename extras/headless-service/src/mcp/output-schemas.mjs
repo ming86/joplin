@@ -78,11 +78,13 @@ const searchResult = exactObject({
 	provenance: { type: 'string', enum: ['keyword', 'semantic', 'hybrid'] }, score: number, semanticExcerpt: string,
 	chunk: exactObject({ ordinal: number, start: { type: 'number', description: 'Start offset in UTF-8 bytes.' }, end: { type: 'number', description: 'End offset in UTF-8 bytes.' }, offsetUnit: { const: 'utf8-byte', type: 'string' } }),
 }, ['id', 'notebook_id', 'snippet']);
-/** Body slicing fields common to read_note and its numeric legacy alias. */
+/** Body output fields shared by read_note and its numeric legacy alias. */
 const readProperties = {
 	...noteProperties, revision_id: string, previous_revision_id: nullableString, changed: boolean,
 	notebook_id: nullableString, notebook_title: nullableString, tags: array(string),
 	body_length: { type: 'number', description: 'Full body length in UTF-16 code units.' },
+	body_size_bytes: { type: 'integer', minimum: 0, description: 'Full body size in UTF-8 bytes.' },
+	body_sha256: { type: 'string', pattern: '^[a-f0-9]{64}$', description: 'SHA-256 of the exact note body encoded as UTF-8.' },
 	body_offset: { type: 'number', description: 'Start offset of the returned body in UTF-16 code units.' },
 	body_returned_chars: { type: 'number', description: 'Returned body length in UTF-16 code units.' },
 	has_more: boolean,
@@ -93,19 +95,31 @@ const readProperties = {
 };
 /** Required fields synthesized by the read tool in addition to the service identity. */
 const readRequired = ['id', 'accountEmail', 'revision_id', 'body', 'notebook_id', 'notebook_title', 'tags', 'is_todo', 'todo_completed', 'body_length', 'body_offset', 'body_returned_chars', 'has_more', 'offset', 'nextOffset', 'totalLength', 'offsetUnit'];
+/** Metadata-only reads require the same revision and note context plus full-body measurements. */
+const metadataReadRequired = ['id', 'accountEmail', 'revision_id', 'notebook_id', 'notebook_title', 'tags', 'is_todo', 'todo_completed', 'body_length', 'body_size_bytes', 'body_sha256'];
 /** File metadata describes the complete immutable UTF-8 snapshot; bytes live in the resource block. */
 const noteFile = exactObject({ uri: string, filename: string, mime_type: string,
 	size: { type: 'integer', minimum: 0, description: 'Full UTF-8 file size in bytes.' },
 	sha256: { type: 'string', pattern: '^[a-f0-9]{64}$' }, expires_at: { type: 'string', format: 'date-time' },
 });
-/** Keep the success contract an object while requiring either inline body fields or file metadata. */
+/** Keep the success contract an object while describing inline, file and metadata-only results separately. */
 function noteReadSchema(legacy = false) {
 	return {
 		...object({ ...readProperties, ...(legacy ? {} : { is_todo: boolean, todo_completed: boolean }), file: noteFile },
 			['id', 'accountEmail', 'revision_id', 'notebook_id', 'notebook_title', 'tags', 'is_todo', 'todo_completed']),
 		anyOf: [
-			{ required: readRequired, not: { required: ['file'] } },
-			{ required: ['file'], not: { required: ['body'] } },
+			{
+				required: readRequired,
+				not: { required: ['file'] },
+			},
+			{
+				required: ['file'],
+				not: { required: ['body'] },
+			},
+			{
+				required: metadataReadRequired,
+				not: { anyOf: [{ required: ['body'] }, { required: ['file'] }] },
+			},
 		],
 	};
 }
@@ -134,7 +148,18 @@ const coreOutputSchemas = {
 	read_note: noteReadSchema(),
 	get_note: noteReadSchema(true),
 	create_note: exactObject({ id: string, title: string, notebook_id: string }),
-	update_note: exactObject({ id: string, updated_time: time, revision_id: string, previous_revision_id: nullableString, changed: boolean }),
+	update_note: {
+		...exactObject({
+			id: string, updated_time: time, revision_id: string, previous_revision_id: nullableString, changed: boolean,
+			body_length: { type: 'number', description: 'Saved body length in UTF-16 code units; included for body_file updates.' },
+			body_size_bytes: { type: 'integer', minimum: 0, description: 'Saved body size in UTF-8 bytes; included for body_file updates.' },
+			body_sha256: { type: 'string', pattern: '^[a-f0-9]{64}$', description: 'SHA-256 of the saved body encoded as UTF-8; included for body_file updates.' },
+		}, ['id', 'updated_time', 'revision_id', 'previous_revision_id', 'changed']),
+		anyOf: [
+			{ not: { anyOf: [{ required: ['body_length'] }, { required: ['body_size_bytes'] }, { required: ['body_sha256'] }] } },
+			{ required: ['body_length', 'body_size_bytes', 'body_sha256'] },
+		],
+	},
 	delete_note: object({ id: string, trashed: { type: 'boolean', const: true } }),
 	create_notebook: object({
 		...notebook.properties,
