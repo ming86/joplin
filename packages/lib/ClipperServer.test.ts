@@ -1,4 +1,5 @@
 import ClipperServer, { isAllowedPairingOrigin, isPairingPath } from './ClipperServer';
+import Folder from './models/Folder';
 import Setting from './models/Setting';
 import { setupDatabaseAndSynchronizer, switchClient } from './testing/test-utils';
 
@@ -78,6 +79,52 @@ describe('ClipperServer', () => {
 				code: 'validation_error',
 				error: 'Validation error: title must be 4096 characters or less',
 			});
+		} finally {
+			await server.stop();
+		}
+	});
+
+	it('should preserve UTF-8 characters split across HTTP request chunks', async () => {
+		await setupDatabaseAndSynchronizer(1);
+		await switchClient(1);
+
+		const server = new ClipperServer();
+		let port: number = null;
+		server.setDispatch(action => {
+			if (typeof action.port === 'number') port = action.port;
+		});
+		server.initialize();
+		await server.start({ returnWhenListening: true });
+
+		try {
+			const token = Setting.value('api.token');
+			const path = `/notes${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+			const folder = await Folder.save({ title: 'UTF-8 chunk boundary folder' });
+			const body = JSON.stringify({ parent_id: folder.id, title: 'UTF-8 chunk boundary', body: 'before 😀 after' });
+			const bytes = Buffer.from(body, 'utf8');
+			const emojiStart = bytes.indexOf(Buffer.from('😀', 'utf8'));
+			const splitAt = emojiStart + 1;
+			const response = await new Promise<{ statusCode: number; body: string }>((resolve, reject) => {
+				const request = require('http').request({
+					host: '127.0.0.1',
+					port,
+					path,
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+				}, (res: import('http').IncomingMessage) => {
+					const chunks: string[] = [];
+					res.setEncoding('utf8');
+					res.on('data', (chunk: string) => chunks.push(chunk));
+					res.on('end', () => resolve({ statusCode: res.statusCode, body: chunks.join('') }));
+				});
+				request.on('error', reject);
+				request.flushHeaders();
+				request.write(bytes.subarray(0, splitAt));
+				setTimeout(() => request.end(bytes.subarray(splitAt)), 10);
+			});
+
+			expect(response.statusCode).toBe(200);
+			expect(JSON.parse(response.body).body).toBe('before 😀 after');
 		} finally {
 			await server.stop();
 		}

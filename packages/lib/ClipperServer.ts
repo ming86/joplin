@@ -273,9 +273,12 @@ export default class ClipperServer {
 					});
 				} else {
 					if (request.method === 'POST' || request.method === 'PUT') {
+						// Decode incrementally so multibyte characters split across request chunks stay intact.
+						// ClipperServer.test.ts splits an emoji across writes; per-chunk Buffer coercion corrupts it.
+						request.setEncoding('utf8');
 						let body = '';
 
-						request.on('data', (data: Buffer | string) => {
+						request.on('data', (data: string) => {
 							body += data;
 						});
 
