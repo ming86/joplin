@@ -145,6 +145,16 @@ export interface NoteRevisionComparison {
     title_diff: string;
     /** Unified patch for body changes. */
     body_diff: string;
+    /**
+     * Logical lines in the complete reconstructed source body. CRLF, LF, and lone CR each
+     * count once; trailing breaks add an empty final line, and an empty body has one line.
+     */
+    from_body_total_line_count: number;
+    /**
+     * Logical lines in the complete reconstructed target body. CRLF, LF, and lone CR each
+     * count once; trailing breaks add an empty final line, and an empty body has one line.
+     */
+    to_body_total_line_count: number;
     /** Tracked metadata changes. */
     metadata_changes: NoteRevisionMetadataChange[];
 }

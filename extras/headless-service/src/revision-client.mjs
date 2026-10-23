@@ -97,6 +97,8 @@ function comparisonResult(data, noteId, fromRevisionId, toRevisionId) {
 		&& typeof data.to_revision_id === 'string' && /^[a-f0-9]{32}$/.test(data.to_revision_id)
 		&& (toRevisionId === undefined || data.to_revision_id === toRevisionId)
 		&& typeof data.title_diff === 'string' && typeof data.body_diff === 'string'
+		&& Number.isSafeInteger(data.from_body_total_line_count) && data.from_body_total_line_count >= 1
+		&& Number.isSafeInteger(data.to_body_total_line_count) && data.to_body_total_line_count >= 1
 		&& typeof data.to_current === 'boolean'
 		&& Array.isArray(data.metadata_changes), 'invalid_backend_response');
 	return {
@@ -106,6 +108,8 @@ function comparisonResult(data, noteId, fromRevisionId, toRevisionId) {
 		to_current: data.to_current,
 		title_diff: data.title_diff,
 		body_diff: data.body_diff,
+		from_body_total_line_count: data.from_body_total_line_count,
+		to_body_total_line_count: data.to_body_total_line_count,
 		metadata_changes: data.metadata_changes.map(metadataChange),
 	};
 }

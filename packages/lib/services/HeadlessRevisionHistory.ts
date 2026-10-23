@@ -98,6 +98,16 @@ export interface CompareNoteRevisionsResult {
 	title_diff: string;
 	/** Unified diff for the body, or an empty string if unchanged. */
 	body_diff: string;
+	/**
+	 * Logical lines in the complete reconstructed source body. CRLF, LF, and lone CR each
+	 * count once; trailing breaks add an empty final line, and an empty body has one line.
+	 */
+	from_body_total_line_count: number;
+	/**
+	 * Logical lines in the complete reconstructed target body. CRLF, LF, and lone CR each
+	 * count once; trailing breaks add an empty final line, and an empty body has one line.
+	 */
+	to_body_total_line_count: number;
 	/** Sorted changes to native tracked metadata. */
 	metadata_changes: MetadataChange[];
 }
@@ -170,6 +180,12 @@ const textDiff = (field: string, from: string, to: string, fromLabel: string, to
 	if (from === to) return '';
 	return createPatch(field, from, to, fromLabel, toLabel, { context: 3 });
 };
+
+/**
+ * Count breaks plus one line; CRLF, LF, and lone CR each count once. An empty body has
+ * one line, and trailing breaks add a final empty line.
+ */
+const totalLineCount = (body: string): number => (body.match(/\r\n|\n|\r/g)?.length ?? 0) + 1;
 
 /** Represent a metadata field while preserving the difference between absent and null. */
 const metadataValue = (metadata: Record<string, unknown>, field: string): MetadataValue => {
@@ -279,6 +295,8 @@ export default class HeadlessRevisionHistory {
 			to_current: request.to_revision_id === undefined,
 			title_diff: textDiff('title', from.title, to.title, `revision ${request.from_revision_id}`, request.to_revision_id ? `revision ${request.to_revision_id}` : 'current note'),
 			body_diff: textDiff('body', from.body, to.body, `revision ${request.from_revision_id}`, request.to_revision_id ? `revision ${request.to_revision_id}` : 'current note'),
+			from_body_total_line_count: totalLineCount(from.body),
+			to_body_total_line_count: totalLineCount(to.body),
 			metadata_changes: compareMetadata(from.metadata, to.metadata),
 		};
 	}
