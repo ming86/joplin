@@ -27,7 +27,11 @@ const noteProperties = {
 	id: string, parent_id: string, title: string, body: string,
 	created_time: time, updated_time: time,
 	is_todo: { type: 'number', description: 'Native to-do flag, encoded as 0 or 1.' },
+	todo_due: { type: 'integer', description: 'To-do due time in Unix epoch milliseconds; negative values represent dates before 1970, and 0 means no due date is set.' },
 	todo_completed: { type: 'number', description: 'Completion time in Unix epoch milliseconds, or 0 while open.' },
+	source_url: { type: 'string', description: 'URL where the note came from; an empty string means no source URL is set.' },
+	source: { type: 'string', description: 'Native note source identifier; an empty string means it is unset.' },
+	source_application: { type: 'string', description: 'Application identifier associated with the note source; an empty string means it is unset.' },
 	markup_language: { type: 'number', description: 'Native Joplin markup language value.' },
 	encryption_applied: number, deleted_time: time, is_locked: number, accountEmail,
 };
@@ -94,9 +98,9 @@ const readProperties = {
 	offsetUnit: { type: 'string', const: 'utf16-code-unit' },
 };
 /** Required fields synthesized by the read tool in addition to the service identity. */
-const readRequired = ['id', 'accountEmail', 'revision_id', 'body', 'notebook_id', 'notebook_title', 'tags', 'is_todo', 'todo_completed', 'body_length', 'body_offset', 'body_returned_chars', 'has_more', 'offset', 'nextOffset', 'totalLength', 'offsetUnit'];
+const readRequired = ['id', 'accountEmail', 'revision_id', 'body', 'notebook_id', 'notebook_title', 'tags', 'is_todo', 'todo_completed', 'todo_due', 'source_url', 'source', 'source_application', 'body_length', 'body_offset', 'body_returned_chars', 'has_more', 'offset', 'nextOffset', 'totalLength', 'offsetUnit'];
 /** Metadata-only reads require the same revision and note context plus full-body measurements. */
-const metadataReadRequired = ['id', 'accountEmail', 'revision_id', 'notebook_id', 'notebook_title', 'tags', 'is_todo', 'todo_completed', 'body_length', 'body_size_bytes', 'body_sha256'];
+const metadataReadRequired = ['id', 'accountEmail', 'revision_id', 'notebook_id', 'notebook_title', 'tags', 'is_todo', 'todo_completed', 'todo_due', 'source_url', 'source', 'source_application', 'body_length', 'body_size_bytes', 'body_sha256'];
 /** File metadata describes the complete immutable UTF-8 snapshot; bytes live in the resource block. */
 const noteFile = exactObject({ uri: string, filename: string, mime_type: string,
 	size: { type: 'integer', minimum: 0, description: 'Full UTF-8 file size in bytes.' },
@@ -106,7 +110,7 @@ const noteFile = exactObject({ uri: string, filename: string, mime_type: string,
 function noteReadSchema(legacy = false) {
 	return {
 		...object({ ...readProperties, ...(legacy ? {} : { is_todo: boolean, todo_completed: boolean }), file: noteFile },
-			['id', 'accountEmail', 'revision_id', 'notebook_id', 'notebook_title', 'tags', 'is_todo', 'todo_completed']),
+			['id', 'accountEmail', 'revision_id', 'notebook_id', 'notebook_title', 'tags', 'is_todo', 'todo_completed', 'todo_due', 'source_url', 'source', 'source_application']),
 		anyOf: [
 			{
 				required: readRequired,
