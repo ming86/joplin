@@ -1,4 +1,5 @@
 import { ServiceError, requireValue, identifier } from './errors.mjs';
+import { requestDiagnostics, withDiagnostics } from './diagnostics.mjs';
 import { validateHeaderValue } from 'node:http';
 
 /** Metadata exposed for an attachment, including the fields needed for eligibility checks. */
@@ -155,21 +156,48 @@ export function createAttachmentClient({ request, baseUrl, token, timeoutMs = 10
 
 	/** Send one fixed native write action and preserve uncertainty after any unusable result. */
 	async function writeAction(action, values, signal, expectedId) {
-		const data = actionResult(await request('services/headless', {}, 'POST', { action, ...values }, signal, { writeOperation: true }));
+		const startedAt = Date.now();
+		const response = await request('services/headless', {}, 'POST', { action, ...values }, signal, { writeOperation: true });
+		let data;
+		try { data = actionResult(response); }
+		catch (error) {
+			if (!(error instanceof ServiceError)) throw error;
+			throw withDiagnostics(error, requestDiagnostics({
+				method: 'POST', path: 'services/headless', operation: action,
+				elapsedMs: Date.now() - startedAt, stage: 'validation',
+			}));
+		}
 		try {
 			const result = attachmentResult(data);
 			requireValue(attachmentFields.split(',').every(key => Object.hasOwn(result, key)), 'invalid_backend_response');
 			if (expectedId !== undefined) requireValue(result.id === expectedId, 'invalid_backend_response');
 			return result;
-		} catch { throw new ServiceError('write_outcome_unknown', true); }
+		} catch (error) {
+			throw new ServiceError('write_outcome_unknown', true, undefined, {
+				cause: error,
+				diagnostics: requestDiagnostics({
+					method: 'POST', path: 'services/headless', operation: action,
+					elapsedMs: Date.now() - startedAt, stage: 'validation',
+				}),
+			});
+		}
 	}
 
 	/** Read and validate one resource's metadata without exposing a local path or file URL. */
 	async function getAttachment(resourceId, signal) {
 		const id = identifier(resourceId);
-		const result = attachmentResult(await request(`resources/${id}`, { fields: attachmentFields }, 'GET', undefined, signal));
-		requireValue(result.id === id, 'invalid_backend_response');
-		return result;
+		const startedAt = Date.now();
+		const data = await request(`resources/${id}`, { fields: attachmentFields }, 'GET', undefined, signal);
+		try {
+			const result = attachmentResult(data);
+			requireValue(result.id === id, 'invalid_backend_response');
+			return result;
+		} catch (error) {
+			throw withDiagnostics(error, requestDiagnostics({
+				method: 'GET', path: 'resources/id', operation: 'getAttachment',
+				elapsedMs: Date.now() - startedAt, stage: 'validation',
+			}));
+		}
 	}
 
 	/** Read bytes only after the resource's encryption and lock state has been checked. */
@@ -178,21 +206,43 @@ export function createAttachmentClient({ request, baseUrl, token, timeoutMs = 10
 			throw new ServiceError('attachment_unavailable');
 		}
 		const combined = requestSignal(signal);
+		const startedAt = Date.now();
 		let response;
 		try {
 			response = await fetch(urlFor(`resources/${metadata.id}/file`), { signal: combined, redirect: 'error' });
-		} catch {
-			throw new ServiceError(signal?.aborted ? 'request_cancelled' : 'backend_unavailable');
+		} catch (error) {
+			throw new ServiceError(signal?.aborted ? 'request_cancelled' : 'backend_unavailable', false, undefined, {
+				cause: error,
+				diagnostics: requestDiagnostics({
+					method: 'GET', path: 'resources/id/file', operation: 'readAttachment',
+					elapsedMs: Date.now() - startedAt, stage: 'request', timeoutMs,
+				}),
+			});
 		}
 		if (!response.ok) {
-			await response.body?.cancel();
-			if (response.status >= 500) throw new ServiceError('attachment_file_unavailable');
-			throw responseError(response.status);
+			let cancelError;
+			try { await response.body?.cancel(); } catch (error) { cancelError = error; }
+			const diagnostics = requestDiagnostics({
+				method: 'GET', path: 'resources/id/file', operation: 'readAttachment',
+				elapsedMs: Date.now() - startedAt, status: response.status,
+				stage: cancelError ? 'response_cleanup' : 'response', timeoutMs,
+			});
+			const failure = response.status >= 500 ? new ServiceError('attachment_file_unavailable') : responseError(response.status);
+			if (cancelError) {
+				throw new ServiceError(failure.code, failure.outcomeUnknown, failure.message, { cause: cancelError, diagnostics });
+			}
+			throw withDiagnostics(failure, diagnostics);
 		}
 		try { return Buffer.from(await response.arrayBuffer()); }
-		catch {
+		catch (error) {
 			const code = signal?.aborted ? 'request_cancelled' : combined.aborted ? 'backend_unavailable' : 'attachment_file_unavailable';
-			throw new ServiceError(code);
+			throw new ServiceError(code, false, undefined, {
+				cause: error,
+				diagnostics: requestDiagnostics({
+					method: 'GET', path: 'resources/id/file', operation: 'readAttachment',
+					elapsedMs: Date.now() - startedAt, status: response.status, stage: 'body', timeoutMs,
+				}),
+			});
 		}
 	}
 
@@ -202,11 +252,20 @@ export function createAttachmentClient({ request, baseUrl, token, timeoutMs = 10
 			const note = identifier(noteId);
 			const items = [];
 			for (let page = 1; ; page++) {
-				const result = pageResult(await request(`notes/${note}/resources`, {
+				const startedAt = Date.now();
+				const data = await request(`notes/${note}/resources`, {
 					fields: attachmentFields,
 					limit: 100,
 					page,
-				}, 'GET', undefined, signal));
+				}, 'GET', undefined, signal);
+				let result;
+				try { result = pageResult(data); }
+				catch (error) {
+					throw withDiagnostics(error, requestDiagnostics({
+						method: 'GET', path: 'notes/id/resources', operation: 'listNoteAttachments',
+						elapsedMs: Date.now() - startedAt, stage: 'validation',
+					}));
+				}
 				items.push(...result.items);
 				if (!result.hasMore) return items;
 			}

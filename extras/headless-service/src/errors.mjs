@@ -1,15 +1,20 @@
-// Discard upstream errors, URLs, tokens and arbitrary payloads; only recognized validation text is retained.
+/** Public service failure with an optional private cause and request diagnostics. */
 export class ServiceError extends Error {
 	/**
 	 * @param {string} code Stable machine-readable service error code.
 	 * @param {boolean} outcomeUnknown Whether a write may have committed.
 	 * @param {string} message Safe public message, defaulting to the code.
+	 * @param {{cause?: unknown, diagnostics?: object}} options Internal failure context, never returned to callers.
 	 */
-	constructor(code, outcomeUnknown = false, message = code) {
-		super(message);
+	constructor(code, outcomeUnknown = false, message = code, { cause, diagnostics } = {}) {
+		super(message, cause === undefined ? undefined : { cause });
 		this.name = 'ServiceError';
+		/** Stable public error code. */
 		this.code = code;
+		/** Whether a write may already have committed. */
 		this.outcomeUnknown = outcomeUnknown;
+		/** Private request metadata; logging uses an explicit field allowlist. */
+		if (diagnostics) this.diagnostics = diagnostics;
 	}
 }
 

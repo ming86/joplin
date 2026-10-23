@@ -2,6 +2,18 @@ import { lookup as dnsLookup } from 'node:dns';
 import { request as httpsRequest } from 'node:https';
 import { isIP } from 'node:net';
 import { ServiceError } from '../errors.mjs';
+import { requestDiagnostics, withDiagnostics } from '../diagnostics.mjs';
+
+const fileDownloadTimeoutMs = 10000;
+
+/** Build fixed file-download diagnostics without retaining the caller's URL or file metadata. */
+function fileDiagnostics(startedAt, stage, status) {
+	return requestDiagnostics({
+		method: 'GET', path: 'client-file', operation: 'download_client_file',
+		elapsedMs: Date.now() - startedAt, ...(status === undefined ? {} : { status }),
+		stage, timeoutMs: fileDownloadTimeoutMs,
+	});
+}
 
 /** Return whether an IPv4 address is outside local, private, and reserved ranges. */
 function publicIpv4(address) {
@@ -60,24 +72,36 @@ function fileUrl(file) {
  * chatgpt-work/DESKTOP-MCP-PARITY-HANDOFF.md.
  */
 function createFileDownloader({ lookup = dnsLookup, request = httpsRequest } = {}) {
-	/** Resolve all addresses once and pin the connection to that validated result. */
-	function publicLookup(hostname, options, callback) {
-		lookup(hostname, { all: true, verbatim: true }, (error, addresses) => {
-			if (error) { callback(new ServiceError('note_file_download_failed')); return; }
-			try {
-				if (!addresses?.length) throw new ServiceError('note_file_download_failed');
-				for (const entry of addresses) requirePublicAddress(entry.address);
-				if (options.all) callback(null, addresses);
-				else callback(null, addresses[0].address, addresses[0].family);
-			} catch (failure) { callback(failure); }
-		});
-	}
-
 	/** Download a complete file as bytes without decoding or altering its contents. */
 	return async function downloadFile(file, signal) {
 		const url = fileUrl(file);
 		if (signal?.aborted) throw new ServiceError('request_cancelled');
-		const combined = signal ? AbortSignal.any([signal, AbortSignal.timeout(10000)]) : AbortSignal.timeout(10000);
+		const startedAt = Date.now();
+		const combined = signal
+			? AbortSignal.any([signal, AbortSignal.timeout(fileDownloadTimeoutMs)])
+			: AbortSignal.timeout(fileDownloadTimeoutMs);
+		/** Resolve all addresses once and pin the connection to that validated result. */
+		function publicLookup(hostname, options, callback) {
+			lookup(hostname, { all: true, verbatim: true }, (error, addresses) => {
+				if (error) {
+					callback(new ServiceError('note_file_download_failed', false, undefined, {
+						cause: error, diagnostics: fileDiagnostics(startedAt, 'dns'),
+					}));
+					return;
+				}
+				try {
+					if (!addresses?.length) throw new ServiceError('note_file_download_failed');
+					for (const entry of addresses) requirePublicAddress(entry.address);
+					if (options.all) callback(null, addresses);
+					else callback(null, addresses[0].address, addresses[0].family);
+				} catch (failure) {
+					const diagnosed = failure instanceof ServiceError
+						? withDiagnostics(failure, fileDiagnostics(startedAt, 'dns'))
+						: failure;
+					callback(diagnosed);
+				}
+			});
+		}
 		let req;
 		let response;
 		try {
@@ -86,14 +110,25 @@ function createFileDownloader({ lookup = dnsLookup, request = httpsRequest } = {
 				req.once('error', reject);
 				req.end();
 			});
-			if (response.statusCode < 200 || response.statusCode >= 300) throw new ServiceError('note_file_download_failed');
+			if (response.statusCode < 200 || response.statusCode >= 300) {
+				throw new ServiceError('note_file_download_failed', false, undefined, {
+					diagnostics: fileDiagnostics(startedAt, 'response', response.statusCode),
+				});
+			}
 			const parts = [];
 			for await (const chunk of response) parts.push(Buffer.from(chunk));
 			return Buffer.concat(parts);
 		} catch (error) {
-			if (signal?.aborted) throw new ServiceError('request_cancelled');
-			if (error instanceof ServiceError) throw error;
-			throw new ServiceError('note_file_download_failed');
+			const stage = response ? 'body' : 'request';
+			const diagnostics = fileDiagnostics(startedAt, stage, response?.statusCode);
+			if (signal?.aborted) {
+				throw new ServiceError('request_cancelled', false, undefined, { cause: error, diagnostics });
+			}
+			if (error instanceof ServiceError) {
+				if (error.diagnostics) throw error;
+				throw withDiagnostics(error, diagnostics);
+			}
+			throw new ServiceError('note_file_download_failed', false, undefined, { cause: error, diagnostics });
 		} finally {
 			response?.destroy();
 			req?.destroy();

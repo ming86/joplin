@@ -1,4 +1,5 @@
 import { ServiceError, requireValue, identifier } from './errors.mjs';
+import { requestDiagnostics, withDiagnostics } from './diagnostics.mjs';
 
 /** Validate the small notebook shape returned by the native headless action. */
 function notebookResult(data) {
@@ -34,10 +35,17 @@ export function createMaintenanceClient(request) {
 		/** Find a tag using Joplin's native title matching rules. */
 		async findTagByTitle(title, signal) {
 			requireValue(typeof title === 'string' && title.trim().length > 0, 'invalid_tag_input');
+			const startedAt = Date.now();
 			const data = await request('services/headless', {}, 'POST', {
 				action: 'findTagByTitle', title,
 			}, signal, { writeOperation: false });
-			return tagLookupResult(data);
+			try { return tagLookupResult(data); }
+			catch (error) {
+				throw withDiagnostics(error, requestDiagnostics({
+					method: 'POST', path: 'services/headless', operation: 'findTagByTitle',
+					elapsedMs: Date.now() - startedAt, stage: 'validation',
+				}));
+			}
 		},
 		/** Update a notebook through native model logic so moves retain Joplin's nesting rules. */
 		async updateNotebook(id, input, signal) {
@@ -49,6 +57,7 @@ export function createMaintenanceClient(request) {
 				requireValue(typeof input.parent_id === 'string', 'invalid_notebook_input');
 				if (input.parent_id) identifier(input.parent_id);
 			}
+			const startedAt = Date.now();
 			const data = await request('services/headless', {}, 'POST', {
 				action: 'maintenanceUpdateNotebook', id: notebookId, ...input,
 			}, signal);
@@ -56,8 +65,14 @@ export function createMaintenanceClient(request) {
 				const notebook = notebookResult(data);
 				requireValue(notebook.id === notebookId, 'invalid_backend_response');
 				return notebook;
-			} catch {
-				throw new ServiceError('write_outcome_unknown', true);
+			} catch (error) {
+				throw new ServiceError('write_outcome_unknown', true, undefined, {
+					cause: error,
+					diagnostics: requestDiagnostics({
+						method: 'POST', path: 'services/headless', operation: 'maintenanceUpdateNotebook',
+						elapsedMs: Date.now() - startedAt, stage: 'validation',
+					}),
+				});
 			}
 		},
 		/** Use Joplin's default folder DELETE behavior, which recursively moves the subtree to Trash. */
@@ -67,9 +82,18 @@ export function createMaintenanceClient(request) {
 		/** Read one tag while retaining encryption state for the account service's eligibility check. */
 		async getTag(id, signal) {
 			const tagId = identifier(id);
+			const startedAt = Date.now();
 			const data = await request(`tags/${tagId}`, { fields: 'id,title,encryption_applied' }, 'GET', undefined, signal);
-			const tag = tagResult(data);
-			requireValue(tag.id === tagId, 'invalid_backend_response');
+			let tag;
+			try {
+				tag = tagResult(data);
+				requireValue(tag.id === tagId, 'invalid_backend_response');
+			} catch (error) {
+				throw withDiagnostics(error, requestDiagnostics({
+					method: 'GET', path: 'tags/id', operation: 'getTag',
+					elapsedMs: Date.now() - startedAt, stage: 'validation',
+				}));
+			}
 			requireValue(tag.encryption_applied === 0, 'tag_unavailable');
 			return { id: tag.id, title: tag.title };
 		},
@@ -78,13 +102,20 @@ export function createMaintenanceClient(request) {
 			const tagId = identifier(id);
 			requireValue(input && typeof input === 'object' && !Array.isArray(input)
 				&& Object.keys(input).length === 1 && Object.hasOwn(input, 'title') && typeof input.title === 'string', 'invalid_tag_input');
+			const startedAt = Date.now();
 			const data = await request(`tags/${tagId}`, {}, 'PUT', { title: input.title }, signal);
 			try {
 				const tag = tagResult(data);
 				requireValue(tag.id === tagId, 'invalid_backend_response');
 				return { id: tag.id, title: tag.title };
-			} catch {
-				throw new ServiceError('write_outcome_unknown', true);
+			} catch (error) {
+				throw new ServiceError('write_outcome_unknown', true, undefined, {
+					cause: error,
+					diagnostics: requestDiagnostics({
+						method: 'PUT', path: 'tags/id', operation: 'updateTag',
+						elapsedMs: Date.now() - startedAt, stage: 'validation',
+					}),
+				});
 			}
 		},
 	});

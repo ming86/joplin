@@ -1,4 +1,5 @@
 import { ServiceError, pagination, requireValue } from './errors.mjs';
+import { requestDiagnostics, withDiagnostics } from './diagnostics.mjs';
 
 /** Recognize plain JSON records returned by the fixed headless API. */
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -50,6 +51,17 @@ export function createTrashClient(request) {
 	const post = (action, values, signal, writeOperation = false) => request(
 		'services/headless', {}, 'POST', { action, ...values }, signal, { writeOperation },
 	);
+	/** Keep native action failures recognizable while adding fixed validation context. */
+	function validatedActionResult(response, action, writing, startedAt) {
+		try { return actionResult(response, writing); }
+		catch (error) {
+			if (!(error instanceof ServiceError)) throw error;
+			throw withDiagnostics(error, requestDiagnostics({
+				method: 'POST', path: 'services/headless', operation: action,
+				elapsedMs: Date.now() - startedAt, stage: 'validation',
+			}));
+		}
+	}
 
 	return Object.freeze({
 		/** List one page of native deleted notes and notebooks. */
@@ -58,9 +70,18 @@ export function createTrashClient(request) {
 			let page;
 			try { page = pagination({ page: input.page, limit: input.limit ?? 20 }); }
 			catch { throw new ServiceError('invalid_trash_input'); }
-			const data = actionResult(await post('listTrash', page, signal), false);
-			requireValue(record(data) && Array.isArray(data.items) && typeof data.hasMore === 'boolean', 'invalid_backend_response');
-			return { items: data.items.map(trashItem), hasMore: data.hasMore };
+			const startedAt = Date.now();
+			const response = await post('listTrash', page, signal);
+			const data = validatedActionResult(response, 'listTrash', false, startedAt);
+			try {
+				requireValue(record(data) && Array.isArray(data.items) && typeof data.hasMore === 'boolean', 'invalid_backend_response');
+				return { items: data.items.map(trashItem), hasMore: data.hasMore };
+			} catch (error) {
+				throw withDiagnostics(error, requestDiagnostics({
+					method: 'POST', path: 'services/headless', operation: 'listTrash',
+					elapsedMs: Date.now() - startedAt, stage: 'validation',
+				}));
+			}
 		},
 		/** Restore one deleted note and return its resulting notebook parent. */
 		async restoreNote(input, signal) {
@@ -76,12 +97,20 @@ export function createTrashClient(request) {
 	async function restoreItem(action, input, signal) {
 		requireValue(record(input) && Object.keys(input).length === 1 && Object.hasOwn(input, 'id') && nativeId(input.id), 'invalid_trash_input');
 		const id = input.id;
-		const data = actionResult(await post(action, { id }, signal, true), true);
+		const startedAt = Date.now();
+		const response = await post(action, { id }, signal, true);
+		const data = validatedActionResult(response, action, true, startedAt);
 		try {
 			requireValue(record(data) && data.id === id && nativeParentId(data.parent_id) && data.restored === true, 'invalid_backend_response');
 			return { id: data.id, parent_id: data.parent_id, restored: true };
-		} catch {
-			throw new ServiceError('write_outcome_unknown', true);
+		} catch (error) {
+			throw new ServiceError('write_outcome_unknown', true, undefined, {
+				cause: error,
+				diagnostics: requestDiagnostics({
+					method: 'POST', path: 'services/headless', operation: action,
+					elapsedMs: Date.now() - startedAt, stage: 'validation',
+				}),
+			});
 		}
 	}
 }

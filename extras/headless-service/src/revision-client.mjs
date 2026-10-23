@@ -1,4 +1,5 @@
 import { ServiceError, pagination, requireValue, identifier } from './errors.mjs';
+import { requestDiagnostics, withDiagnostics } from './diagnostics.mjs';
 
 /** Recognize plain JSON records from the fixed headless API. */
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -131,14 +132,34 @@ export function createRevisionClient(request) {
 	const post = (action, values, signal, writeOperation = false) => request(
 		'services/headless', {}, 'POST', { action, ...values }, signal, { writeOperation },
 	);
+	/** Keep native action failures recognizable while adding fixed validation context. */
+	function validatedActionResult(response, action, writing, startedAt) {
+		try { return actionResult(response, writing); }
+		catch (error) {
+			if (!(error instanceof ServiceError)) throw error;
+			throw withDiagnostics(error, requestDiagnostics({
+				method: 'POST', path: 'services/headless', operation: action,
+				elapsedMs: Date.now() - startedAt, stage: 'validation',
+			}));
+		}
+	}
 
 	return Object.freeze({
 		/** Read a note and capture its current revision, classifying a lost capture reply as uncertain. */
 		async readNoteWithRevision(id, signal) {
 			identifier(id);
-			const data = actionResult(await post('readNote', { id }, signal, true), true);
+			const startedAt = Date.now();
+			const data = validatedActionResult(await post('readNote', { id }, signal, true), 'readNote', true, startedAt);
 			try { return noteResult(data, id); }
-			catch { throw new ServiceError('write_outcome_unknown', true); }
+			catch (error) {
+				throw new ServiceError('write_outcome_unknown', true, undefined, {
+					cause: error,
+					diagnostics: requestDiagnostics({
+						method: 'POST', path: 'services/headless', operation: 'readNote',
+						elapsedMs: Date.now() - startedAt, stage: 'validation',
+					}),
+				});
+			}
 		},
 		/** Update against the caller's native revision ID; never retry a write. */
 		async updateNoteWithRevision(id, input, signal) {
@@ -165,15 +186,22 @@ export function createRevisionClient(request) {
 					&& typeof replace.find === 'string' && typeof replace.replace === 'string', 'invalid_note_input');
 			}
 
-			const data = actionResult(await post('updateNote', { id, base_revision_id: input.base_revision_id, changes }, signal, true), true);
+			const startedAt = Date.now();
+			const data = validatedActionResult(await post('updateNote', { id, base_revision_id: input.base_revision_id, changes }, signal, true), 'updateNote', true, startedAt);
 			try {
 				const result = noteResult(data, id);
 				requireValue(typeof result.changed === 'boolean'
 					&& (result.previous_revision_id === null || typeof result.previous_revision_id === 'string'), 'invalid_backend_response');
 				return result;
-			} catch {
+			} catch (error) {
 				// The core may have committed before returning a malformed success payload.
-				throw new ServiceError('write_outcome_unknown', true);
+				throw new ServiceError('write_outcome_unknown', true, undefined, {
+					cause: error,
+					diagnostics: requestDiagnostics({
+						method: 'POST', path: 'services/headless', operation: 'updateNote',
+						elapsedMs: Date.now() - startedAt, stage: 'validation',
+					}),
+				});
 			}
 		},
 		/** Return one native revision-history page. */
@@ -181,9 +209,18 @@ export function createRevisionClient(request) {
 			requireValue(record(input) && Object.keys(input).every(key => ['note_id', 'page', 'limit'].includes(key)), 'invalid_revision_input');
 			const noteId = identifier(input.note_id);
 			const page = pagination({ page: input.page, limit: input.limit });
-			const data = actionResult(await post('listNoteRevisions', { note_id: noteId, ...page }, signal), false);
-			requireValue(record(data) && Array.isArray(data.items) && typeof data.hasMore === 'boolean', 'invalid_backend_response');
-			return { items: data.items.map(revisionSummary), hasMore: data.hasMore };
+			const startedAt = Date.now();
+			const response = await post('listNoteRevisions', { note_id: noteId, ...page }, signal);
+			const data = validatedActionResult(response, 'listNoteRevisions', false, startedAt);
+			try {
+				requireValue(record(data) && Array.isArray(data.items) && typeof data.hasMore === 'boolean', 'invalid_backend_response');
+				return { items: data.items.map(revisionSummary), hasMore: data.hasMore };
+			} catch (error) {
+				throw withDiagnostics(error, requestDiagnostics({
+					method: 'POST', path: 'services/headless', operation: 'listNoteRevisions',
+					elapsedMs: Date.now() - startedAt, stage: 'validation',
+				}));
+			}
 		},
 		/** Read an immutable historical snapshot without requiring a live note. */
 		async readNoteRevision(input, signal) {
@@ -191,7 +228,16 @@ export function createRevisionClient(request) {
 				&& Object.hasOwn(input, 'note_id') && Object.hasOwn(input, 'revision_id'), 'invalid_revision_input');
 			const noteId = identifier(input.note_id);
 			const id = revisionId(input.revision_id);
-			return revisionSnapshot(actionResult(await post('readNoteRevision', { note_id: noteId, revision_id: id }, signal), false), noteId, id);
+			const startedAt = Date.now();
+			const response = await post('readNoteRevision', { note_id: noteId, revision_id: id }, signal);
+			const data = validatedActionResult(response, 'readNoteRevision', false, startedAt);
+			try { return revisionSnapshot(data, noteId, id); }
+			catch (error) {
+				throw withDiagnostics(error, requestDiagnostics({
+					method: 'POST', path: 'services/headless', operation: 'readNoteRevision',
+					elapsedMs: Date.now() - startedAt, stage: 'validation',
+				}));
+			}
 		},
 		/** Compare two native snapshots, using the latest revision when the destination is omitted. */
 		async compareNoteRevisions(input, signal) {
@@ -200,12 +246,20 @@ export function createRevisionClient(request) {
 			const noteId = identifier(input.note_id);
 			const fromId = revisionId(input.from_revision_id);
 			const toId = input.to_revision_id === undefined ? undefined : revisionId(input.to_revision_id);
-			const data = actionResult(await post('compareNoteRevisions', {
+			const startedAt = Date.now();
+			const response = await post('compareNoteRevisions', {
 				note_id: noteId,
 				from_revision_id: fromId,
 				...(toId === undefined ? {} : { to_revision_id: toId }),
-			}, signal), false);
-			return comparisonResult(data, noteId, fromId, toId);
+			}, signal);
+			const data = validatedActionResult(response, 'compareNoteRevisions', false, startedAt);
+			try { return comparisonResult(data, noteId, fromId, toId); }
+			catch (error) {
+				throw withDiagnostics(error, requestDiagnostics({
+					method: 'POST', path: 'services/headless', operation: 'compareNoteRevisions',
+					elapsedMs: Date.now() - startedAt, stage: 'validation',
+				}));
+			}
 		},
 	});
 }

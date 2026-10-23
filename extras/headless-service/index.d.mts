@@ -1,7 +1,7 @@
 /** Service failure with a stable code and an optional safe public message. */
 export class ServiceError extends Error {
-    /** @param code Stable machine-readable code. @param outcomeUnknown Whether a write may have committed. @param message Safe public message, defaulting to the code. */
-    constructor(code: string, outcomeUnknown?: boolean, message?: string);
+    /** @param code Stable machine-readable code. @param outcomeUnknown Whether a write may have committed. @param message Safe public message, defaulting to the code. @param options Private cause and diagnostic context, excluded from public error results. */
+    constructor(code: string, outcomeUnknown?: boolean, message?: string, options?: ErrorOptions & { diagnostics?: object });
     readonly code: string;
     readonly outcomeUnknown: boolean;
     retryAfterMs?: number;
