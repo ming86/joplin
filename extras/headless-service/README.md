@@ -1,104 +1,81 @@
-# Account-bound Joplin application interface (Phase 1.5)
+# Joplin headless service
 
-This is a small **external application library**, co-located in the repository for this delivery. It imports no Joplin internals and changes no CLI code. It can be moved to a separate application repository unchanged. `extras/` is outside the existing `packages/*` Yarn workspaces; no root dependency or lockfile modification is required. Runtime: Node 22.12 or newer; zero third-party dependencies. The explicit TypeScript declarations describe the JavaScript interface.
+This implementation has two connected parts: changes in Joplin's native headless CLI/core under `packages/app-cli` and `packages/lib`, and the account-bound service and launchers under `extras/headless-service`. The external service talks to the core's private Data API; native code owns the profile, synchronization and revision-guarded note update. The service package can also be imported as a library, but its lower-level mutation methods do not all provide the MCP revision guarantee described below.
 
-`grep_notes` searches raw source lines across selected notes or notebook subtrees, with literal or per-line JavaScript regex matching, optional context/previews, and exact native revision IDs for guarded edits. `read_note` and `get_note` accept inclusive source-line ranges without changing stored line endings. See [the source-line workflow](MCP.md#searching-and-reading-source-lines) for selection, pagination and editing examples.
+The external JavaScript adapters require Node 22.12 or newer and use Node built-ins without third-party adapter dependencies. The native core still needs its normal built runtime and dependencies.
 
 ## Current behavior
 
-The trusted application constructs `createAccountRegistry(configurations)`, authenticates a caller, then resolves `forPrincipal(verifiedSubject, accountId)`. Resolution checks an explicit grant before any backend/provider factory runs. Unknown and unauthorized accounts have the same error. Each account has independent Joplin endpoint/token, planned semantic-store location and key reference, and embedding deployment/space configuration. Duplicate account/store/key-reference/endpoint bindings are rejected. Configuration is copied, not used as shared mutable request state.
+The native headless core starts synchronization without overlapping runs. It schedules a remote-change poll 15 seconds after the previous poll settles, including after failure; polls pause during a full sync and resume after a fresh 15-second delay. A periodic full sync starts 120 seconds after the prior periodic full sync settles. Local changes use Joplin's approximately one-second as-you-type delay. Edits made during active synchronization get a follow-up run, and active work can delay a scheduled request. See [the container and runtime notes](deploy/README.md) for the configured deployment.
 
-**This is not an authenticator or a network server.** Never fill `verifiedSubject` from an unverified request or MCP tool argument. The configured Joplin API credential still has broad upstream powers. Read/write permissions here constrain application methods, not the raw private Data API. Keep that API private. Configuration/grants are static for this initial process; changing grants requires restarting the application. Live revocation, signup and worker provisioning belong to the operational multi-user phase.
+With writes enabled, `tools/list` exposes 31 MCP tools: 18 read tools and 13 write tools. The read count includes the backwards-compatible `get_note` alias. Writes are disabled by default. The catalog covers note and notebook operations, native note history, conflict and Trash inspection, attachment upload and reading, attachment-reference lookup, source-line search, and tag maintenance. The dedicated `semantic_search_notes` tool is deliberately unavailable regardless of runtime configuration.
 
-Read operations include notebook/note listing, note lookup, keyword search, note changes, Trash listing and finding notes that reference an attachment. Write operations include creating Markdown notes, updating existing notes, moving notes between notebooks, moving notes to Trash, restoring notes and notebook subtrees from Trash, creating notebooks and managing tags. Body updates operate on the stored text and preserve the note's existing Markdown or HTML format. MCP note tools expose to-do status and due time, and allow changing `source_url`; source provenance fields are read-only and survive ordinary edits. Due times use integer Unix epoch milliseconds (`0` clears the due time). Desktop and mobile handle notifications; this headless service stores due metadata but does not provide an alarm service. Note reads report `body_total_line_count` for the complete body, including when returning a chunk; revision comparisons report separately named counts for both endpoints. See [MCP.md](MCP.md) for the fields, line-count rule and conversion details. HTML import/conversion, arbitrary paths/routes, resource upload and administration are not exposed. Ordinary reads/search suppress encrypted, trashed and locked notes. Trash listing includes all deleted notes and notebooks, with encrypted titles masked. Attachment-reference lookup includes trashed notes and conflict copies, excludes encrypted and locked notes, and parses current saved bodies instead of the background reference index; pages may contain fewer visible items while `hasMore` still reflects upstream pagination. Lists are not transactional snapshots.
+For MCP note edits, `read_note` or `grep_notes` returns the native `revision_id`; `update_note` requires it as `base_revision_id`. The core checks that revision and saves the update with before/after native revisions in one atomic operation. If the note changed first, the edit returns `note_conflict` without applying the stale change. This guarantee belongs to the MCP `update_note` path. The lower-level account-library `updateNote` performs a best-effort eligibility read and then an ordinary update; it does not compare a supplied revision atomically. Do not treat every library mutation as revision guarded.
 
-The HTTP adapter talks to the actual Data API request shapes inspected in the pinned source. It uses `PUT` for partial updates, query-token authorization and cursor-based `/events`. URL and token come only from trusted configuration. Redirects are rejected, request timeouts are enforced, and extra response fields are filtered. Only explicitly marked HTTP 400 model validation messages are passed to callers; other upstream error bodies and stacks are not copied into client responses. Backend exceptions retain their original cause internally. The MCP adapter writes structured failure diagnostics to stderr with the tool or operation, backend method and path, elapsed time, status when available, and safe exception details. Note payloads, credentials, query strings and file URLs are excluded. HTTP is allowed for loopback; explicitly permit other private HTTP only when the deployment accepts that transport. HTTPS is supported.
+Notes can be read inline, as metadata, or as an embedded UTF-8 file resource. File input supports full note creation or replacement; attachment tools read and upload binary files. `grep_notes` searches exact source lines, and `read_note` accepts inclusive logical line ranges. `list_attachment_notes` scans current saved note bodies, including Trash and conflict copies, to find attachment references. Trash listing and restore, notebook subtree restore, and conflict inspection are available through MCP. Full schemas and behavior are in [MCP.md](MCP.md).
 
-A POST/PUT transport failure, server error or unusable success response can mean the change committed. The error reports `write_outcome_unknown`; there is **no automatic mutation retry** and no idempotency/atomic stale-write guarantee. The pre-update eligibility read is best effort, not compare-and-swap.
+The optional semantic index runtime and semantic/hybrid `search_notes` modes are implemented. The current deployment does not have the runtime configured. When no runtime is available, semantic mode reports unavailability and hybrid mode uses keyword results with an explicit fallback. The dedicated `semantic_search_notes` tool always reports unavailable, even when an index runtime is configured. [SEMANTIC.md](SEMANTIC.md) documents the optional runtime and its contracts.
 
-## Search and embedding contracts
+## Account and data boundaries
 
-`search({ query, mode, page, limit })` supports the three agreed request modes. Keyword runs Joplin search with its syntax/ranking. Explicit semantic search returns `executedMode: null`, `semantic.state: 'unavailable'`, `reason: 'not_implemented'`; an empty result does not pretend the index was searched. Hybrid currently executes keyword only and labels that fallback and each hit's provenance. The contract does not yet implement fusion, embeddings indexing or a relevance ranking beyond upstream search.
+The library's `createAccountRegistry(configurations)` binds each configured account to explicit subjects and read/write permissions. Callers must pass an identity already verified by their own authentication layer to `forPrincipal(verifiedSubject, accountId)`; this library is not an authenticator or network server. Account selection and grants come from trusted startup configuration, not MCP arguments. Unknown and unauthorized accounts return the same error, and backend factories run only after account resolution.
 
-`embed(texts, purpose)` is an **internal** indexing/query operation, not a public unlimited inference endpoint. An injected, trusted embedding transport receives prepared text and purpose. The default has no transport and reports `embedding_provider_unavailable`. Fake-provider tests exercise account selection, exactly-once document/query prefixing, OpenAI-style indexed response order, count, dimensions, finite/nonzero values, optional L2 normalization, cancellation and error redaction. Phase 2B supplies the real HTTP provider implementation. No note was sent to a remote embedding service here.
+The configured Joplin API token retains its upstream permissions. The service's read/write checks constrain its own methods and MCP catalog; they do not narrow the raw private Data API credential. Keep that API private. Stdio and HTTP launchers bind to one configured account. Managed deployments can run separate workers for multiple accounts; they do not make one Joplin core load several profiles. See [MULTI-USER.md](MULTI-USER.md).
 
-Embedding identity includes operator-assigned space ID, effective revision description, dimensions, normalization, query/document preparation and preprocessing version. Endpoint, API credentials and batching are not part of that fingerprint. An alias is not proof of vector equivalence. A changed fingerprint requires an explicit compatibility/rebuild decision; a query-only preparation change need not re-embed unchanged document representations. `noteFingerprint` hashes exact title/body and preprocessing version. Chunker identity is separate in the store.
+Ordinary note reads and search omit encrypted, trashed and locked notes. Trash listing includes deleted notes and notebooks, with encrypted titles masked. Attachment-reference lookup includes Trash and conflict copies but excludes encrypted and locked notes. Paginated lists are not transactional snapshots.
 
-BGE-M3 dense plus Joplin lexical search remains a candidate, not an implementation dependency or a selected winner. The fake tests deliberately use two dimensions so they cannot be confused with BGE-M3 or Qwen output.
+Note-body edits preserve the existing Markdown or HTML format. To-do due times are integer Unix epoch milliseconds, with `0` clearing the due time. Source provenance fields are read-only; `source_url` can be changed. `body_total_line_count` counts CRLF, LF and lone CR as one line break, includes the final empty line after a trailing break, and counts an empty body as one line.
 
-## Semantic storage contract
+## Account-bound service library
 
-`schema/semantic-v1.sql` defines a **future separately keyed per-account SQLCipher store**, not additional tables in the Joplin database. Phase 1.5 does not open or create that store. `databasePath` and `keyRef` bind its future owner; the key reference is not a key and does not unlock the CLI profile.
-
-Tables: `index_config` (one active generation), `note_state` (pending/indexed/error/deleted and source fingerprint), `chunks` (ordered offsets, optional valuable excerpt, little-endian float32 vector), and `sync_state` (event cursor and reconciliation checkpoint). Foreign keys enforce generation/dimension alignment; vector byte length must match dimensions. Apply the DDL only after SQLCipher key verification. Running it in ordinary SQLite does not encrypt anything.
-
-Phase 2B must persist invalidation/pending work and the cursor together; replace a note's chunks and successful-state marker transactionally; reject stale in-flight source content; purge deleted/ineligible notes; reconcile missed/coalesced changes. Result delivery checks current source eligibility through the account's API. There is no transaction across Joplin and the semantic DB. A rebuild can pause semantic search while keyword search stays usable. Credentials and key material do not belong in the semantic schema.
-
-The Python tests use ordinary in-memory SQLite **only to test relational constraints and rollback**, not encryption or a real indexer. `source_updated_time` alone is not a content fingerprint. Key handling and useful retrieval remain Phase 2B acceptance work.
-
-## Example (application startup, not a public endpoint)
+A trusted application can create one or more account bindings and resolve them after authenticating its caller:
 
 ```js
 import { createAccountRegistry } from './index.mjs';
+
 const registry = createAccountRegistry([{
-    id: 'ming',
+    id: 'personal',
     subjects: ['verified-auth-subject'],
     permissions: ['read'],
     joplin: { baseUrl: 'http://127.0.0.1:41184/', token: apiTokenFromProtectedSource },
-    semantic: { databasePath: '/data/semantic/ming.db', keyRef: 'ming/semantic-key' },
+    semantic: { databasePath: '/data/semantic/personal.db', keyRef: 'personal/semantic-key' },
 }]);
-const account = registry.forPrincipal(authenticatedSubject, 'ming');
-const result = await account.search({ query: 'postgres replication', mode: 'hybrid' });
-// result.executedMode === 'keyword'; semantic remains explicitly unavailable.
+const account = registry.forPrincipal(authenticatedSubject, 'personal');
+const result = await account.search({ query: 'postgres replication', mode: 'keyword' });
 ```
 
-Do not serialize configuration into client-visible responses. Do not expose the internal `embed` method directly through MCP without the integration's access/usage policy. A loopback provider may be a relay: `remoteProcessing` is the operator's disclosure decision, not a cryptographic or OS-level egress control.
+The registry copies startup configuration and rejects duplicate account, endpoint, semantic-store path and key-reference bindings. `semantic.databasePath` and `keyRef` identify the optional derived store; constructing the registry alone does not open it. The MCP launchers load their own JSON configuration and optional semantic runtime. See [MCP.md](MCP.md) and [SEMANTIC.md](SEMANTIC.md) for those formats.
 
-## Tests without the Joplin dependency tree
+## MCP transports
 
-From repository root:
+`mcp.mjs` provides stdio MCP. `mcp-http.mjs` provides stateless HTTP MCP with a private bearer credential; it defaults to loopback. Neither launcher starts the Joplin core, opens its database, or needs the core DB key or E2EE password. Configure the launcher with the existing private Data API endpoint and token. Both transports are read-only by default; writes require operator configuration. See [MCP.md](MCP.md) for configuration, tool contracts, protocol behavior and smoke commands.
+
+Related entry points are `fleet.mjs` for managed account workers, `web.mjs` for the browser interface, and `clipper.mjs` for selected-text capture. Their boundaries and setup are documented in [MULTI-USER.md](MULTI-USER.md), [WEB.md](WEB.md), and [CLIPPING.md](CLIPPING.md). The deferred browser, device, HTTPS and installation observations remain scoped in [BACKLOG.md](BACKLOG.md); they are not prerequisites for the managed-account implementation.
+
+## Local checks
+
+These commands are available from the repository root. They are instructions for running checks, not a record that they were run for this documentation update.
 
 ```sh
 node --test extras/headless-service/tests/*.test.mjs
 python3 extras/headless-service/tests/schema_test.py
-# Optional static consumer-contract check (uses whichever tsc you explicitly select):
+# Optional consumer declaration check with an explicitly selected TypeScript compiler:
 tsc --noEmit --strict --target ES2022 --module NodeNext --moduleResolution NodeNext \
   extras/headless-service/tests/types.test.mts
 ```
 
-The HTTP tests use real loopback networking with a simulated Data API, not a compiled Joplin process. They do not replace the following read-only actual-account check.
+The Python schema test uses ordinary in-memory SQLite to check relational constraints and rollback; it does not test encryption or a running index. Native integration tests require the built Joplin runtime and their documented environment variables.
 
-## Complete the one-real-account check on the existing builder
-
-Keep the already passing Phase 1 source/build and recovery material. Do not reset E2EE or rerun its long acceptance sequence just to test this library. Start the configured encrypted `serve` process normally (one profile owner), using the existing key. Obtain its already provisioned API token without writing it to logs. Make a private token file and a private JSON file based on `scripts/account-smoke.example.json` (mode 0600). Use an existing synthetic test note ID and an exact search term that finds it. The adapter requests at most 100 matches. Do not use a production note merely to prove this test.
+For an already running core, `scripts/check-account.mjs` performs read-only account, keyword-search and change-cursor checks, confirms explicit semantic unavailability, and exercises an in-memory fake embedding provider. Its private config must be based on [scripts/account-smoke.example.json](scripts/account-smoke.example.json) and include an existing synthetic test note ID and matching query:
 
 ```sh
 node extras/headless-service/scripts/check-account.mjs /private/account-smoke.json
 ```
 
-This makes **GET requests only** to the running Data API: notebook listing, read, keyword search and cursor lookup. It also verifies explicit semantic unavailability and a synthetic in-memory fake-provider call. It does not create notes, touch the database, reconfigure sync/E2EE, create an index or contact an embedding host. Only sanitized step names and a small result are printed; retain the normal exit code this time if convenient.
+The MCP wire smoke initializes the stdio adapter, checks discovery/status/list operations, and optionally reads a supplied note and verifies a supplied keyword query. It makes no writes or model calls:
 
-A successful `PASS phase15-account-smoke` against the real compiled core completes the outstanding Phase 1.5 integration observation. Share only that output and the source ID, not the private JSON/token/profile. The same script is self-tested here against a fake Data API; that is harness evidence only.
+```sh
+node extras/headless-service/scripts/check-mcp.mjs /private/mcp.json [NOTE_ID] [QUERY]
+```
 
-## Phase 2A: MCP entry point
-
-`mcp.mjs` exposes this account-bound service over stdio, read-only by default, with optional write tools. New notes use Markdown; updates preserve the existing note format. See [MCP.md](MCP.md) for the configuration, tool contract, transport scope, native integration test and remaining selected-host check. This adds no package dependencies, public HTTP listener or semantic indexer, and does not change the Joplin CLI core.
-
-
-## Phase 2B semantic retrieval
-
-Optional semantic indexing and hybrid retrieval are implemented outside the core. See [SEMANTIC.md](SEMANTIC.md) for configuration, separate encrypted storage, runtime ownership, limits and real-provider acceptance. Existing account/keyword behavior remains available without enabling it. The new native integration uses a real encrypted core and store with a fixture HTTP embedding endpoint; it does not establish model quality.
-
-## Stateless HTTP MCP entry point
-
-`mcp-http.mjs` exposes the same account-bound tools through authenticated `POST /mcp`, with separate health and readiness endpoints. It defaults to loopback, requires a private bearer token file, and shares the optional semantic runtime. See [MCP.md](MCP.md#phase-2c-stateless-http-transport) and `scripts/mcp-http.example.json` for configuration and protocol details. The listener does not implement OAuth or deploy a proxy.
-
-## Phase 5 — managed accounts
-
-[Multi-user operation](MULTI-USER.md) adds a small Linux supervisor, separate
-account workers, a restricted core-setup wrapper, durable disable/re-enable and
-an authenticated local MCP bridge sharing the existing semantic owner. Legacy
-single-account entries remain usable. Start with `scripts/fleet.example.json`
-and `scripts/fleet-account.example.json`; use [the focused acceptance guide](CODEX-PHASE5-VALIDATION.md).
-The four user-deferred Phase 4 observations are tracked in [BACKLOG.md](BACKLOG.md),
-not treated as Phase 5 prerequisites or passed tests.
+The reference smoke client is not the official MCP SDK and does not certify every host. These checks do not replace the native tests for core integration.
