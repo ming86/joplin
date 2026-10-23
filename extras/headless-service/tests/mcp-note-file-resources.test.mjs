@@ -193,3 +193,135 @@ test('HTTP exports a note file that a separate authenticated POST can read', asy
 	assert.equal(unauthorized.status, 401);
 	assert.deepEqual(unauthorized.json, { error: 'unauthorized' });
 });
+
+test('HTTP revision, comparison, and conflict exports share one readable file store', async t => {
+	const revisionId = '1'.repeat(32);
+	const nextRevisionId = '2'.repeat(32);
+	const conflictId = '3'.repeat(32);
+	const revisionBody = 'Historical résumé 📝\r\nsecond line\n';
+	const titleDiff = '--- old\n+++ new 東京\n';
+	const bodyDiff = '@@ -1 +1 @@\n-ancien 🐈\n+nouveau 🐈‍⬛\n';
+	const conflictBody = 'Conflict copy: café — local\n';
+	const originalBody = 'Original note: 東京 — synced\r\n';
+	const expectedDiff = `=== title diff ===\n${titleDiff}\n\n=== body diff ===\n${bodyDiff}`;
+	const service = {
+		async status() { return { accountEmail: 'alice@example.test' }; },
+		async readNoteRevision(input) {
+			assert.deepEqual(input, { note_id: noteId, revision_id: revisionId });
+			return {
+				note_id: noteId,
+				revision_id: revisionId,
+				captured_time: 123,
+				title: 'Historical résumé',
+				body: revisionBody,
+				metadata: { markup_language: 1, parent_id: folderId },
+				accountId: 'alice',
+			};
+		},
+		async compareNoteRevisions(input) {
+			assert.deepEqual(input, {
+				note_id: noteId,
+				from_revision_id: revisionId,
+				to_revision_id: nextRevisionId,
+			});
+			return {
+				note_id: noteId,
+				from_revision_id: revisionId,
+				to_revision_id: nextRevisionId,
+				to_current: false,
+				title_diff: titleDiff,
+				body_diff: bodyDiff,
+				metadata_changes: [{ field: 'parent_id', from: { present: true, value: folderId }, to: { present: false } }],
+				accountId: 'alice',
+			};
+		},
+		async readConflict(input) {
+			assert.deepEqual(input, { id: conflictId });
+			return {
+				accountId: 'alice',
+				conflict: {
+					id: conflictId,
+					status: 'available',
+					note: {
+						id: conflictId,
+						title: 'Conflict copy',
+						body: conflictBody,
+						markup_language: 1,
+					},
+				},
+				original: {
+					id: noteId,
+					status: 'available',
+					note: {
+						id: noteId,
+						title: 'Original note',
+						body: originalBody,
+						markup_language: 2,
+					},
+				},
+			};
+		},
+	};
+	const server = await startMcpHttpServer({ service, bearerToken: token });
+	t.after(() => server.close());
+
+	async function callTool(id, name, args) {
+		const response = await post(server, modernRequest(id, 'tools/call', { name, arguments: args }));
+		assert.equal(response.status, 200);
+		assert.equal(response.json.result.resultType, 'complete');
+		const result = response.json.result;
+		const metadata = result.structuredContent;
+		assert.equal(metadata.accountEmail, 'alice@example.test');
+		assert.equal(Object.hasOwn(metadata, 'accountId'), false);
+		assert.deepEqual(JSON.parse(result.content[0].text), metadata);
+		return metadata;
+	}
+
+	const revision = await callTool(1, 'read_note_revision', {
+		note_id: noteId, revision_id: revisionId, output: 'file',
+	});
+	assert.equal(revision.revision_id, revisionId);
+	assert.equal(Object.hasOwn(revision, 'body'), false);
+
+	const comparison = await callTool(2, 'compare_note_revisions', {
+		note_id: noteId, from_revision_id: revisionId, to_revision_id: nextRevisionId, output: 'file',
+	});
+	assert.equal(comparison.from_revision_id, revisionId);
+	assert.equal(comparison.to_revision_id, nextRevisionId);
+	assert.equal(Object.hasOwn(comparison, 'title_diff'), false);
+	assert.equal(Object.hasOwn(comparison, 'body_diff'), false);
+
+	const conflict = await callTool(3, 'read_conflict', { id: conflictId, output: 'file' });
+	assert.equal(conflict.conflict.status, 'available');
+	assert.equal(conflict.original.status, 'available');
+	assert.equal(Object.hasOwn(conflict.conflict.note, 'body'), false);
+	assert.equal(Object.hasOwn(conflict.original.note, 'body'), false);
+
+	const exports = [
+		{ file: revision.file, bytes: Buffer.from(revisionBody, 'utf8') },
+		{ file: comparison.file, bytes: Buffer.from(expectedDiff, 'utf8') },
+		{ file: conflict.conflict.note.file, bytes: Buffer.from(conflictBody, 'utf8') },
+		{ file: conflict.original.note.file, bytes: Buffer.from(originalBody, 'utf8') },
+	];
+	for (const [index, entry] of exports.entries()) {
+		const read = await post(server, modernRequest(4 + index, 'resources/read', { uri: entry.file.uri }));
+		assert.equal(read.status, 200);
+		assert.equal(read.json.result.resultType, 'complete');
+		assert.deepEqual(read.json.result.contents, [{
+			uri: entry.file.uri,
+			mimeType: entry.file.mime_type,
+			blob: entry.bytes.toString('base64'),
+		}]);
+	}
+
+	const listed = await post(server, modernRequest(8, 'resources/list'));
+	assert.equal(listed.status, 200);
+	assert.equal(listed.json.result.resultType, 'complete');
+	assert.equal(listed.json.result.resources.length, 4);
+	assert.deepEqual(listed.json.result.resources, exports.map(({ file, bytes }) => ({
+		name: file.filename,
+		mimeType: file.mime_type,
+		size: bytes.length,
+		uri: file.uri,
+	})));
+});

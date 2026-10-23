@@ -117,7 +117,6 @@ test('published write-tool anyOf branches contain their complete closed object s
 			['create_note', { required: ['title'], alternatives: [['notebook_id'], ['parentId']] }],
 			['manage_tags', { required: ['note_id'], alternatives: [['add'], ['remove']] }],
 			['update_notebook', { required: ['id'], alternatives: [['title'], ['parent_id']] }],
-			['update_attachment', { required: ['id'], alternatives: [['title'], ['filename'], ['mime'], ['content_base64']] }],
 		]);
 
 		for (const [name, { required, alternatives }] of expected) {
@@ -138,6 +137,14 @@ test('published write-tool anyOf branches contain their complete closed object s
 				}
 			}
 		}
+
+		const updateAttachment = tools.get('update_attachment');
+		assert.ok(updateAttachment);
+		assert.deepEqual(updateAttachment.inputSchema.required, ['id']);
+		assert.equal(updateAttachment.inputSchema.minProperties, 2);
+		assert.equal(Object.hasOwn(updateAttachment.inputSchema, 'anyOf'), false);
+		assert.ok(updateAttachment.inputSchema.properties.content_file);
+		assert.deepEqual(updateAttachment._meta, { 'openai/fileParams': ['content_file'] });
 	} finally { s.close(); }
 });
 test('semantic search publishes its full schema and reports not implemented with or without an active index', async () => {

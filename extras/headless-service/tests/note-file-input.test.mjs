@@ -2,12 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
-import { createNoteBodyFileReader } from '../src/mcp/note-file-input.mjs';
+import { createBinaryFileReader, createNoteBodyFileReader } from '../src/mcp/note-file-input.mjs';
 
 /** Build a Node-compatible fake transport that connects through the supplied DNS callback. */
-function transport({ addresses = [{ address: '93.184.216.34', family: 4 }], chunks = [Buffer.from('body')], status = 200, stalled = false, dnsError = null } = {}) {
+function transport({ readerFactory = createNoteBodyFileReader, addresses = [{ address: '93.184.216.34', family: 4 }], chunks = [Buffer.from('body')], status = 200, stalled = false, dnsError = null } = {}) {
 	const seen = { lookups: 0, requests: 0, connected: false, requestDestroyed: false, response: null };
-	const read = createNoteBodyFileReader({
+	const read = readerFactory({
 		lookup(host, options, callback) {
 			seen.lookups++;
 			assert.equal(host, 'files.example');
@@ -53,6 +53,20 @@ async function fails(operation, code) {
 		return true;
 	});
 }
+
+test('downloads exact binary bytes across chunks without UTF-8 decoding', async () => {
+	const bytes = Buffer.from([0x00, 0xef, 0xbb, 0xbf, 0xff, 0xc3, 0x28, 0x00, 0x80]);
+	const { read, seen } = transport({
+		readerFactory: createBinaryFileReader,
+		chunks: [bytes.subarray(0, 2), bytes.subarray(2, 6), bytes.subarray(6)],
+	});
+	const result = await read(file);
+	assert.ok(Buffer.isBuffer(result));
+	assert.deepEqual(result, bytes);
+	assert.equal(seen.lookups, 1);
+	assert.equal(seen.requestDestroyed, true);
+	assert.equal(seen.response.destroyed, true);
+});
 
 test('downloads exact multi-megabyte UTF-8 text with BOM, line endings, and split codepoints', async () => {
 	const body = '\ufeff# Note\r\n' + 'é😀\n'.repeat(600000) + '\r\n';
