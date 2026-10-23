@@ -19,14 +19,17 @@ function readable(note, id) {
 /** Validate public MCP changes while leaving their semantics to the atomic core operation. */
 function noteChanges(input) {
 	requireValue(record(input), 'invalid_note_input');
-	const allowed = ['title', 'body', 'append', 'prepend', 'replace_text', 'notebook_id', 'todo_completed'];
+	const allowed = ['title', 'body', 'append', 'prepend', 'replace_text', 'notebook_id', 'is_todo', 'todo_due', 'todo_completed', 'source_url'];
 	requireValue(Object.keys(input).every(key => allowed.includes(key)), 'unsupported_note_property');
 	requireValue(Object.keys(input).length > 0, 'empty_note_update');
 	for (const key of ['title', 'body', 'append', 'prepend']) {
 		if (Object.hasOwn(input, key)) requireValue(typeof input[key] === 'string', 'invalid_note_input');
 	}
 	if (Object.hasOwn(input, 'notebook_id')) identifier(input.notebook_id);
+	if (Object.hasOwn(input, 'is_todo')) requireValue(typeof input.is_todo === 'boolean', 'invalid_note_input');
+	if (Object.hasOwn(input, 'todo_due')) requireValue(Number.isInteger(input.todo_due), 'invalid_note_input');
 	if (Object.hasOwn(input, 'todo_completed')) requireValue(typeof input.todo_completed === 'boolean', 'invalid_note_input');
+	if (Object.hasOwn(input, 'source_url')) requireValue(typeof input.source_url === 'string', 'invalid_note_input');
 	if (Object.hasOwn(input, 'replace_text')) {
 		const replace = input.replace_text;
 		requireValue(record(replace) && Object.keys(replace).length === 2

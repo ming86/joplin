@@ -67,8 +67,16 @@ export interface Note {
     updated_time?: number;
     /** Whether this note is a to-do, represented as 0 or 1. */
     is_todo?: number;
+    /** To-do due time in Unix epoch milliseconds; negative values represent dates before 1970, and 0 means no due date. */
+    todo_due?: number;
     /** Completion time in milliseconds, or 0 while open. */
     todo_completed?: number;
+    /** Joplin origin identifier; read-only through this service. */
+    readonly source?: string;
+    /** Joplin application identifier that created the note; read-only through this service. */
+    readonly source_application?: string;
+    /** Origin URL associated with the note. An empty string clears it on writes. */
+    source_url?: string;
     markup_language?: number;
     encryption_applied?: number;
     deleted_time?: number;
@@ -278,6 +286,10 @@ export interface NewNote {
     body: string;
     /** To-do flag encoded as the Joplin API's 0 or 1. */
     is_todo: 0 | 1;
+    /** To-do due time in Unix epoch milliseconds; negative values represent dates before 1970, and 0 clears the date. */
+    todo_due?: number;
+    /** Origin URL; an empty string clears it. */
+    source_url?: string;
 }
 /** Desktop-compatible account-service input; parentId retains the legacy web API shape. */
 export interface CreateNoteInput {
@@ -289,6 +301,10 @@ export interface CreateNoteInput {
     notebook_id?: string;
     /** Create the note as a to-do. */
     is_todo?: boolean;
+    /** To-do due time in Unix epoch milliseconds; negative values represent dates before 1970, and 0 clears the date. */
+    todo_due?: number;
+    /** Origin URL; an empty string clears it. */
+    source_url?: string;
     /** Legacy web-service notebook ID. */
     parentId?: string;
 }
@@ -313,8 +329,14 @@ export interface NoteUpdate {
     replace_text?: ReplaceTextInput;
     /** Move the note to this readable notebook. */
     notebook_id?: string;
+    /** Set whether this note is a to-do. */
+    is_todo?: boolean;
+    /** To-do due time in Unix epoch milliseconds; negative values represent dates before 1970, and 0 clears the date. */
+    todo_due?: number;
     /** Set to true to complete the to-do, or false to reopen it. */
     todo_completed?: boolean;
+    /** Origin URL; an empty string clears it. */
+    source_url?: string;
 }
 /** Backend patch after Desktop update operations are resolved. */
 export interface NotePatch {
@@ -324,8 +346,14 @@ export interface NotePatch {
     body?: string;
     /** Verified destination notebook ID. */
     parentId?: string;
+    /** To-do flag encoded as the Joplin API's 0 or 1. */
+    is_todo?: 0 | 1;
+    /** To-do due time in Unix epoch milliseconds; negative values represent dates before 1970, and 0 clears the date. */
+    todo_due?: number;
     /** Completion timestamp in milliseconds, or 0 to reopen the to-do. */
     todo_completed?: number;
+    /** Origin URL; an empty string clears it. */
+    source_url?: string;
 }
 /** Protected note update; include the base revision and at least one change. */
 export interface RevisionNoteUpdate extends NoteUpdate {

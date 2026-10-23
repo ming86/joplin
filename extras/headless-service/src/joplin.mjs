@@ -5,7 +5,7 @@ import { createConflictClient } from './conflict-client.mjs';
 import { createAttachmentClient } from './attachment-client.mjs';
 
 /** Fields used by note reads and metadata scans. */
-const noteFields = 'id,parent_id,title,body,created_time,updated_time,is_todo,todo_completed,markup_language,encryption_applied,deleted_time,is_locked';
+const noteFields = 'id,parent_id,title,body,created_time,updated_time,is_todo,todo_due,todo_completed,source,source_application,source_url,markup_language,encryption_applied,deleted_time,is_locked';
 /** Status counters exposed by the fixed headless status contract. */
 const statusCounterFields = [
 	'itemConflict', 'noteConflict', 'resourceConflict',
@@ -29,8 +29,11 @@ function noteResult(data) {
 	requireValue(data && typeof data === 'object' && typeof data.id === 'string' && /^[a-f0-9]{32}$/.test(data.id), 'invalid_backend_response');
 	for (const key of noteFields.split(',')) {
 		if (!Object.hasOwn(data, key)) continue;
-		const isText = ['id', 'parent_id', 'title', 'body'].includes(key);
-		requireValue(isText ? typeof data[key] === 'string' : typeof data[key] === 'number' && Number.isFinite(data[key]), 'invalid_backend_response');
+		const isText = ['id', 'parent_id', 'title', 'body', 'source', 'source_application', 'source_url'].includes(key);
+		const valid = isText ? typeof data[key] === 'string'
+			: key === 'todo_due' ? Number.isInteger(data[key])
+				: typeof data[key] === 'number' && Number.isFinite(data[key]);
+		requireValue(valid, 'invalid_backend_response');
 	}
 	// Allowlist returned properties; a future upstream property cannot leak through by accident.
 	return Object.fromEntries(noteFields.split(',').filter(key => Object.hasOwn(data, key)).map(key => [key, data[key]]));
@@ -103,7 +106,7 @@ function headlessStatusResult(data) {
 /** Maps the supported note patch fields to the private Data API request shape. */
 function noteInput(input, creating) {
 	requireValue(input && typeof input === 'object' && !Array.isArray(input), 'invalid_note_input');
-	const allowed = ['title', 'body', 'parentId', 'is_todo', 'todo_completed'];
+	const allowed = ['title', 'body', 'parentId', 'is_todo', 'todo_due', 'todo_completed', 'source_url'];
 	requireValue(Object.keys(input).every(key => allowed.includes(key)), 'unsupported_note_property');
 	if (creating || Object.hasOwn(input, 'parentId')) identifier(input.parentId);
 	for (const key of ['title', 'body']) {
@@ -111,13 +114,17 @@ function noteInput(input, creating) {
 	}
 	requireValue(creating || Object.keys(input).length > 0, 'empty_note_update');
 	if (Object.hasOwn(input, 'is_todo')) requireValue(input.is_todo === 0 || input.is_todo === 1, 'invalid_note_input');
+	if (Object.hasOwn(input, 'todo_due')) requireValue(Number.isInteger(input.todo_due), 'invalid_note_input');
 	if (Object.hasOwn(input, 'todo_completed')) requireValue(Number.isSafeInteger(input.todo_completed) && input.todo_completed >= 0, 'invalid_note_input');
+	if (Object.hasOwn(input, 'source_url')) requireValue(typeof input.source_url === 'string', 'invalid_note_input');
 	const result = {};
 	if ('title' in input) result.title = input.title;
 	if ('body' in input) result.body = input.body;
 	if ('parentId' in input) result.parent_id = input.parentId;
 	if ('is_todo' in input) result.is_todo = input.is_todo;
+	if ('todo_due' in input) result.todo_due = input.todo_due;
 	if ('todo_completed' in input) result.todo_completed = input.todo_completed;
+	if ('source_url' in input) result.source_url = input.source_url;
 	if (creating) { result.is_todo ??= 0; result.markup_language = 1; }
 	return result;
 }

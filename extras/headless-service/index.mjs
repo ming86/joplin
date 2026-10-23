@@ -185,13 +185,15 @@ export function createAccountRegistry(configurations, factories = {}) {
 				/** Create a note in a verified notebook, accepting both Desktop and legacy web inputs. */
 				async createNote(input, signal) {
 					permit('write'); inputRecord(input, 'invalid_note_input');
-					requireValue(Object.keys(input).every(key => ['title', 'body', 'notebook_id', 'parentId', 'is_todo'].includes(key)), 'unsupported_note_property');
+					requireValue(Object.keys(input).every(key => ['title', 'body', 'notebook_id', 'parentId', 'is_todo', 'todo_due', 'source_url'].includes(key)), 'unsupported_note_property');
 					requireValue(typeof input.title === 'string', 'invalid_note_input');
 					requireValue(input.title.trim().length > 0, 'invalid_note_input');
 					if (input.body !== undefined) requireValue(typeof input.body === 'string', 'invalid_note_input');
 					if (input.notebook_id !== undefined) requireValue(typeof input.notebook_id === 'string', 'invalid_note_input');
 					if (input.parentId !== undefined) requireValue(typeof input.parentId === 'string', 'invalid_note_input');
 					if (input.is_todo !== undefined) requireValue(typeof input.is_todo === 'boolean', 'invalid_note_input');
+					if (input.todo_due !== undefined) requireValue(Number.isInteger(input.todo_due), 'invalid_note_input');
+					if (input.source_url !== undefined) requireValue(typeof input.source_url === 'string', 'invalid_note_input');
 					let parentId = input.notebook_id ?? input.parentId ?? config.defaultNotebookId;
 					if (parentId === undefined) {
 						// hasMore tracks raw folders, including folders filtered as unreadable.
@@ -217,24 +219,33 @@ export function createAccountRegistry(configurations, factories = {}) {
 						body: input.body ?? '',
 						parentId,
 						is_todo: input.is_todo ? 1 : 0,
+						...(input.todo_due !== undefined ? { todo_due: input.todo_due } : {}),
+						...(input.source_url !== undefined ? { source_url: input.source_url } : {}),
 					}, signal);
 					return { ...identity(created), notebook_id: created.parent_id };
 				},
 				async updateNote(id, input, signal) {
 					permit('write');
 					inputRecord(input, 'invalid_note_input');
-					requireValue(Object.keys(input).every(key => ['title', 'body', 'append', 'prepend', 'replace_text', 'notebook_id', 'todo_completed'].includes(key)), 'unsupported_note_property');
+					requireValue(Object.keys(input).every(key => ['title', 'body', 'append', 'prepend', 'replace_text', 'notebook_id', 'is_todo', 'todo_due', 'todo_completed', 'source_url'].includes(key)), 'unsupported_note_property');
 					for (const key of ['title', 'body', 'append', 'prepend']) {
 						if (input[key] !== undefined) requireValue(typeof input[key] === 'string', 'invalid_note_input');
 					}
 					if (input.notebook_id !== undefined) requireValue(typeof input.notebook_id === 'string', 'invalid_note_input');
+					if (input.is_todo !== undefined) requireValue(typeof input.is_todo === 'boolean', 'invalid_note_input');
+					if (input.todo_due !== undefined) requireValue(Number.isInteger(input.todo_due), 'invalid_note_input');
 					if (input.todo_completed !== undefined) requireValue(typeof input.todo_completed === 'boolean', 'invalid_note_input');
+					if (input.source_url !== undefined) requireValue(typeof input.source_url === 'string', 'invalid_note_input');
 					// Best-effort eligibility check, NOT a compare-and-swap or lost-update guarantee.
 					const current = await backend().getNote(id, signal);
 					if (!eligible(current)) throw new ServiceError('note_unavailable');
 					if (input.notebook_id !== undefined) await backend().getNotebook(input.notebook_id, signal);
 					let nextBody = current.body ?? '';
 					let bodyChanged = false;
+					const nextTodoType = input.is_todo === undefined ? undefined : input.is_todo ? 1 : 0;
+					const todoTypeChanged = nextTodoType !== undefined && nextTodoType !== (current.is_todo ?? 0);
+					let todoCompleted = current.todo_completed || 0;
+					if (todoTypeChanged) todoCompleted = 0;
 					if (input.body !== undefined) {
 						nextBody = input.body;
 						bodyChanged = true;
@@ -258,7 +269,13 @@ export function createAccountRegistry(configurations, factories = {}) {
 						...(input.title !== undefined ? { title: input.title } : {}),
 						...(bodyChanged ? { body: nextBody } : {}),
 						...(input.notebook_id !== undefined ? { parentId: input.notebook_id } : {}),
-						...(input.todo_completed !== undefined ? { todo_completed: input.todo_completed ? Date.now() : 0 } : {}),
+						...(nextTodoType !== undefined ? {
+							is_todo: nextTodoType,
+							...(todoTypeChanged ? { todo_due: 0, todo_completed: 0 } : {}),
+						} : {}),
+						...(input.todo_due !== undefined ? { todo_due: input.todo_due } : {}),
+						...(input.todo_completed !== undefined ? { todo_completed: input.todo_completed ? todoCompleted || Date.now() : 0 } : {}),
+						...(input.source_url !== undefined ? { source_url: input.source_url } : {}),
 					};
 					return identity(await backend().updateNote(id, patch, signal));
 				},

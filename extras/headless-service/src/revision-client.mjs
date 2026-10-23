@@ -37,7 +37,8 @@ function jsonValue(value) {
 /** Validate a native note snapshot and retain only known Joplin fields. */
 function noteResult(data, expectedId) {
 	const fields = [
-		'id', 'parent_id', 'title', 'body', 'created_time', 'updated_time', 'is_todo', 'todo_completed',
+		'id', 'parent_id', 'title', 'body', 'created_time', 'updated_time', 'is_todo', 'todo_due', 'todo_completed',
+		'source', 'source_application', 'source_url',
 		'markup_language', 'encryption_applied', 'deleted_time', 'is_locked', 'revision_id', 'previous_revision_id', 'changed',
 	];
 	requireValue(record(data) && data.id === expectedId, 'invalid_backend_response');
@@ -45,10 +46,11 @@ function noteResult(data, expectedId) {
 	requireValue(typeof data.revision_id === 'string' && /^[a-f0-9]{32}$/.test(data.revision_id), 'invalid_backend_response');
 	for (const key of fields) {
 		if (!Object.hasOwn(data, key)) continue;
-		if (['id', 'parent_id', 'title', 'body'].includes(key)) requireValue(typeof data[key] === 'string', 'invalid_backend_response');
+		if (['id', 'parent_id', 'title', 'body', 'source', 'source_application', 'source_url'].includes(key)) requireValue(typeof data[key] === 'string', 'invalid_backend_response');
 		else if (key === 'revision_id') requireValue(typeof data[key] === 'string' && /^[a-f0-9]{32}$/.test(data[key]), 'invalid_backend_response');
 		else if (key === 'previous_revision_id') requireValue(data[key] === null || typeof data[key] === 'string' && /^[a-f0-9]{32}$/.test(data[key]), 'invalid_backend_response');
 		else if (key === 'changed') requireValue(typeof data[key] === 'boolean', 'invalid_backend_response');
+		else if (key === 'todo_due') requireValue(Number.isInteger(data[key]), 'invalid_backend_response');
 		else requireValue(typeof data[key] === 'number' && Number.isFinite(data[key]), 'invalid_backend_response');
 	}
 	return Object.fromEntries(fields.filter(key => Object.hasOwn(data, key)).map(key => [key, data[key]]));
@@ -138,7 +140,7 @@ export function createRevisionClient(request) {
 		async updateNoteWithRevision(id, input, signal) {
 			identifier(id);
 			requireValue(record(input), 'invalid_note_input');
-			const allowed = ['base_revision_id', 'title', 'body', 'append', 'prepend', 'replace_text', 'notebook_id', 'todo_completed'];
+			const allowed = ['base_revision_id', 'title', 'body', 'append', 'prepend', 'replace_text', 'notebook_id', 'is_todo', 'todo_due', 'todo_completed', 'source_url'];
 			requireValue(Object.keys(input).every(key => allowed.includes(key)), 'unsupported_note_property');
 			requireValue(Object.hasOwn(input, 'base_revision_id'), 'base_revision_required');
 			revisionId(input.base_revision_id);
@@ -148,7 +150,10 @@ export function createRevisionClient(request) {
 				if (Object.hasOwn(changes, key)) requireValue(typeof changes[key] === 'string', 'invalid_note_input');
 			}
 			if (Object.hasOwn(changes, 'notebook_id')) identifier(changes.notebook_id);
+			if (Object.hasOwn(changes, 'is_todo')) requireValue(typeof changes.is_todo === 'boolean', 'invalid_note_input');
+			if (Object.hasOwn(changes, 'todo_due')) requireValue(Number.isInteger(changes.todo_due), 'invalid_note_input');
 			if (Object.hasOwn(changes, 'todo_completed')) requireValue(typeof changes.todo_completed === 'boolean', 'invalid_note_input');
+			if (Object.hasOwn(changes, 'source_url')) requireValue(typeof changes.source_url === 'string', 'invalid_note_input');
 			if (Object.hasOwn(changes, 'replace_text')) {
 				const replace = changes.replace_text;
 				requireValue(record(replace) && Object.keys(replace).length === 2
