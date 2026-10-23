@@ -2,6 +2,7 @@ import { revisionConflictOutputSchemas } from './revision-conflict-output-schema
 import { maintenanceAttachmentOutputSchemas } from './maintenance-attachment-output-schemas.mjs';
 import { trashOutputSchemas } from './trash-output-schemas.mjs';
 import { attachmentReferenceOutputSchemas } from './attachment-reference-output-schemas.mjs';
+import { grepOutputSchemas } from './grep-output-schemas.mjs';
 
 /** Describe an output record without closing fields retained from backend records. */
 const object = (properties, required = Object.keys(properties)) => ({ type: 'object', properties, required });
@@ -94,6 +95,8 @@ const readProperties = {
 	body_total_line_count: { type: 'integer', minimum: 1, description: 'Logical line count of the complete note body; CRLF, LF and lone CR each count as one break, a trailing break adds a final empty line, and an empty body has one line.' },
 	body_offset: { type: 'number', description: 'Start offset of the returned body in UTF-16 code units.' },
 	body_returned_chars: { type: 'number', description: 'Returned body length in UTF-16 code units.' },
+	body_start_line: { type: ['integer', 'null'], minimum: 1, description: 'Actual first line returned by a line-range read, inclusive and 1-based; null when the requested start is beyond the body.' },
+	body_end_line: { type: ['integer', 'null'], minimum: 1, description: 'Actual last line returned by a line-range read, inclusive and 1-based; null when the requested start is beyond the body.' },
 	has_more: boolean,
 	offset: { type: 'number', description: 'Legacy alias for body_offset in UTF-16 code units.' },
 	nextOffset: { type: ['number', 'null'], description: 'Next UTF-16 code-unit offset, or null when the full body has been returned.' },
@@ -185,7 +188,7 @@ const errorSchema = object({ error: object({
 	action: { type: 'string', description: 'Inspection advice included when the write outcome is unknown.' },
 }, ['code']) });
 /** Exhaustive catalog mapping; missing entries are registration errors. */
-const successSchemas = { ...coreOutputSchemas, ...revisionConflictOutputSchemas, ...maintenanceAttachmentOutputSchemas, ...trashOutputSchemas, ...attachmentReferenceOutputSchemas };
+const successSchemas = { ...coreOutputSchemas, ...revisionConflictOutputSchemas, ...maintenanceAttachmentOutputSchemas, ...trashOutputSchemas, ...attachmentReferenceOutputSchemas, ...grepOutputSchemas };
 
 /** Return the existing success or structured error contract for one registered tool. */
 export function getToolOutputSchema(name) {

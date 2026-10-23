@@ -3,7 +3,7 @@ const identities = new WeakMap();
 
 /** Known result records that carry the bound account's identity at their root. */
 const rootIdentityTools = new Set([
-	'list_notes', 'search_notes', 'read_note', 'get_note',
+	'list_notes', 'search_notes', 'read_note', 'get_note', 'grep_notes',
 	'list_note_revisions', 'read_note_revision', 'compare_note_revisions',
 	'list_conflicts', 'read_conflict', 'update_notebook', 'delete_notebook',
 	'create_tag', 'rename_tag', 'read_attachment', 'create_attachment', 'update_attachment',
