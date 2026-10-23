@@ -25,7 +25,9 @@ Copy `scripts/mcp.example.json` to an absolute local configuration path and chan
 node /absolute/repo/extras/headless-service/mcp.mjs /absolute/private/mcp.json
 ```
 
-The process waits for MCP input. There is no ordinary startup banner on stdout: stdout is the JSON-RPC channel. Diagnostics on stderr are fixed codes, not notes, credentials, URLs or backend errors. It needs Node 22.12 or newer, but no SQLCipher addon in the adapter process. The separately running core still needs its native environment.
+The process waits for MCP input. There is no ordinary startup banner on stdout: stdout is the JSON-RPC channel. Unexpected operation failures produce structured JSON diagnostics on stderr. Each record identifies the tool or operation and, when available, the backend method, path, request stage, elapsed milliseconds, HTTP status, timeout and underlying exception chain. Messages and source locations are selected to exclude note contents, credentials, query strings and file URLs. Expected validation failures, stale-revision conflicts and cancellations do not create error logs. Public error responses retain their existing codes and do not expose internal exception details. It needs Node 22.12 or newer, but no SQLCipher addon in the adapter process. The separately running core still needs its native environment.
+
+For the rootless Podman deployment, inspect these diagnostics with `ssh vps-example podman logs --timestamps --since 15m joplin-headless-mcp`. Core logs are separate: `ssh vps-example podman logs --timestamps --since 15m joplin-headless-core`. The MCP adapter records backend failures at the handling boundary rather than at every wrapper, so an exception passing through multiple layers produces one diagnostic. An error response without a corresponding core log can still represent a failed connection or response read in the adapter.
 
 In a host that accepts stdio command/arguments, configure that command directly. For Codex CLI, the documented form is:
 

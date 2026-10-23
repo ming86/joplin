@@ -22,6 +22,8 @@ Forwarding always uses the VPC binding `JOPLIN_MCP` and the fixed URL `http://lo
 
 `MCP_RATE_LIMITER` allows 120 requests per 60 seconds for the account's MCP traffic. Registration uses a separate key per Cloudflare client IP on the same binding. Cloudflare rate limits are approximate and local to a Cloudflare location. Invocation logging is disabled because callback URLs contain codes and state; application logs use fixed events without tokens, email addresses, or request bodies.
 
+Forwarding failures emit `mcp_forwarding_failure` with the failed layer, elapsed milliseconds, HTTP status when available, and sanitized exception details. These events cover rate-limiter exceptions, VPC transport exceptions, and upstream authentication or server errors. Tool-level errors returned in a successful MCP HTTP response are logged by the sidecar; the Worker streams that response without inspecting its body. From this package directory, use `npx wrangler tail --format json` to observe new Worker events, and inspect `joplin-headless-mcp` container logs on the VPS for backend request failures.
+
 ## Cloudflare resources
 
 `PUBLIC_URL` in `wrangler.jsonc` is the public Worker origin and must stay `https://joplin-mcp.example.com` (without `/mcp`). Google OAuth uses this callback URL:
