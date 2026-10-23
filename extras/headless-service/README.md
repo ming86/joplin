@@ -2,6 +2,8 @@
 
 This is a small **external application library**, co-located in the repository for this delivery. It imports no Joplin internals and changes no CLI code. It can be moved to a separate application repository unchanged. `extras/` is outside the existing `packages/*` Yarn workspaces; no root dependency or lockfile modification is required. Runtime: Node 22.12 or newer; zero third-party dependencies. The explicit TypeScript declarations describe the JavaScript interface.
 
+`grep_notes` searches raw source lines across selected notes or notebook subtrees, with literal or per-line JavaScript regex matching, optional context/previews, and exact native revision IDs for guarded edits. `read_note` and `get_note` accept inclusive source-line ranges without changing stored line endings. See [the source-line workflow](MCP.md#searching-and-reading-source-lines) for selection, pagination and editing examples.
+
 ## Current behavior
 
 The trusted application constructs `createAccountRegistry(configurations)`, authenticates a caller, then resolves `forPrincipal(verifiedSubject, accountId)`. Resolution checks an explicit grant before any backend/provider factory runs. Unknown and unauthorized accounts have the same error. Each account has independent Joplin endpoint/token, planned semantic-store location and key reference, and embedding deployment/space configuration. Duplicate account/store/key-reference/endpoint bindings are rejected. Configuration is copied, not used as shared mutable request state.
