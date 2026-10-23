@@ -44,13 +44,11 @@ test('create_note accepts a large UTF-8 file body and returns metadata only', as
 	assert.match(definition.inputSchema.properties.body_file.description, /large generated notes.*validated as UTF-8 before note creation/);
 	assert.match(definition.description, /body_file for large generated note bodies/);
 	assert.match(definition.description, /response contains note metadata only/);
-	assert.deepEqual(definition.inputSchema.anyOf.map(branch => branch.required), [
-		['title', 'notebook_id'],
-		['title', 'parentId'],
+	assert.deepEqual(definition.inputSchema.anyOf, [
+		{ required: ['notebook_id'] },
+		{ required: ['parentId'] },
 	]);
-	for (const branch of definition.inputSchema.anyOf) {
-		assert.deepEqual(Object.keys(branch.properties), Object.keys(definition.inputSchema.properties));
-	}
+	assert.equal(definition.inputSchema.additionalProperties, false);
 
 	const result = await tools.call('create_note', {
 		title: 'Generated note', notebook_id: notebookId, is_todo: true, body_file: bodyFile,
@@ -61,6 +59,24 @@ test('create_note accepts a large UTF-8 file body and returns metadata only', as
 	});
 	assert.deepEqual(result.structuredContent, { id: noteId, title: 'Generated note', notebook_id: notebookId });
 	assert.equal(result.content[0].text.includes(generatedBody), false);
+});
+
+test('create_note file parameter keeps destination, nested-file and closed-object validation', async t => {
+	let writes = 0;
+	const tools = fixture(t, { async createNote() { writes++; return { id: noteId, title: 'Unexpected' }; } });
+	const validFile = { download_url: bodyFile.download_url, file_id: bodyFile.file_id };
+
+	const missingDestination = await tools.call('create_note', { title: 'Missing destination', body_file: validFile });
+	assert.equal(missingDestination.structuredContent.error.code, 'notebook_id_required');
+	for (const args of [
+		{ title: 'Missing file id', notebook_id: notebookId, body_file: { download_url: bodyFile.download_url } },
+		{ title: 'Unknown root field', notebook_id: notebookId, body_file: validFile, local_path: '/tmp/body.md' },
+		{ title: 'Unknown file field', notebook_id: notebookId, body_file: { ...validFile, local_path: '/tmp/body.md' } },
+	]) {
+		const result = await tools.call('create_note', args);
+		assert.equal(result.structuredContent.error.code, 'invalid_tool_arguments');
+	}
+	assert.equal(writes, 0);
 });
 
 test('create_note rejects body and body_file together, including an empty inline body, before reading or writing', async t => {

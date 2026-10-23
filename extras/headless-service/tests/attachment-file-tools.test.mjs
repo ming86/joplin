@@ -86,8 +86,13 @@ test('attachment file inputs preserve arbitrary bytes and use only explicitly se
 	assert.equal(JSON.stringify(updated).includes(bytes.toString('base64')), false);
 });
 
-test('attachment file input schemas publish client file parameters and retain usable update shapes', () => {
-	const tools = createTools({}, { allowWrites: true }).list();
+test('attachment file input schemas publish client file parameters and retain usable update shapes', async () => {
+	let reads = 0;
+	let writes = 0;
+	const catalog = createTools({
+		async createAttachment() { writes++; return { id: resourceId }; },
+	}, { allowWrites: true, async readFile() { reads++; return Buffer.from([0xff]); } });
+	const tools = catalog.list();
 	const create = tools.find(tool => tool.name === 'create_attachment');
 	const update = tools.find(tool => tool.name === 'update_attachment');
 	for (const definition of [create, update]) {
@@ -100,7 +105,11 @@ test('attachment file input schemas publish client file parameters and retain us
 		assert.match(definition.inputSchema.properties.content_file.description, /content_file for binary or large files/);
 	}
 	assert.deepEqual(create.inputSchema.required, ['filename']);
-	assert.deepEqual(create.inputSchema.anyOf.map(branch => branch.required), [['filename', 'content_base64'], ['filename', 'content_file']]);
+	assert.deepEqual(create.inputSchema.anyOf, [
+		{ required: ['content_base64'] },
+		{ required: ['content_file'] },
+	]);
+	assert.equal(create.inputSchema.additionalProperties, false);
 	assert.deepEqual(create.inputSchema.not, { required: ['content_base64', 'content_file'] });
 	assert.match(create.description, /content_file for binary or large files/);
 	assert.deepEqual(update.inputSchema.required, ['id']);
@@ -109,6 +118,18 @@ test('attachment file input schemas publish client file parameters and retain us
 	assert.deepEqual(update.inputSchema.not, { required: ['content_base64', 'content_file'] });
 	assert.match(update.description, /content_file for binary or large replacements/);
 	assert.match(update.description, /Joplin note history does not preserve the previous binary contents/);
+
+	for (const args of [
+		{ filename: 'missing-content.bin' },
+		{ content_base64: '/w==' },
+		{ filename: 'unknown-root.bin', content_base64: '/w==', local_path: '/tmp/file.bin' },
+		{ filename: 'unknown-file-field.bin', content_file: { ...file, local_path: '/tmp/file.bin' } },
+	]) {
+		const result = await catalog.call('create_attachment', args);
+		assert.equal(result.structuredContent.error.code, 'invalid_tool_arguments');
+	}
+	assert.equal(reads, 0);
+	assert.equal(writes, 0);
 });
 
 test('metadata-only attachment updates remain valid with the compact update schema', async () => {

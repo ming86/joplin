@@ -179,8 +179,12 @@ export function createTools(service, { allowWrites = false, noteFileResources, r
 	const tools = new Map();
 	/** Store each definition with its runner and MCP safety annotations. */
 	function add(name, description, inputSchema, run, annotations = readAnnotations, metadata) {
+		// The host rewrites a file property at the root; that rewrite does not reach copies nested in completed anyOf branches.
+		const publishedInputSchema = Object.hasOwn(metadata ?? {}, 'openai/fileParams')
+			? inputSchema
+			: completeRequiredOnlyAnyOfBranches(inputSchema);
 		tools.set(name, {
-			definition: { name, description, inputSchema: completeRequiredOnlyAnyOfBranches(inputSchema), outputSchema: getToolOutputSchema(name), annotations: { ...annotations }, ...(metadata ? { _meta: metadata } : {}) }, run,
+			definition: { name, description, inputSchema: publishedInputSchema, outputSchema: getToolOutputSchema(name), annotations: { ...annotations }, ...(metadata ? { _meta: metadata } : {}) }, run,
 		});
 	}
 

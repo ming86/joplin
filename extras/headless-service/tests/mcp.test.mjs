@@ -109,12 +109,11 @@ test('default read-only catalog, annotations and disabled-tool enforcement', asy
 	assert.equal((await s.handle(call(4, 'delete_note', { id: noteId }))).error.code, -32602);
 	assert.equal((await s.handle(request(5, 'tools/list', { cursor: 'bogus' }))).error.code, -32602);
 });
-test('published write-tool anyOf branches contain their complete closed object schemas', async () => {
+test('published non-file write-tool anyOf branches contain their complete closed object schemas', async () => {
 	const s = session({ allowWrites: true }); await ready(s);
 	try {
 		const tools = new Map((await s.handle(request(2, 'tools/list'))).result.tools.map(tool => [tool.name, tool]));
 		const expected = new Map([
-			['create_note', { required: ['title'], alternatives: [['notebook_id'], ['parentId']] }],
 			['manage_tags', { required: ['note_id'], alternatives: [['add'], ['remove']] }],
 			['update_notebook', { required: ['id'], alternatives: [['title'], ['parent_id']] }],
 		]);
@@ -145,6 +144,14 @@ test('published write-tool anyOf branches contain their complete closed object s
 		assert.equal(Object.hasOwn(updateAttachment.inputSchema, 'anyOf'), false);
 		assert.ok(updateAttachment.inputSchema.properties.content_file);
 		assert.deepEqual(updateAttachment._meta, { 'openai/fileParams': ['content_file'] });
+
+		const createAttachment = tools.get('create_attachment');
+		assert.deepEqual(createAttachment.inputSchema.anyOf, [
+			{ required: ['content_base64'] },
+			{ required: ['content_file'] },
+		]);
+		assert.ok(createAttachment.inputSchema.properties.content_file);
+		assert.deepEqual(createAttachment._meta, { 'openai/fileParams': ['content_file'] });
 	} finally { s.close(); }
 });
 test('semantic search publishes its full schema and reports not implemented with or without an active index', async () => {
@@ -210,7 +217,7 @@ test('create_note requires an explicit notebook and accepts either destination f
 		const tools = (await s.handle(request(2, 'tools/list'))).result.tools;
 		const schema = tools.find(tool => tool.name === 'create_note').inputSchema;
 		assert.deepEqual(schema.required, ['title']);
-		assert.deepEqual(schema.anyOf.map(option => option.required), [['title', 'notebook_id'], ['title', 'parentId']]);
+		assert.deepEqual(schema.anyOf, [{ required: ['notebook_id'] }, { required: ['parentId'] }]);
 		assert.match(schema.properties.notebook_id.description, /list_notebooks/);
 		assert.match(schema.properties.parentId.description, /alias/);
 
