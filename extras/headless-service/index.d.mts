@@ -751,6 +751,66 @@ export interface AccountStatus extends HeadlessStatusSummary {
     semantic: SemanticStatus;
 }
 export interface SearchInput extends PageOptions { query: string; mode?: 'keyword' | 'semantic' | 'hybrid'; notebookId?: string; }
+/** Input for searching readable note bodies one source line at a time. */
+export interface GrepInput extends PageOptions {
+    /** Non-empty literal text or JavaScript regular expression, depending on `mode`. */
+    pattern: string;
+    /** Literal matching by default; regular expressions are evaluated separately on each line. */
+    mode?: 'literal' | 'regex';
+    /** Whether matching distinguishes letter case; defaults to true. */
+    case_sensitive?: boolean;
+    /** Note IDs to include. Combined with `notebook_ids` as a union. An empty array selects no notes by itself. */
+    note_ids?: string[];
+    /** Notebook IDs to include. Combined with `note_ids` as a union. An empty array selects no notes by itself. */
+    notebook_ids?: string[];
+    /** Include notebooks below selected notebooks; defaults to true. */
+    include_descendants?: boolean;
+    /** Number of preceding source lines to include for each match; defaults to 0. */
+    context_before?: number;
+    /** Number of following source lines to include for each match; defaults to 0. */
+    context_after?: number;
+    /** Maximum preview length in UTF-16 code units. Omission returns complete lines. */
+    max_line_chars?: number;
+}
+/** A matching source line or context line, with optional preview truncation. */
+export interface GrepLine {
+    /** One-based source line number. */
+    line_number: number;
+    /** Line preview, excluding its line terminator. */
+    text: string;
+    /** Whether the preview omits part of the source line. */
+    truncated: boolean;
+    /** Full source line length in UTF-16 code units. */
+    line_length: number;
+}
+/** One readable note line that matched a grep pattern. */
+export interface GrepMatch extends GrepLine {
+    /** Joplin note ID. */
+    note_id: string;
+    /** Note title from the same native snapshot as `revision_id`. */
+    title: string;
+    /** Parent notebook ID from the same native snapshot, or null for no parent. */
+    notebook_id: string | null;
+    /** Native Joplin revision ID captured with the body that supplied this match. */
+    revision_id: string;
+    /** Requested preceding lines from the same note snapshot. */
+    context_before: GrepLine[];
+    /** Requested following lines from the same note snapshot. */
+    context_after: GrepLine[];
+}
+/** One account-bound page of matching source lines. */
+export interface GrepResult {
+    /** Account that supplied these notes. */
+    accountId: string;
+    /** Matches ordered by note ID, then source line number. */
+    items: GrepMatch[];
+    /** One-based result page. */
+    page: number;
+    /** Requested page size. */
+    limit: number;
+    /** Whether at least one further matching line exists. */
+    hasMore: boolean;
+}
 export interface SearchResult {
     accountId: string; requestedMode: 'keyword' | 'semantic' | 'hybrid'; executedMode: 'keyword' | 'semantic' | 'hybrid' | null;
     semantic: SemanticStatus; items: (AccountNote & { provenance: 'keyword' | 'semantic' | 'hybrid'; score?: number; semanticExcerpt?: string; chunk?: { ordinal: number; start: number; end: number; offsetUnit: 'utf8-byte' } })[];
@@ -840,6 +900,8 @@ export interface AccountService {
     listAllNotebooks(signal?: AbortSignal): Promise<NotebookListResult>;
     listNotes(options?: PageOptions & { notebookId?: string }, signal?: AbortSignal): Promise<Page<AccountNote>>;
     listNoteSummaries(options?: PageOptions & { notebookId?: string }, signal?: AbortSignal): Promise<Page<AccountNote>>;
+    /** Search readable note bodies with literal or per-line regular-expression matching. */
+    grepNotes(input: GrepInput, signal?: AbortSignal): Promise<GrepResult>;
     getNotebook(id: string, signal?: AbortSignal): Promise<{ id: string; title: string }>;
     getWebCreationRecord(id: string, signal?: AbortSignal): Promise<WebCreationRecord>;
     createWebPlaceholder(input: WebPlaceholder, signal?: AbortSignal): Promise<{ id: string }>;

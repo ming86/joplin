@@ -4,6 +4,7 @@ import { createJoplinClient, endpoint } from './src/joplin.mjs';
 import { bindEmbeddingProvider, embeddingSpace } from './src/embeddings.mjs';
 import { createMaintenanceService } from './src/maintenance.mjs';
 import { createRevisionService } from './src/revisions.mjs';
+import { createGrepService } from './src/grep.mjs';
 import { createConflictService } from './src/conflicts.mjs';
 import { createAttachmentService } from './src/attachments.mjs';
 import { createTrashService } from './src/trash.mjs';
@@ -113,6 +114,7 @@ export function createAccountRegistry(configurations, factories = {}) {
 			};
 			const semanticStatus = Object.freeze({ state: 'unavailable', reason: 'not_implemented', ...(config.embedding ? { embeddingSpaceId: config.embedding.space.id } : {}) });
 			return Object.freeze({
+				...createGrepService({ backend, permit, accountId }),
 				...createRevisionService({ backend, permit, accountId, readableNotebookTitle }),
 				...createConflictService({ backend, permit, accountId }),
 				...createMaintenanceService({ backend, permit, accountId }),
