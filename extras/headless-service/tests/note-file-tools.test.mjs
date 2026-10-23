@@ -89,14 +89,93 @@ test('read_note and get_note report whole-body line counts in every output mode'
 	assert.equal((await tools.call('read_note', { id: noteId, output: 'metadata' })).structuredContent.body_total_line_count, 1);
 });
 
+test('line reads preserve exact separators, report the clamped inclusive range, and use one revision snapshot', async t => {
+	const body = 'alpha\r\nbeta\rgamma\n';
+	let reads = 0;
+	const { tools } = fixture(t, {
+		async readNoteWithRevision() { reads++; return { ...note, body, revision_id: revisionId }; },
+	});
+
+	const middle = await tools.call('read_note', { id: noteId, start_line: 2, end_line: 2 });
+	assert.equal(middle.isError, false);
+	assert.equal(reads, 1);
+	assert.equal(middle.structuredContent.body, 'beta\r');
+	assert.equal(middle.structuredContent.body_start_line, 2);
+	assert.equal(middle.structuredContent.body_end_line, 2);
+	assert.equal(middle.structuredContent.body_offset, 7);
+	assert.equal(middle.structuredContent.body_returned_chars, 5);
+	assert.equal(middle.structuredContent.has_more, true);
+	assert.equal(middle.structuredContent.nextOffset, 12);
+	assert.equal(middle.structuredContent.body_total_line_count, 4);
+	assert.equal(middle.structuredContent.revision_id, revisionId);
+
+	const fromEnd = await tools.call('get_note', { id: noteId, end_line: 1 });
+	assert.equal(fromEnd.structuredContent.body, 'alpha\r\n');
+	assert.equal(fromEnd.structuredContent.body_start_line, 1);
+	assert.equal(fromEnd.structuredContent.body_end_line, 1);
+	assert.equal(fromEnd.structuredContent.is_todo, 1);
+
+	const throughEnd = await tools.call('read_note', { id: noteId, start_line: 3 });
+	assert.equal(throughEnd.structuredContent.body, 'gamma\n');
+	assert.equal(throughEnd.structuredContent.body_start_line, 3);
+	assert.equal(throughEnd.structuredContent.body_end_line, 4);
+	const trailingEmptyLine = await tools.call('read_note', { id: noteId, start_line: 4, end_line: 4 });
+	assert.equal(trailingEmptyLine.structuredContent.body, '');
+	assert.equal(trailingEmptyLine.structuredContent.body_start_line, 4);
+	assert.equal(trailingEmptyLine.structuredContent.body_end_line, 4);
+
+	const clamped = await tools.call('read_note', { id: noteId, start_line: 3, end_line: 99 });
+	assert.equal(clamped.structuredContent.body, 'gamma\n');
+	assert.equal(clamped.structuredContent.body_start_line, 3);
+	assert.equal(clamped.structuredContent.body_end_line, 4);
+
+	const beyondEnd = await tools.call('read_note', { id: noteId, start_line: 99 });
+	assert.equal(beyondEnd.structuredContent.body, '');
+	assert.equal(beyondEnd.structuredContent.body_start_line, null);
+	assert.equal(beyondEnd.structuredContent.body_end_line, null);
+	assert.equal(beyondEnd.structuredContent.body_offset, body.length);
+	assert.equal(beyondEnd.structuredContent.body_returned_chars, 0);
+});
+
+test('line reads represent the empty body and its one empty logical line', async t => {
+	const { tools } = fixture(t, { async readNoteWithRevision() { return { ...note, body: '' }; } });
+	const result = await tools.call('read_note', { id: noteId, start_line: 1, end_line: 1 });
+	assert.equal(result.structuredContent.body, '');
+	assert.equal(result.structuredContent.body_start_line, 1);
+	assert.equal(result.structuredContent.body_end_line, 1);
+	assert.equal(result.structuredContent.body_total_line_count, 1);
+	const wholeBody = await tools.call('read_note', { id: noteId });
+	assert.equal(Object.hasOwn(wholeBody.structuredContent, 'body_start_line'), false);
+});
+
+test('line selectors reject character slicing and reversed ranges before reading', async t => {
+	let reads = 0;
+	const { tools } = fixture(t, { async readNoteWithRevision() { reads++; return note; } });
+	for (const selector of [
+		{ start_line: 1, offset: 0 },
+		{ end_line: 1, max_chars: 0 },
+		{ start_line: 2, length: 1 },
+	]) {
+		const result = await tools.call('read_note', { id: noteId, ...selector });
+		assert.equal(result.structuredContent.error.code, 'note_slice_conflict');
+		assert.match(result.structuredContent.error.message, /Line selectors/);
+	}
+	const reversed = await tools.call('read_note', { id: noteId, start_line: 3, end_line: 2 });
+	assert.equal(reversed.structuredContent.error.code, 'invalid_note_line_range');
+	assert.match(reversed.structuredContent.error.message, /end_line/);
+	assert.equal(reads, 0);
+});
+
 test('file mode explicitly rejects every slicing selector before reading the note', async t => {
 	let reads = 0;
 	const { tools } = fixture(t, { async readNoteWithRevision() { reads++; return note; } });
-	for (const selector of [{ offset: 0 }, { max_chars: 0 }, { length: 1 }]) {
-		const result = await tools.call('read_note', { id: noteId, output: 'file', ...selector });
-		assert.equal(result.isError, true);
-		assert.equal(result.structuredContent.error.code, 'note_file_slice_conflict');
-		assert.match(result.structuredContent.error.message, /omit offset/);
+	for (const output of ['file', 'metadata']) {
+		for (const selector of [{ offset: 0 }, { max_chars: 0 }, { length: 1 }, { start_line: 1 }, { end_line: 1 }]) {
+			const result = await tools.call('read_note', { id: noteId, output, ...selector });
+			assert.equal(result.isError, true);
+			assert.equal(result.structuredContent.error.code, 'note_file_slice_conflict');
+			assert.match(result.structuredContent.error.message, /body selectors/);
+		}
 	}
 	assert.equal(reads, 0);
 });
@@ -120,6 +199,8 @@ test('catalog publishes a fixed file-input object and object output variants', a
 		assert.deepEqual(definition.inputSchema.properties.output.enum, ['inline', 'file', 'metadata']);
 		assert.equal(definition.outputSchema.type, 'object');
 		const success = definition.outputSchema.anyOf[0];
+		assert.deepEqual(success.properties.body_start_line.type, ['integer', 'null']);
+		assert.deepEqual(success.properties.body_end_line.type, ['integer', 'null']);
 		assert.equal(success.type, 'object');
 		assert.equal(success.properties.file.type, 'object');
 		const inline = success.anyOf.find(branch => branch.required.includes('body'));

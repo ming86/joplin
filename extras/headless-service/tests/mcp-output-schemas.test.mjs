@@ -28,6 +28,7 @@ const sampleArguments = {
 	list_notes: {},
 	search_notes: { query: 'Body', mode: 'keyword' },
 	semantic_search_notes: { query: 'meaning' },
+	grep_notes: { pattern: 'Body', note_ids: [noteId], page: 1, limit: 5 },
 	read_note: { id: noteId },
 	get_note: { id: noteId },
 	create_note: { title: 'Created', notebook_id: notebookId },
@@ -84,6 +85,17 @@ export function createOutputSchemaTestSession({ allowWrites = true } = {}) {
 				accountId, requestedMode: mode, executedMode: mode,
 				semantic: mode === 'keyword' ? { state: 'unavailable', reason: 'not_implemented' } : { state: 'ready' },
 				items: [{ ...note, body: 'Body 🔧', ...hybridFields }], hasMore: false, total: 1,
+			};
+		},
+		async grepNotes() {
+			return {
+				accountId: 'root',
+				items: [{
+					note_id: noteId, title: note.title, notebook_id: notebookId, revision_id: revisionId,
+					line_number: 1, text: 'Body 🔧', truncated: false, line_length: 'Body 🔧'.length,
+					context_before: [], context_after: [],
+				}],
+				page: 1, limit: 5, hasMore: false,
 			};
 		},
 		async readNoteWithRevision(id) {
@@ -192,8 +204,8 @@ test('every enabled catalog tool publishes an output schema without changing inp
 	try {
 		const readonly = await callOutputSchemaSamples(readonlySession);
 		const writable = await callOutputSchemaSamples(writableSession);
-		assert.equal(readonly.tools.length, 17);
-		assert.equal(writable.tools.length, 30);
+		assert.equal(readonly.tools.length, 18);
+		assert.equal(writable.tools.length, 31);
 		const writableByName = new Map(writable.tools.map(tool => [tool.name, tool]));
 		for (const tool of writable.tools) {
 			assert.ok(tool.outputSchema, `${tool.name} has an output schema`);
@@ -212,9 +224,9 @@ test('every enabled catalog tool publishes an output schema without changing inp
 			assert.deepEqual(counterpart.annotations, tool.annotations, `${tool.name} annotations are unchanged`);
 			assert.deepEqual(counterpart.outputSchema, tool.outputSchema, `${tool.name} output is protocol-era independent`);
 		}
-		assert.equal(readonly.results.size, 17);
-		assert.equal(writable.results.size, 30);
-		for (const name of ['list_trash', 'list_attachment_notes']) assert.ok(readonly.results.has(name), `${name} is sampled in read-only mode`);
+		assert.equal(readonly.results.size, 18);
+		assert.equal(writable.results.size, 31);
+		for (const name of ['grep_notes', 'list_trash', 'list_attachment_notes']) assert.ok(readonly.results.has(name), `${name} is sampled in read-only mode`);
 		for (const name of ['restore_note', 'restore_notebook']) assert.ok(!readonly.results.has(name), `${name} is omitted in read-only mode`);
 		const listNotebooks = writableByName.get('list_notebooks');
 		assert.deepEqual(listNotebooks.inputSchema.properties, {});
@@ -293,6 +305,16 @@ test('tool output samples preserve aliases, nullable history, semantic errors, a
 		assert.equal(keywordSearch.results[0].snippet, 'Body 🔧');
 		assert.equal(Object.hasOwn(schemas.get('search_notes').properties, 'items'), false);
 		for (const field of ['results', 'total', 'hasMore', 'requestedMode', 'executedMode', 'semantic']) assert.ok(schemas.get('search_notes').properties[field], field);
+		const grep = results.get('grep_notes').structuredContent;
+		assert.equal(grep.accountEmail, 'alice@example.test');
+		assert.equal(Object.hasOwn(grep, 'accountId'), false);
+		assert.equal(grep.items[0].note_id, noteId);
+		assert.equal(Object.hasOwn(grep.items[0], 'accountId'), false);
+		assert.equal(Object.hasOwn(grep.items[0], 'accountEmail'), false);
+		assert.equal(grep.items[0].revision_id, revisionId);
+		assert.equal(grep.items[0].line_length, 'Body 🔧'.length);
+		assert.deepEqual(grep.items[0].context_before, []);
+		assert.deepEqual(grep.items[0].context_after, []);
 		const hybridResponse = await session.handle({
 			jsonrpc: '2.0', id: 200, method: 'tools/call',
 			params: { name: 'search_notes', arguments: { query: 'Body', mode: 'hybrid' } },

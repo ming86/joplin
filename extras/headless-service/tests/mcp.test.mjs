@@ -39,7 +39,7 @@ test('requires valid initialization and ready notification; rejects second initi
 });
 test('stateless sessions serve tools without a handshake and accept independent initialization requests', async () => {
 	const s = session({ stateless: true });
-	assert.equal((await s.handle(request(2, 'tools/list'))).result.tools.length, 17);
+	assert.equal((await s.handle(request(2, 'tools/list'))).result.tools.length, 18);
 	assert.equal((await s.handle(call(3, 'get_status'))).result.structuredContent.accountId, 'alice');
 	assert.equal((await s.handle(initialize('2025-11-25'))).result.protocolVersion, '2025-11-25');
 	assert.equal((await s.handle(initialize('2025-06-18'))).result.protocolVersion, '2025-06-18');
@@ -99,9 +99,10 @@ test('invalid envelopes and ids; unknown methods; no response or tool execution 
 test('default read-only catalog, annotations and disabled-tool enforcement', async () => {
 	const s = session(); await ready(s);
 	const tools = (await s.handle(request(2, 'tools/list'))).result.tools;
-	assert.equal(tools.length, 17); assert.ok(tools.every(t => t.annotations.readOnlyHint));
+	assert.equal(tools.length, 18); assert.ok(tools.every(t => t.annotations.readOnlyHint));
 	assert.ok(tools.some(t => t.name === 'read_note'));
 	assert.ok(tools.some(t => t.name === 'list_tags'));
+	assert.ok(tools.some(t => t.name === 'grep_notes'));
 	for (const name of ['list_note_revisions', 'read_note_revision', 'compare_note_revisions', 'list_conflicts', 'read_conflict', 'list_note_attachments', 'read_attachment']) {
 		assert.ok(tools.some(tool => tool.name === name), name);
 	}
