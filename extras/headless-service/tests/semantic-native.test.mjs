@@ -63,7 +63,7 @@ test('actual SQLCipher Joplin core -> HTTP fixture embeddings -> encrypted seman
 	assert.equal(result.structuredContent.results[0].provenance,'semantic');assert.equal(typeof result.structuredContent.results[0].score,'number');assert.ok(result.structuredContent.results[0].semanticExcerpt);assert.equal(result.structuredContent.results[0].chunk.offsetUnit,'utf8-byte');
 	result=await client.call('search_notes',{query:'feline',mode:'hybrid',notebookId:folder.id});assert.equal(result.structuredContent.executedMode,'hybrid');assert.equal(result.structuredContent.results[0].id,note.id);
 	assert.equal(result.structuredContent.results[0].provenance,'hybrid');assert.equal(typeof result.structuredContent.results[0].score,'number');
-	assert.equal((await client.request('tools/list')).tools.length,15);
+	assert.equal((await client.request('tools/list')).tools.length,17);
 	t.diagnostic('PASS native core, common HTTP batch response reordering, separate encrypted index, semantic/hybrid MCP read-only search');
 	fail=true;await raw(`/notes/${note.id}`,'PUT',{title:'Dogs',body:'Canine replacement fixture'});
 	await until(async()=> (await client.call('get_status')).structuredContent.semantic.state==='degraded','provider failure not reported');

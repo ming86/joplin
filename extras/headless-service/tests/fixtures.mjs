@@ -77,9 +77,24 @@ export function backend(id = 'alice') {
 			return { items: [summary], hasMore: false };
 		},
 		async listNotebooks() { return { items: [{ id: folderId, title: id, parent_id: '' }], hasMore: false }; },
+		async listTrash() {
+			return {
+				items: [{ id: noteId, type: 'note', title: note.title, parent_id: folderId, deleted_time: 10, updated_time: note.updated_time, is_conflict: 0 }],
+				hasMore: false,
+			};
+		},
+		async restoreNote({ id: restoredId }) { return { id: restoredId, parent_id: folderId, restored: true }; },
+		async restoreNotebook({ id: restoredId }) { return { id: restoredId, parent_id: '', restored: true }; },
 		async listAllNotebooks() { return [{ id: folderId, title: id, parent_id: null }]; },
 		async getNotebook(notebookId) { return { id: notebookId, title: notebookId === folderId ? id : 'Moved notebook', parent_id: null }; },
 		async getNoteTags() { return []; },
+		async listAttachmentNotes() {
+			return {
+				attachment_id: 'e'.repeat(32),
+				items: [{ id: noteId, title: note.title, parent_id: folderId, created_time: note.created_time, updated_time: note.updated_time, deleted_time: 0, is_conflict: 0 }],
+				hasMore: false,
+			};
+		},
 		async listAllTags() { return []; },
 		async createNote(input) { return { ...note, parent_id: input.parentId, title: input.title, body: input.body, is_todo: input.is_todo }; },
 		async updateNote(_id, input) { return { ...note, ...input, parent_id: input.parentId ?? note.parent_id, updated_time: 101 }; },

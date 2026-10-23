@@ -12,7 +12,8 @@ test('presents account email at every attributed root without modifying the serv
 	const present = createAccountResultPresenter({ status: async () => { calls++; return { accountEmail }; } });
 	for (const name of ['list_notes', 'search_notes', 'read_note', 'get_note', 'list_note_revisions', 'read_note_revision',
 		'compare_note_revisions', 'list_conflicts', 'read_conflict', 'update_notebook', 'delete_notebook',
-		'create_tag', 'rename_tag', 'read_attachment', 'create_attachment', 'update_attachment']) {
+		'create_tag', 'rename_tag', 'read_attachment', 'create_attachment', 'update_attachment',
+		'list_trash', 'restore_note', 'restore_notebook', 'list_attachment_notes']) {
 		const opaque = { accountId: 'user-value', nested: { accountId: 'also-user-data' } };
 		const source = { accountId, id: 'item', metadata: opaque, metadata_changes: [{ from: { value: opaque } }] };
 		const result = await present(name, source);
@@ -113,7 +114,8 @@ test('output schemas describe nullable emails only where results carry account i
 	const success = name => getToolOutputSchema(name).anyOf[0];
 	for (const name of ['read_note', 'get_note', 'search_notes', 'list_note_revisions', 'read_note_revision',
 		'compare_note_revisions', 'list_conflicts', 'read_conflict', 'update_notebook', 'delete_notebook',
-		'create_tag', 'rename_tag', 'read_attachment', 'create_attachment', 'update_attachment']) {
+		'create_tag', 'rename_tag', 'read_attachment', 'create_attachment', 'update_attachment',
+		'list_trash', 'restore_note', 'restore_notebook', 'list_attachment_notes']) {
 		const schema = success(name);
 		assert.deepEqual(schema.properties.accountEmail.type, ['string', 'null'], name);
 		assert.ok(schema.required.includes('accountEmail'), name);

@@ -322,10 +322,10 @@ test('MCP write catalog carries mutation annotations and rejects unsafe note sta
 	try {
 		const tools = (await readonly.handle(request(2, 'tools/list'))).result.tools;
 		const names = new Set(tools.map(tool => tool.name));
-		for (const name of ['get_status', 'list_notebooks', 'list_notes', 'search_notes', 'semantic_search_notes', 'read_note', 'get_note', 'list_tags']) assert.ok(names.has(name), name);
-		for (const name of ['create_note', 'update_note', 'delete_note', 'create_notebook', 'manage_tags', 'update_notebook', 'delete_notebook', 'create_tag', 'rename_tag', 'create_attachment', 'update_attachment']) assert.ok(!names.has(name), name);
+		for (const name of ['get_status', 'list_notebooks', 'list_notes', 'search_notes', 'semantic_search_notes', 'read_note', 'get_note', 'list_tags', 'list_trash', 'list_attachment_notes']) assert.ok(names.has(name), name);
+		for (const name of ['create_note', 'update_note', 'delete_note', 'create_notebook', 'manage_tags', 'update_notebook', 'delete_notebook', 'create_tag', 'rename_tag', 'create_attachment', 'update_attachment', 'restore_note', 'restore_notebook']) assert.ok(!names.has(name), name);
 		for (const name of ['list_note_revisions', 'read_note_revision', 'compare_note_revisions', 'list_conflicts', 'read_conflict', 'list_note_attachments', 'read_attachment']) assert.ok(names.has(name), name);
-		assert.equal(tools.length, 15);
+		assert.equal(tools.length, 17);
 	} finally { readonly.close(); }
 
 	const writable = createSession();
@@ -333,7 +333,8 @@ test('MCP write catalog carries mutation annotations and rejects unsafe note sta
 	try {
 		const tools = (await writable.handle(request(2, 'tools/list'))).result.tools;
 		const byName = new Map(tools.map(tool => [tool.name, tool]));
-		assert.equal(tools.length, 26);
+		assert.equal(tools.length, 30);
+		for (const name of ['list_trash', 'list_attachment_notes', 'restore_note', 'restore_notebook']) assert.ok(byName.has(name), name);
 		assert.deepEqual(byName.get('update_note').inputSchema.required, ['id', 'base_revision_id']);
 		assert.equal(byName.get('update_note').annotations.destructiveHint, true);
 		assert.equal(byName.get('delete_note').annotations.destructiveHint, true);
@@ -356,6 +357,33 @@ test('MCP write catalog carries mutation annotations and rejects unsafe note sta
 			assert.equal(mutations, 0);
 		} finally { session.close(); }
 	}
+});
+
+test('restore tools route each identifier to the matching native backend operation', async () => {
+	const b = backend();
+	const routed = [];
+	b.restoreNote = async ({ id }) => { routed.push(['note', id]); return { id, parent_id: folderId, restored: true }; };
+	b.restoreNotebook = async ({ id }) => { routed.push(['notebook', id]); return { id, parent_id: '', restored: true }; };
+	const session = createSession(b);
+	await ready(session);
+	try {
+		const noteResult = await invoke(session, 'restore_note', { id: noteId });
+		const notebookResult = await invoke(session, 'restore_notebook', { id: folderId }, 3);
+		assert.equal(noteResult.isError, false);
+		assert.equal(notebookResult.isError, false);
+		assert.deepEqual(routed, [['note', noteId], ['notebook', folderId]]);
+		assert.deepEqual(Object.keys(noteResult.structuredContent).sort(), ['accountEmail', 'id', 'parent_id', 'restored']);
+		assert.deepEqual(Object.keys(notebookResult.structuredContent).sort(), ['accountEmail', 'id', 'parent_id', 'restored']);
+
+		const trash = (await invoke(session, 'list_trash', {}, 4)).structuredContent;
+		assert.equal(trash.accountEmail, 'alice@example.test');
+		assert.equal(Object.hasOwn(trash, 'accountId'), false);
+		assert.equal(trash.items[0].type, 'note');
+		const references = (await invoke(session, 'list_attachment_notes', { id: 'e'.repeat(32) }, 5)).structuredContent;
+		assert.equal(references.accountEmail, 'alice@example.test');
+		assert.equal(Object.hasOwn(references, 'accountId'), false);
+		assert.equal(references.attachment_id, 'e'.repeat(32));
+	} finally { session.close(); }
 });
 
 test('the MCP catalog requires a note revision and preserves embedded attachment content blocks', async () => {
@@ -384,7 +412,7 @@ test('the MCP catalog requires a note revision and preserves embedded attachment
 	await ready(session);
 	try {
 		const tools = (await session.handle(request(2, 'tools/list'))).result.tools;
-		assert.equal(tools.length, 26);
+		assert.equal(tools.length, 30);
 		const readSchema = tools.find(tool => tool.name === 'read_note').inputSchema;
 		const updateTool = tools.find(tool => tool.name === 'update_note');
 		const updateSchema = updateTool.inputSchema;

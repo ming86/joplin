@@ -45,9 +45,13 @@ const sampleArguments = {
 	create_tag: { title: 'idea' },
 	rename_tag: { id: tagId, title: 'inspiration' },
 	list_note_attachments: { note_id: noteId },
+	list_trash: {},
+	restore_note: { id: noteId },
+	restore_notebook: { id: notebookId },
 	read_attachment: { id: resourceId },
 	create_attachment: { filename: 'new.bin', content_base64: 'AQI=' },
 	update_attachment: { id: resourceId, title: 'Updated diagram' },
+	list_attachment_notes: { id: resourceId },
 };
 
 /** Return native attachment metadata, including bytes only for attachment reads. */
@@ -129,6 +133,25 @@ export function createOutputSchemaTestSession({ allowWrites = true } = {}) {
 		async createTag() { return { id: tagId, title: 'idea', accountId }; },
 		async renameTag() { return { id: tagId, title: 'inspiration', accountId }; },
 		async listNoteAttachments() { return [attachmentResult()]; },
+		async listTrash() {
+			return {
+				accountId,
+				items: [
+					{ id: noteId, type: 'note', title: 'A note', parent_id: notebookId, deleted_time: 5, updated_time: 4, is_conflict: 0 },
+					{ id: notebookId, type: 'notebook', title: 'Notes', parent_id: '', deleted_time: 3, updated_time: 2 },
+				],
+				hasMore: false,
+			};
+		},
+		async restoreNote() { return { accountId, id: noteId, parent_id: notebookId, restored: true }; },
+		async restoreNotebook() { return { accountId, id: notebookId, parent_id: '', restored: true }; },
+		async listAttachmentNotes() {
+			return {
+				accountId, attachment_id: resourceId,
+				items: [{ id: noteId, title: 'A note', parent_id: notebookId, created_time: 1, updated_time: 2, deleted_time: 0, is_conflict: 0 }],
+				hasMore: false,
+			};
+		},
 		async readAttachment() { return attachmentResult('AQI='); },
 		async createAttachment() { return { ...attachmentResult(), id: '4'.repeat(32) }; },
 		async updateAttachment() { return { ...attachment, title: 'Updated diagram' }; },
@@ -168,8 +191,8 @@ test('every enabled catalog tool publishes an output schema without changing inp
 	try {
 		const readonly = await callOutputSchemaSamples(readonlySession);
 		const writable = await callOutputSchemaSamples(writableSession);
-		assert.equal(readonly.tools.length, 15);
-		assert.equal(writable.tools.length, 26);
+		assert.equal(readonly.tools.length, 17);
+		assert.equal(writable.tools.length, 30);
 		const writableByName = new Map(writable.tools.map(tool => [tool.name, tool]));
 		for (const tool of writable.tools) {
 			assert.ok(tool.outputSchema, `${tool.name} has an output schema`);
@@ -188,8 +211,10 @@ test('every enabled catalog tool publishes an output schema without changing inp
 			assert.deepEqual(counterpart.annotations, tool.annotations, `${tool.name} annotations are unchanged`);
 			assert.deepEqual(counterpart.outputSchema, tool.outputSchema, `${tool.name} output is protocol-era independent`);
 		}
-		assert.equal(readonly.results.size, 15);
-		assert.equal(writable.results.size, 26);
+		assert.equal(readonly.results.size, 17);
+		assert.equal(writable.results.size, 30);
+		for (const name of ['list_trash', 'list_attachment_notes']) assert.ok(readonly.results.has(name), `${name} is sampled in read-only mode`);
+		for (const name of ['restore_note', 'restore_notebook']) assert.ok(!readonly.results.has(name), `${name} is omitted in read-only mode`);
 		const listNotebooks = writableByName.get('list_notebooks');
 		assert.deepEqual(listNotebooks.inputSchema.properties, {});
 		assert.deepEqual(Object.keys(listNotebooks.outputSchema.anyOf[0].properties), ['notebooks']);
@@ -205,6 +230,11 @@ test('every enabled catalog tool publishes an output schema without changing inp
 		]);
 		assert.deepEqual(updateNote.required, ['id', 'updated_time', 'revision_id', 'previous_revision_id', 'changed']);
 		assert.equal(updateNote.additionalProperties, false);
+		for (const name of ['list_trash', 'list_attachment_notes', 'restore_note', 'restore_notebook']) {
+			const schema = writableByName.get(name).outputSchema.anyOf[0];
+			assert.ok(schema.required.includes('accountEmail'), `${name} exposes the authenticated identity`);
+			assert.equal(Object.hasOwn(schema.properties, 'accountId'), false, `${name} hides the internal account id`);
+		}
 	} finally {
 		readonlySession.close();
 		writableSession.close();
@@ -240,6 +270,15 @@ test('tool output samples preserve aliases, nullable history, semantic errors, a
 		const updated = results.get('update_note').structuredContent;
 		assert.deepEqual(Object.keys(updated).sort(), ['changed', 'id', 'previous_revision_id', 'revision_id', 'updated_time']);
 		assert.equal(Object.hasOwn(updated, 'body'), false);
+		const trash = results.get('list_trash').structuredContent;
+		assert.equal(trash.accountEmail, 'alice@example.test');
+		assert.deepEqual(trash.items.map(item => item.type), ['note', 'notebook']);
+		assert.deepEqual(Object.keys(results.get('restore_note').structuredContent).sort(), ['accountEmail', 'id', 'parent_id', 'restored']);
+		assert.deepEqual(Object.keys(results.get('restore_notebook').structuredContent).sort(), ['accountEmail', 'id', 'parent_id', 'restored']);
+		const references = results.get('list_attachment_notes').structuredContent;
+		assert.equal(references.accountEmail, 'alice@example.test');
+		assert.equal(references.attachment_id, resourceId);
+		assert.deepEqual(Object.keys(references.items[0]).sort(), ['created_time', 'deleted_time', 'id', 'is_conflict', 'parent_id', 'title', 'updated_time']);
 
 		const keywordSearch = results.get('search_notes').structuredContent;
 		assert.equal(Object.hasOwn(keywordSearch, 'items'), false);
