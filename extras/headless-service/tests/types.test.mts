@@ -1,4 +1,4 @@
-import { createAccountRegistry, bindEmbeddingProvider, type AccountConfiguration } from '../index.mjs';
+import { createAccountRegistry, bindEmbeddingProvider, type AccountConfiguration, type NoteRevisionComparison } from '../index.mjs';
 const configs: AccountConfiguration[] = [];
 const registry = createAccountRegistry(configs);
 const service = registry.forPrincipal('verified-subject', 'account');
@@ -13,6 +13,18 @@ const provider = bindEmbeddingProvider({ id: 'space', revision: 'rev', dimension
 void provider.embed(['example'], 'document');
 // @ts-expect-error Model purposes are explicit.
 void provider.embed(['example'], 'unknown');
+const comparison: NoteRevisionComparison = {
+  note_id: 'a'.repeat(32),
+  from_revision_id: 'b'.repeat(32),
+  to_revision_id: 'c'.repeat(32),
+  to_current: false,
+  title_diff: '',
+  body_diff: '',
+  from_body_total_line_count: 2,
+  to_body_total_line_count: 3,
+  metadata_changes: [],
+};
+void comparison.from_body_total_line_count;
 void service.listNoteSummaries({ notebookId: 'notebook', page: 1, limit: 30 });
 void service.listConflicts({ page: 1, limit: 20 });
 void service.readConflict({ id: 'b'.repeat(32) });

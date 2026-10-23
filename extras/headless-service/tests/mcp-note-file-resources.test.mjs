@@ -165,6 +165,7 @@ test('HTTP exports a note file that a separate authenticated POST can read', asy
 	const file = metadata.file;
 	assert.equal(metadata.id, noteId);
 	assert.equal(metadata.title, 'Review résumé ✨');
+	assert.equal(metadata.body_total_line_count, 4);
 	assert.equal(metadata.accountEmail, 'alice@example.test');
 	assert.equal(metadata.revision_id, initialRevisionId);
 	assert.equal(metadata.notebook_id, folderId);
@@ -229,6 +230,8 @@ test('HTTP revision, comparison, and conflict exports share one readable file st
 				from_revision_id: revisionId,
 				to_revision_id: nextRevisionId,
 				to_current: false,
+				from_body_total_line_count: 3,
+				to_body_total_line_count: 4,
 				title_diff: titleDiff,
 				body_diff: bodyDiff,
 				metadata_changes: [{ field: 'parent_id', from: { present: true, value: folderId }, to: { present: false } }],
@@ -281,6 +284,7 @@ test('HTTP revision, comparison, and conflict exports share one readable file st
 		note_id: noteId, revision_id: revisionId, output: 'file',
 	});
 	assert.equal(revision.revision_id, revisionId);
+	assert.equal(revision.body_total_line_count, 3);
 	assert.equal(Object.hasOwn(revision, 'body'), false);
 
 	const comparison = await callTool(2, 'compare_note_revisions', {
@@ -288,6 +292,8 @@ test('HTTP revision, comparison, and conflict exports share one readable file st
 	});
 	assert.equal(comparison.from_revision_id, revisionId);
 	assert.equal(comparison.to_revision_id, nextRevisionId);
+	assert.equal(comparison.from_body_total_line_count, 3);
+	assert.equal(comparison.to_body_total_line_count, 4);
 	assert.equal(Object.hasOwn(comparison, 'title_diff'), false);
 	assert.equal(Object.hasOwn(comparison, 'body_diff'), false);
 
@@ -296,6 +302,8 @@ test('HTTP revision, comparison, and conflict exports share one readable file st
 	assert.equal(conflict.original.status, 'available');
 	assert.equal(Object.hasOwn(conflict.conflict.note, 'body'), false);
 	assert.equal(Object.hasOwn(conflict.original.note, 'body'), false);
+	assert.equal(conflict.conflict.note.body_total_line_count, 2);
+	assert.equal(conflict.original.note.body_total_line_count, 2);
 
 	const exports = [
 		{ file: revision.file, bytes: Buffer.from(revisionBody, 'utf8') },

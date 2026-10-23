@@ -63,31 +63,32 @@ test('metadata and file outputs preserve exact captured bodies without fabricati
 	const calls = [];
 	const store = createNoteFileResources();
 	let storeRequests = 0;
+	const conflictBody = 'Conflict 😀 café\r\nSecond\nThird\rFourth\n';
+	const originalBody = '<p>Original 雪</p>\r\nOriginal\n';
 	const readConflict = registeredReadConflict({
 		async readConflict(input) {
 			calls.push(input);
 			return {
 				accountId: 'alice',
-				conflict: available(conflictId),
-				original: available(originalId),
+				conflict: available(conflictId, { body: conflictBody }),
+				original: available(originalId, { body: originalBody }),
 			};
 		},
 	}, () => {
 		storeRequests++;
 		return store;
 	});
-	const conflictBody = 'Conflict 😀 café';
-	const originalBody = '<p>Original 雪</p>';
-
 	const metadata = await readConflict.run({ id: conflictId, output: 'metadata' });
 	assert.equal(metadata.conflict.note.body, undefined);
 	assert.equal(metadata.conflict.note.body_length, conflictBody.length);
 	assert.equal(metadata.conflict.note.body_size_bytes, Buffer.byteLength(conflictBody, 'utf8'));
 	assert.equal(metadata.conflict.note.body_sha256, createHash('sha256').update(conflictBody, 'utf8').digest('hex'));
+	assert.equal(metadata.conflict.note.body_total_line_count, 5);
 	assert.equal(metadata.original.note.body, undefined);
 	assert.equal(metadata.original.note.body_length, originalBody.length);
 	assert.equal(metadata.original.note.body_size_bytes, Buffer.byteLength(originalBody, 'utf8'));
 	assert.equal(metadata.original.note.body_sha256, createHash('sha256').update(originalBody, 'utf8').digest('hex'));
+	assert.equal(metadata.original.note.body_total_line_count, 3);
 	assert.equal(metadata.conflict.note.body_offset, undefined);
 	assert.equal(metadata.original.note.nextOffset, undefined);
 	assert.equal(metadata.conflict.note.revision_id, undefined);
@@ -99,11 +100,12 @@ test('metadata and file outputs preserve exact captured bodies without fabricati
 
 	const result = await readConflict.run({ id: conflictId, output: 'file' });
 	assert.equal(storeRequests, 2);
-	for (const [sideName, side, body, mimeType, extension] of [
-		['conflict', result.structuredContent.conflict, conflictBody, 'text/markdown; charset=utf-8', 'md'],
-		['original', result.structuredContent.original, originalBody, 'text/html; charset=utf-8', 'html'],
+	for (const [sideName, side, body, mimeType, extension, totalLines] of [
+		['conflict', result.structuredContent.conflict, conflictBody, 'text/markdown; charset=utf-8', 'md', 5],
+		['original', result.structuredContent.original, originalBody, 'text/html; charset=utf-8', 'html', 3],
 	]) {
 		assert.equal(side.note.body, undefined);
+		assert.equal(side.note.body_total_line_count, totalLines);
 		assert.equal(side.note.body_offset, undefined);
 		assert.equal(side.note.nextOffset, undefined);
 		assert.equal(side.note.revision_id, undefined);

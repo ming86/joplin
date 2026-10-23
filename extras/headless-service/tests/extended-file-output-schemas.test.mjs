@@ -53,6 +53,8 @@ function createFixtureSession() {
 				from_revision_id: fromRevisionId,
 				to_revision_id: toRevisionId,
 				to_current: false,
+				from_body_total_line_count: 2,
+				to_body_total_line_count: 4,
 				title_diff: 'title patch',
 				body_diff: 'body patch',
 				metadata_changes: [],
@@ -96,15 +98,18 @@ test('revision and conflict mode schemas match real inline, file, and metadata r
 	const inlineRevision = (await callTool(session, 2, 'read_note_revision', noteIdArgs)).structuredContent;
 	assertDeclaredVariant(revisionSchema, inlineRevision, 'inline revision');
 	assert.equal(inlineRevision.body, body);
+	assert.equal(inlineRevision.body_total_line_count, 2);
 	const fileRevisionResult = await callTool(session, 3, 'read_note_revision', { ...noteIdArgs, output: 'file' });
 	const fileRevision = fileRevisionResult.structuredContent;
 	assertDeclaredVariant(revisionSchema, fileRevision, 'file revision');
 	assert.equal(Object.hasOwn(fileRevision, 'body'), false);
+	assert.equal(fileRevision.body_total_line_count, 2);
 	assert.equal(Object.hasOwn(fileRevision, 'body_offset'), false);
 	assert.equal(fileRevisionResult.content[1].resource.uri, fileRevision.file.uri);
 	const metadataRevision = (await callTool(session, 4, 'read_note_revision', { ...noteIdArgs, output: 'metadata' })).structuredContent;
 	assertDeclaredVariant(revisionSchema, metadataRevision, 'metadata revision');
 	assert.equal(metadataRevision.body_length, body.length);
+	assert.equal(metadataRevision.body_total_line_count, 2);
 	assert.equal(metadataRevision.body_size_bytes, Buffer.byteLength(body, 'utf8'));
 	assert.equal(Object.hasOwn(metadataRevision, 'body'), false);
 	assert.equal(Object.hasOwn(metadataRevision, 'file'), false);
@@ -117,11 +122,15 @@ test('revision and conflict mode schemas match real inline, file, and metadata r
 	const inlineComparison = (await callTool(session, 5, 'compare_note_revisions', compareArgs)).structuredContent;
 	assertDeclaredVariant(compareSchema, inlineComparison, 'inline comparison');
 	assert.equal(inlineComparison.title_diff, 'title patch');
+	assert.equal(inlineComparison.from_body_total_line_count, 2);
+	assert.equal(inlineComparison.to_body_total_line_count, 4);
 	const fileComparisonResult = await callTool(session, 6, 'compare_note_revisions', { ...compareArgs, output: 'file' });
 	const fileComparison = fileComparisonResult.structuredContent;
 	assertDeclaredVariant(compareSchema, fileComparison, 'file comparison');
 	assert.equal(Object.hasOwn(fileComparison, 'title_diff'), false);
 	assert.equal(Object.hasOwn(fileComparison, 'body_diff'), false);
+	assert.equal(fileComparison.from_body_total_line_count, 2);
+	assert.equal(fileComparison.to_body_total_line_count, 4);
 	assert.equal(fileComparison.metadata_changes.length, 0);
 	assert.equal(fileComparisonResult.content[1].resource.uri, fileComparison.file.uri);
 	assert.equal(compareSchema.oneOf.some(variant => Object.keys(variant.properties).sort().join('\0') === Object.keys({ ...fileComparison, title_diff: 'unexpected inline diff' }).sort().join('\0')), false, 'file comparison rejects inline diffs');
@@ -134,6 +143,7 @@ test('revision and conflict mode schemas match real inline, file, and metadata r
 		const conflictNoteOutput = result.structuredContent.conflict.note;
 		const availableConflictSchema = conflictSchema.properties.conflict.oneOf.find(branch => branch.properties.status.const === 'available');
 		assertDeclaredVariant(availableConflictSchema.properties.note, conflictNoteOutput, `${output} conflict note`);
+		assert.equal(conflictNoteOutput.body_total_line_count, 2);
 		if (output === 'inline') assert.equal(conflictNoteOutput.body, body);
 		if (output === 'file') {
 			assert.equal(Object.hasOwn(conflictNoteOutput, 'body'), false);

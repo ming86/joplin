@@ -62,6 +62,8 @@ describe('services/HeadlessRevisionHistory', () => {
 			to_revision_id: thirdRevision.id,
 		});
 		expect(arbitraryCompare.to_current).toBe(false);
+		expect(arbitraryCompare.from_body_total_line_count).toBe(2);
+		expect(arbitraryCompare.to_body_total_line_count).toBe(4);
 		expect(arbitraryCompare.title_diff).toContain('-Before');
 		expect(arbitraryCompare.title_diff).toContain('+Later');
 		expect(arbitraryCompare.body_diff).toContain('+Inserted line');
@@ -82,6 +84,7 @@ describe('services/HeadlessRevisionHistory', () => {
 			from_revision_id: firstRevision.id,
 		});
 		expect(currentCompare.to_current).toBe(true);
+		expect(currentCompare.to_body_total_line_count).toBe(3);
 		expect(currentCompare.to_revision_id).not.toBe(thirdRevision.id);
 		expect(await Revision.load(currentCompare.to_revision_id)).toBeTruthy();
 		expect(currentCompare.title_diff).toContain('+Current');
@@ -95,6 +98,31 @@ describe('services/HeadlessRevisionHistory', () => {
 		} finally {
 			missingNote.mockRestore();
 		}
+	});
+
+	it('counts logical lines in complete reconstructed bodies across newline styles', async () => {
+		const mixed = await Note.save({ title: 'Mixed endings', body: 'one\r\ntwo\nthree\rfour\r\n' });
+		const mixedRevision = await Note.revisionService().createNoteRevision_(mixed, null, true);
+
+		const empty = await Note.save({ id: mixed.id, body: '' });
+		const emptyRevision = await Note.revisionService().createNoteRevision_(empty, null, true);
+		const mixedToEmpty = await HeadlessRevisionHistory.compareNoteRevisions({
+			note_id: mixed.id,
+			from_revision_id: mixedRevision.id,
+			to_revision_id: emptyRevision.id,
+		});
+		expect(mixedToEmpty.from_body_total_line_count).toBe(5);
+		expect(mixedToEmpty.to_body_total_line_count).toBe(1);
+
+		const trailingBreak = await Note.save({ id: mixed.id, body: 'last line\n' });
+		const trailingBreakRevision = await Note.revisionService().createNoteRevision_(trailingBreak, null, true);
+		const emptyToTrailingBreak = await HeadlessRevisionHistory.compareNoteRevisions({
+			note_id: mixed.id,
+			from_revision_id: emptyRevision.id,
+			to_revision_id: trailingBreakRevision.id,
+		});
+		expect(emptyToTrailingBreak.from_body_total_line_count).toBe(1);
+		expect(emptyToTrailingBreak.to_body_total_line_count).toBe(2);
 	});
 
 	it('rejects reconstruction when an ancestor is missing', async () => {

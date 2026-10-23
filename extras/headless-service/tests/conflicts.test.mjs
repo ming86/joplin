@@ -142,8 +142,8 @@ test('read_conflict chunks each available side on UTF-16 boundaries and retains 
 		async readConflict() {
 			return {
 				accountId: 'alice',
-				conflict: available(conflictId, { body: 'x😀yz' }),
-				original: available(originalId, { body: 'a😀bcde' }),
+				conflict: available(conflictId, { body: 'x😀yz\r\n' }),
+				original: available(originalId, { body: 'a😀bcde\n' }),
 			};
 		},
 	};
@@ -157,13 +157,15 @@ test('read_conflict chunks each available side on UTF-16 boundaries and retains 
 	assert.ok(!definitions.some(item => item.name === 'update_note'));
 	const chunk = (await tools.call('read_conflict', { id: conflictId, offset: 2, max_chars: 1 })).structuredContent;
 	assert.equal(chunk.conflict.note.body, '😀');
-	assert.equal(chunk.conflict.note.body_length, 5);
+	assert.equal(chunk.conflict.note.body_length, 7);
+	assert.equal(chunk.conflict.note.body_total_line_count, 2);
 	assert.equal(chunk.conflict.note.body_offset, 1);
 	assert.equal(chunk.conflict.note.body_returned_chars, 2);
 	assert.equal(chunk.conflict.note.has_more, true);
 	assert.equal(chunk.conflict.note.nextOffset, 3);
 	assert.equal(chunk.original.note.body, '😀');
-	assert.equal(chunk.original.note.body_length, 7);
+	assert.equal(chunk.original.note.body_length, 8);
+	assert.equal(chunk.original.note.body_total_line_count, 2);
 	assert.equal(chunk.original.note.body_offset, 1);
 	assert.equal(chunk.original.note.nextOffset, 3);
 	assert.equal(chunk.conflict.note.revision_id, undefined);

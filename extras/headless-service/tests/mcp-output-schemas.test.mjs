@@ -107,6 +107,7 @@ export function createOutputSchemaTestSession({ allowWrites = true } = {}) {
 			return {
 				accountId, note_id: noteId, from_revision_id: revisionId, to_revision_id: '1'.repeat(32),
 				to_current: true, title_diff: '', body_diff: '',
+				from_body_total_line_count: 1, to_body_total_line_count: 1,
 				metadata_changes: [
 					{ field: 'is_todo', from: { present: true, value: 1 }, to: { present: false } },
 				],
@@ -226,7 +227,7 @@ test('every enabled catalog tool publishes an output schema without changing inp
 		const updateNote = writableByName.get('update_note').outputSchema.anyOf[0];
 		assert.deepEqual(Object.keys(updateNote.properties), [
 			'id', 'updated_time', 'revision_id', 'previous_revision_id', 'changed',
-			'body_length', 'body_size_bytes', 'body_sha256',
+			'body_length', 'body_size_bytes', 'body_sha256', 'body_total_line_count',
 		]);
 		assert.deepEqual(updateNote.required, ['id', 'updated_time', 'revision_id', 'previous_revision_id', 'changed']);
 		assert.equal(updateNote.additionalProperties, false);

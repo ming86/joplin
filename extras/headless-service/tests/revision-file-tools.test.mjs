@@ -53,6 +53,7 @@ test('read_note_revision metadata output measures the exact historical UTF-8 bod
 		body_length: body.length,
 		body_size_bytes: Buffer.byteLength(body, 'utf8'),
 		body_sha256: createHash('sha256').update(body, 'utf8').digest('hex'),
+		body_total_line_count: 2,
 	});
 	for (const field of ['body', 'offset', 'body_offset', 'body_returned_chars', 'has_more', 'nextOffset', 'totalLength', 'offsetUnit']) {
 		assert.equal(Object.hasOwn(result, field), false, field);
@@ -88,10 +89,13 @@ test('read_note_revision file output embeds exact historical bytes and preserves
 	assert.equal(metadata.captured_time, 123);
 	assert.equal(metadata.title, 'Historical résumé');
 	assert.deepEqual(metadata.metadata, revision.metadata);
+	assert.equal(metadata.body_total_line_count, 4);
 	assert.equal(metadata.accountId, 'alice');
 	assert.equal(metadata.file.filename, `note-${noteId}-revision-${fromRevisionId}.html`);
 	assert.equal(metadata.file.mime_type, 'text/html; charset=utf-8');
-	assert.equal(result.content[0].text.includes('body'), false);
+	const textMetadata = JSON.parse(result.content[0].text);
+	assert.equal(Object.hasOwn(textMetadata, 'body'), false);
+	assert.equal(textMetadata.body_total_line_count, 4);
 	const resource = result.content[1].resource;
 	const bytes = Buffer.from(resource.blob, 'base64');
 	assert.equal(resource.uri, metadata.file.uri);
@@ -129,6 +133,8 @@ test('compare_note_revisions file output stores both exact diffs and keeps only 
 		from_revision_id: fromRevisionId,
 		to_revision_id: toRevisionId,
 		to_current: false,
+		from_body_total_line_count: 3,
+		to_body_total_line_count: 5,
 		title_diff: titleDiff,
 		body_diff: bodyDiff,
 		metadata_changes: [{ field: 'parent_id', from: { present: true, value: 'd'.repeat(32) }, to: { present: false } }],
@@ -158,6 +164,8 @@ test('compare_note_revisions file output stores both exact diffs and keeps only 
 		from_revision_id: metadata.from_revision_id,
 		to_revision_id: metadata.to_revision_id,
 		to_current: metadata.to_current,
+		from_body_total_line_count: metadata.from_body_total_line_count,
+		to_body_total_line_count: metadata.to_body_total_line_count,
 		metadata_changes: metadata.metadata_changes,
 		accountId: metadata.accountId,
 	}, {
@@ -165,6 +173,8 @@ test('compare_note_revisions file output stores both exact diffs and keeps only 
 		from_revision_id: fromRevisionId,
 		to_revision_id: toRevisionId,
 		to_current: false,
+		from_body_total_line_count: 3,
+		to_body_total_line_count: 5,
 		metadata_changes: comparison.metadata_changes,
 		accountId: 'alice',
 	});
@@ -186,11 +196,12 @@ test('compare_note_revisions file output stores both exact diffs and keeps only 
 
 test('inline revision reads retain UTF-16 chunks and inline comparisons retain both diff strings', async () => {
 	const tools = fixture({
-		async readNoteRevision() { return { note_id: noteId, revision_id: fromRevisionId, body: 'x😀yz' }; },
+		async readNoteRevision() { return { note_id: noteId, revision_id: fromRevisionId, body: 'x😀yz\r\n' }; },
 		async compareNoteRevisions() { return { title_diff: 'title', body_diff: 'body', metadata_changes: [] }; },
 	}, createNoteFileResources());
 	const chunk = await tools.get('read_note_revision').run({ note_id: noteId, revision_id: fromRevisionId, offset: 2, max_chars: 1 });
 	assert.equal(chunk.body, '😀');
+	assert.equal(chunk.body_total_line_count, 2);
 	assert.equal(chunk.body_offset, 1);
 	assert.equal(chunk.nextOffset, 3);
 	assert.equal(chunk.has_more, true);

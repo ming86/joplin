@@ -36,7 +36,7 @@ test('revision client sends only fixed flat headless actions and validates nativ
 		{ ...note, previous_revision_id: rev1, changed: true },
 		{ items: [{ revision_id: rev1, captured_time: 3, parent_revision_id: null }], hasMore: false },
 		{ note_id: noteId, revision_id: rev1, captured_time: 3, title: 'Old', body: 'old', metadata: { parent_id: notebookId, is_todo: 1, todo_due: 0, source: 'mobile-import', source_application: 'net.example.mobile', source_url: 'https://example.test/source' } },
-		{ note_id: noteId, from_revision_id: rev1, to_revision_id: rev2, to_current: true, title_diff: '@@ title @@', body_diff: '@@ body @@', metadata_changes: [{ field: 'parent_id', from: { present: true, value: notebookId }, to: { present: false } }] },
+		{ note_id: noteId, from_revision_id: rev1, to_revision_id: rev2, to_current: true, title_diff: '@@ title @@', body_diff: '@@ body @@', from_body_total_line_count: 2, to_body_total_line_count: 4, metadata_changes: [{ field: 'parent_id', from: { present: true, value: notebookId }, to: { present: false } }] },
 	];
 	const client = createRevisionClient(async (...args) => { calls.push(args); return responses.shift(); });
 	const signal = new AbortController().signal;
@@ -69,6 +69,8 @@ test('revision client sends only fixed flat headless actions and validates nativ
 	const comparison = await client.compareNoteRevisions({ note_id: noteId, from_revision_id: rev1 }, signal);
 	assert.equal(comparison.to_revision_id, rev2);
 	assert.equal(comparison.to_current, true);
+	assert.equal(comparison.from_body_total_line_count, 2);
+	assert.equal(comparison.to_body_total_line_count, 4);
 
 	assert.deepEqual(calls.map(call => call[3]), [
 		{ action: 'readNote', id: noteId },
@@ -81,6 +83,27 @@ test('revision client sends only fixed flat headless actions and validates nativ
 	assert.deepEqual(calls.map(call => call[5]), [
 		{ writeOperation: true }, { writeOperation: true }, { writeOperation: false }, { writeOperation: false }, { writeOperation: false },
 	]);
+});
+
+test('revision client rejects missing or invalid complete-body line counts', async () => {
+	for (const counts of [
+		undefined,
+		{ from_body_total_line_count: 0, to_body_total_line_count: 1 },
+		{ from_body_total_line_count: 1.5, to_body_total_line_count: 1 },
+		{ from_body_total_line_count: 1, to_body_total_line_count: Number.MAX_SAFE_INTEGER + 1 },
+	]) {
+		const client = createRevisionClient(async () => ({
+			note_id: noteId,
+			from_revision_id: rev1,
+			to_revision_id: rev2,
+			to_current: false,
+			title_diff: '',
+			body_diff: '',
+			...(counts ?? {}),
+			metadata_changes: [],
+		}));
+		await assert.rejects(client.compareNoteRevisions({ note_id: noteId, from_revision_id: rev1 }), { code: 'invalid_backend_response' });
+	}
 });
 
 test('revision client requires a base revision and preserves safe native failures without retry', async () => {
@@ -131,7 +154,7 @@ test('revision service enriches the captured live note and forwards exact update
 		async updateNoteWithRevision(id, input) { calls.push(['update', id, structuredClone(input)]); return { ...note, ...input, revision_id: rev2, previous_revision_id: rev1, changed: true }; },
 		async listNoteRevisions(input) { calls.push(['list', input]); return { items: [{ revision_id: rev1, captured_time: 3, parent_revision_id: null }], hasMore: false }; },
 		async readNoteRevision(input) { calls.push(['history-read', input]); return { note_id: noteId, revision_id: rev1, captured_time: 3, title: 'Old', body: 'old', metadata: {} }; },
-		async compareNoteRevisions(input) { calls.push(['compare', input]); return { note_id: noteId, from_revision_id: rev1, to_revision_id: rev2, title_diff: '', body_diff: '', metadata_changes: [] }; },
+		async compareNoteRevisions(input) { calls.push(['compare', input]); return { note_id: noteId, from_revision_id: rev1, to_revision_id: rev2, to_current: false, title_diff: '', body_diff: '', from_body_total_line_count: 1, to_body_total_line_count: 1, metadata_changes: [] }; },
 		async getNote() { throw new Error('revision writes must not use the sidecar note read'); },
 	};
 	const service = createRevisionService({

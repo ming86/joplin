@@ -74,6 +74,21 @@ test('file reads retain alias numeric fields and HTML context, and inline slicin
 	assert.equal(defaultRead.content.length, 1);
 });
 
+test('read_note and get_note report whole-body line counts in every output mode', async t => {
+	const body = 'first\r\nsecond\nthird\rfour\n';
+	let currentBody = body;
+	const { tools } = fixture(t, { async readNoteWithRevision() { return { ...note, body: currentBody }; } });
+	for (const name of ['read_note', 'get_note']) {
+		const inline = await tools.call(name, { id: noteId, offset: 7, max_chars: 2 });
+		assert.equal(inline.structuredContent.body, 'se');
+		assert.equal(inline.structuredContent.body_total_line_count, 5);
+		assert.equal((await tools.call(name, { id: noteId, output: 'metadata' })).structuredContent.body_total_line_count, 5);
+		assert.equal((await tools.call(name, { id: noteId, output: 'file' })).structuredContent.body_total_line_count, 5);
+	}
+	currentBody = '';
+	assert.equal((await tools.call('read_note', { id: noteId, output: 'metadata' })).structuredContent.body_total_line_count, 1);
+});
+
 test('file mode explicitly rejects every slicing selector before reading the note', async t => {
 	let reads = 0;
 	const { tools } = fixture(t, { async readNoteWithRevision() { reads++; return note; } });
@@ -92,8 +107,8 @@ test('catalog publishes a fixed file-input object and object output variants', a
 	assert.deepEqual(update._meta, { 'openai/fileParams': ['body_file'] });
 	assert.deepEqual(Object.keys(update.inputSchema.properties.body_file.properties), ['download_url', 'file_id', 'mime_type', 'file_name']);
 	assert.deepEqual(update.inputSchema.properties.body_file.required, ['download_url', 'file_id']);
-	assert.match(update.inputSchema.properties.body_file.description, /body_size_bytes and body_sha256.*edited local file byte count.*SHA-256/);
-	assert.match(update.description, /File-update acknowledgments include body_length, body_size_bytes and body_sha256/);
+	assert.match(update.inputSchema.properties.body_file.description, /body_size_bytes, body_sha256 and body_total_line_count.*edited local file byte count.*SHA-256/);
+	assert.match(update.description, /File-update acknowledgments include body_length, body_size_bytes, body_sha256 and body_total_line_count/);
 	assert.match(update.description, /edited local file byte count.*SHA-256/);
 	assert.equal(update.inputSchema.type, 'object');
 	assert.deepEqual(update.inputSchema.required, ['id', 'base_revision_id']);
@@ -117,10 +132,10 @@ test('catalog publishes a fixed file-input object and object output variants', a
 	}
 	const updateOutput = update.outputSchema.anyOf[0];
 	assert.deepEqual(updateOutput.required, ['id', 'updated_time', 'revision_id', 'previous_revision_id', 'changed']);
-	for (const field of ['body_length', 'body_size_bytes', 'body_sha256']) assert.ok(updateOutput.properties[field], field);
+	for (const field of ['body_length', 'body_size_bytes', 'body_sha256', 'body_total_line_count']) assert.ok(updateOutput.properties[field], field);
 	assert.deepEqual(updateOutput.anyOf, [
-		{ not: { anyOf: [{ required: ['body_length'] }, { required: ['body_size_bytes'] }, { required: ['body_sha256'] }] } },
-		{ required: ['body_length', 'body_size_bytes', 'body_sha256'] },
+		{ not: { anyOf: [{ required: ['body_length'] }, { required: ['body_size_bytes'] }, { required: ['body_sha256'] }, { required: ['body_total_line_count'] }] } },
+		{ required: ['body_length', 'body_size_bytes', 'body_sha256', 'body_total_line_count'] },
 	]);
 	assert.match(updateOutput.properties.body_length.description, /UTF-16/);
 	assert.equal(updateOutput.properties.body_size_bytes.type, 'integer');
@@ -163,8 +178,10 @@ test('file body update returns measurements for the saved body, not the download
 		body_length: savedBody.length,
 		body_size_bytes: Buffer.byteLength(savedBody, 'utf8'),
 		body_sha256: createHash('sha256').update(savedBody, 'utf8').digest('hex'),
+		body_total_line_count: 3,
 	});
 	assert.notEqual(result.structuredContent.body_sha256, createHash('sha256').update(submittedBody, 'utf8').digest('hex'));
+	assert.notEqual(result.structuredContent.body_total_line_count, 200002);
 	assert.equal(result.content[0].text.includes('Saved complete body'), false);
 });
 
@@ -182,6 +199,7 @@ test('file body no-op acknowledgments measure the returned unchanged saved body'
 		body_length: note.body.length,
 		body_size_bytes: Buffer.byteLength(note.body, 'utf8'),
 		body_sha256: createHash('sha256').update(note.body, 'utf8').digest('hex'),
+		body_total_line_count: 2,
 	});
 });
 
