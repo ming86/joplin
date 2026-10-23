@@ -8,6 +8,8 @@ import { exportJWK, generateKeyPair, SignJWT } from 'jose';
 const { Miniflare } = createRequire(import.meta.resolve('wrangler'))('miniflare');
 const PUBLIC_URL = 'https://joplin-mcp.example.com';
 const CLIENT_ID = 'test-google-client';
+const DAY_SECONDS = 24 * 60 * 60;
+const REFRESH_TOKEN_TTL_SECONDS = 180 * DAY_SECONDS;
 
 /** Hash a verifier exactly as public MCP and Google OAuth clients do for PKCE. */
 async function challenge(verifier) {
@@ -65,6 +67,7 @@ test('runs consent, Google OIDC, OAuth PKCE and authenticated forwarding in work
 		} } },
 	}] });
 	t.after(() => runtime.dispose());
+	const oauthKv = await runtime.getKVNamespace('OAUTH_KV');
 	const send = (path, init) => runtime.dispatchFetch(`${PUBLIC_URL}${path}`, { redirect: 'manual', ...init });
 	const metadata = await send('/.well-known/oauth-authorization-server');
 	assert.equal((await metadata.json()).issuer, PUBLIC_URL);
@@ -121,7 +124,33 @@ test('runs consent, Google OIDC, OAuth PKCE and authenticated forwarding in work
 	assert.equal(token.status, 200, await token.clone().text());
 	const credentials = await token.json();
 	assert.ok(credentials.access_token);
-	const result = await send('/mcp', { method: 'POST', headers: { Authorization: `Bearer ${credentials.access_token}`,
+	assert.equal(credentials.expires_in, 60 * 60);
+	assert.ok(credentials.refresh_token);
+	const [userId, grantId] = credentials.refresh_token.split(':');
+	const grantKey = `grant:${userId}:${grantId}`;
+	const initialGrant = await oauthKv.get(grantKey, { type: 'json' });
+	const initialNow = Math.floor(Date.now() / 1000);
+	assert.ok(initialGrant.expiresAt >= initialNow + REFRESH_TOKEN_TTL_SECONDS - 2);
+	assert.ok(initialGrant.expiresAt <= initialNow + REFRESH_TOKEN_TTL_SECONDS);
+
+	// Model an existing unexpired grant from before the policy change; its next refresh should slide it forward.
+	const oldGrantExpiry = Math.floor(Date.now() / 1000) + 30 * DAY_SECONDS;
+	await oauthKv.put(grantKey, JSON.stringify({ ...initialGrant, expiresAt: oldGrantExpiry }), { expirationTtl: 30 * DAY_SECONDS });
+	const refreshed = await send('/token', { method: 'POST', body: new URLSearchParams({ grant_type: 'refresh_token',
+		client_id: client.client_id, refresh_token: credentials.refresh_token, resource: `${PUBLIC_URL}/mcp` }) });
+	assert.equal(refreshed.status, 200, await refreshed.clone().text());
+	const refreshedCredentials = await refreshed.json();
+	assert.ok(refreshedCredentials.access_token);
+	assert.equal(refreshedCredentials.expires_in, 60 * 60);
+	assert.ok(refreshedCredentials.refresh_token);
+	assert.notEqual(refreshedCredentials.refresh_token, credentials.refresh_token);
+	const refreshedGrant = await oauthKv.get(grantKey, { type: 'json' });
+	const refreshedNow = Math.floor(Date.now() / 1000);
+	assert.ok(refreshedGrant.expiresAt >= refreshedNow + REFRESH_TOKEN_TTL_SECONDS - 2);
+	assert.ok(refreshedGrant.expiresAt <= refreshedNow + REFRESH_TOKEN_TTL_SECONDS);
+	assert.ok(refreshedGrant.expiresAt > oldGrantExpiry);
+
+	const result = await send('/mcp', { method: 'POST', headers: { Authorization: `Bearer ${refreshedCredentials.access_token}`,
 		'Content-Type': 'application/json', 'MCP-Protocol-Version': '2026-07-28', 'Mcp-Method': 'tools/list' },
 		body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }) });
 	assert.equal(result.status, 200);

@@ -8,6 +8,15 @@ import { mcpForwarder } from './mcp-forwarder';
 /** Maximum JSON client registration body; client metadata is small. */
 const MAX_REGISTRATION_BYTES = 16_384;
 
+/** Access tokens remain valid for one hour. */
+const ACCESS_TOKEN_TTL_SECONDS = 60 * 60;
+
+/** New refresh grants start with a 180-day lifetime. */
+const REFRESH_TOKEN_TTL_SECONDS = 180 * 24 * 60 * 60;
+
+/** Successful refreshes slide the grant's inactivity expiry by the same 180 days. */
+const REFRESH_TOKEN_IDLE_TTL_SECONDS = REFRESH_TOKEN_TTL_SECONDS;
+
 /** Read a registration body with a fixed bound before handing it to the provider. */
 async function guardedRegistration(request: Request, env: Bindings): Promise<Request | Response> {
 	if (request.method !== 'POST') return request;
@@ -58,6 +67,9 @@ function createProvider(env: Bindings): OAuthProvider<Env> {
 		clientRegistrationEndpoint: `${env.PUBLIC_URL}/register`,
 		resourceMetadata: { resource: `${env.PUBLIC_URL}/mcp`, authorization_servers: [env.PUBLIC_URL], resource_name: 'Joplin MCP' },
 		scopesSupported: ['mcp'],
+		accessTokenTTL: ACCESS_TOKEN_TTL_SECONDS,
+		refreshTokenTTL: REFRESH_TOKEN_TTL_SECONDS,
+		refreshTokenIdleTTL: REFRESH_TOKEN_IDLE_TTL_SECONDS,
 		// Avoid the library's default diagnostic messages, which may contain client data.
 		onError: ({ status }) => { log.warn('oauth_request_rejected', { status }); },
 	});
