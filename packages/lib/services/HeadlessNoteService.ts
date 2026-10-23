@@ -19,8 +19,14 @@ export interface HeadlessNoteChanges {
 	replace_text?: { find: string; replace: string };
 	/** Move the note to this readable notebook. */
 	notebook_id?: string;
+	/** Convert the note to or from a to-do. A type change clears its prior due and completion values. */
+	is_todo?: boolean;
+	/** Set the to-do due date in Unix milliseconds, or 0 to clear it. */
+	todo_due?: number;
 	/** Set or clear to-do completion. */
 	todo_completed?: boolean;
+	/** Replace the source URL, or use an empty string to clear it. */
+	source_url?: string;
 }
 
 /** A revision-checked request to update a note through its ordinary save path. */
@@ -118,8 +124,8 @@ function revisionChecks(noteId: string, source: CaptureParent): SqlQuery[] {
 /** Compare the state callers can edit, including markup and the to-do fields they read. */
 function matchesBase(note: NoteEntity, base: RevisionContent): boolean {
 	if (note.title !== base.title || note.body !== base.body) return false;
-	for (const field of ['parent_id', 'is_todo', 'todo_due', 'todo_completed', 'markup_language'] as const) {
-		const historical = field === 'markup_language' ? base.metadata[field] ?? 1 : base.metadata[field];
+	for (const field of ['parent_id', 'is_todo', 'todo_due', 'todo_completed', 'markup_language', 'source_url'] as const) {
+		const historical = field === 'markup_language' ? base.metadata[field] ?? 1 : field === 'source_url' ? base.metadata[field] ?? '' : base.metadata[field];
 		if (note[field] !== historical) return false;
 	}
 	return true;
@@ -128,10 +134,14 @@ function matchesBase(note: NoteEntity, base: RevisionContent): boolean {
 /** Check the supported edit object before any capture can persist history. */
 function validateChanges(changes: HeadlessNoteChanges) {
 	if (!changes || typeof changes !== 'object' || Array.isArray(changes)) throw new JoplinError('An edit object is required.', 'invalid_note_input');
-	const supported = ['title', 'body', 'append', 'prepend', 'replace_text', 'notebook_id', 'todo_completed'];
+	const supported = ['title', 'body', 'append', 'prepend', 'replace_text', 'notebook_id', 'is_todo', 'todo_due', 'todo_completed', 'source_url'];
 	if (Object.keys(changes).some(key => !supported.includes(key))) throw new JoplinError('Unsupported note property.', 'unsupported_note_property');
-	for (const field of ['title', 'body', 'append', 'prepend', 'notebook_id'] as const) {
+	for (const field of ['title', 'body', 'append', 'prepend', 'notebook_id', 'source_url'] as const) {
 		if (changes[field] !== undefined && typeof changes[field] !== 'string') throw new JoplinError('Note text fields must be strings.', 'invalid_note_input');
+	}
+	if (changes.is_todo !== undefined && typeof changes.is_todo !== 'boolean') throw new JoplinError('To-do type must be a boolean.', 'invalid_note_input');
+	if (changes.todo_due !== undefined && (typeof changes.todo_due !== 'number' || !Number.isInteger(changes.todo_due))) {
+		throw new JoplinError('A due date must be an integer timestamp.', 'invalid_note_input');
 	}
 	if (changes.todo_completed !== undefined && typeof changes.todo_completed !== 'boolean') throw new JoplinError('To-do completion must be a boolean.', 'invalid_note_input');
 	if (changes.replace_text !== undefined) {
@@ -151,7 +161,7 @@ function rethrowSaveError(error: Error & { code?: string }): never {
 	throw error;
 }
 
-/** Apply literal body editing and notebook/to-do changes to the checked snapshot. */
+/** Apply literal body editing, notebook, to-do and source URL changes to the checked snapshot. */
 async function editPatch(note: NoteEntity, changes: HeadlessNoteChanges): Promise<NoteEntity> {
 	const patch: NoteEntity = {};
 	if (changes.title !== undefined) patch.title = changes.title;
@@ -176,10 +186,25 @@ async function editPatch(note: NoteEntity, changes: HeadlessNoteChanges): Promis
 		if (!folder || folder.encryption_applied !== 0 || folder.deleted_time) throw new JoplinError('The notebook is unavailable.', 'notebook_unavailable');
 		patch.parent_id = folder.id;
 	}
-	if (changes.todo_completed !== undefined) {
-		// Repeating the current boolean completion state is an unchanged edit.
-		patch.todo_completed = changes.todo_completed ? note.todo_completed || Date.now() : 0;
+	let todoCompleted = note.todo_completed || 0;
+	if (changes.is_todo !== undefined) {
+		const isTodo = changes.is_todo ? 1 : 0;
+		if (isTodo !== note.is_todo) {
+			patch.is_todo = isTodo;
+			// Match Note.changeNoteType: switching type clears both previous to-do values.
+			// Explicit due/completion edits below are applied after this reset.
+			patch.todo_due = 0;
+			patch.todo_completed = 0;
+			todoCompleted = 0;
+		}
 	}
+	if (changes.todo_due !== undefined) patch.todo_due = changes.todo_due;
+	if (changes.todo_completed !== undefined) {
+		// Repeating the current boolean state is unchanged. A type switch uses its reset
+		// completion value so an explicit true gets a fresh completion timestamp.
+		patch.todo_completed = changes.todo_completed ? todoCompleted || Date.now() : 0;
+	}
+	if (changes.source_url !== undefined) patch.source_url = changes.source_url;
 	return patch;
 }
 
