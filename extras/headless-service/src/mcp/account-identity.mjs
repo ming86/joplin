@@ -7,6 +7,7 @@ const rootIdentityTools = new Set([
 	'list_note_revisions', 'read_note_revision', 'compare_note_revisions',
 	'list_conflicts', 'read_conflict', 'update_notebook', 'delete_notebook',
 	'create_tag', 'rename_tag', 'read_attachment', 'create_attachment', 'update_attachment',
+	'list_trash', 'restore_note', 'restore_notebook', 'list_attachment_notes',
 ]);
 
 /** Nested result rows that carry account identity; other dictionaries remain opaque. */

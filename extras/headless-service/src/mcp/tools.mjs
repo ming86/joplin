@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import { ServiceError } from '../errors.mjs';
 import { registerRevisionTools } from './revision-tools.mjs';
 import { registerConflictTools } from './conflict-tools.mjs';
+import { registerTrashTools } from './trash-tools.mjs';
+import { registerAttachmentReferenceTools } from './attachment-reference-tools.mjs';
 import { registerMaintenanceTools } from './maintenance-tools.mjs';
 import { embeddedResourceResult, isMcpToolResult, registerAttachmentTools } from './attachment-tools.mjs';
 import { createNoteFileResources } from './note-file-resources.mjs';
@@ -479,6 +481,8 @@ export function createTools(service, { allowWrites = false, noteFileResources, r
 
 	registerRevisionTools(add, service, { getFileResources });
 	registerConflictTools(add, service, { getFileResources });
+	registerTrashTools(add, service, { allowWrites });
+	registerAttachmentReferenceTools(add, service);
 	if (allowWrites) registerMaintenanceTools(add, service);
 	registerAttachmentTools(add, service, { allowWrites, readFile });
 

@@ -253,6 +253,68 @@ export interface DeletedNotebookResult {
     /** Account that owns the notebook. */
     accountId: string;
 }
+/** Note currently in Joplin Trash. */
+export interface TrashedNote {
+    /** Joplin note ID. */
+    id: string;
+    /** Item kind used to distinguish notes from notebooks in Trash. */
+    type: 'note';
+    /** Note title. */
+    title: string;
+    /** Parent notebook ID, or an empty string for the root. */
+    parent_id: string;
+    /** Deletion time in Unix epoch milliseconds. */
+    deleted_time: number;
+    /** Last update time in Unix epoch milliseconds. */
+    updated_time: number;
+    /** Whether this is a conflict note, encoded as 0 or 1. */
+    is_conflict: 0 | 1;
+}
+/** Notebook currently in Joplin Trash. */
+export interface TrashedNotebook {
+    /** Joplin notebook ID. */
+    id: string;
+    /** Item kind used to distinguish notebooks from notes in Trash. */
+    type: 'notebook';
+    /** Notebook title. */
+    title: string;
+    /** Parent notebook ID, or an empty string for the root. */
+    parent_id: string;
+    /** Deletion time in Unix epoch milliseconds. */
+    deleted_time: number;
+    /** Last update time in Unix epoch milliseconds. */
+    updated_time: number;
+}
+/** A trashed note or notebook. */
+export type TrashItem = TrashedNote | TrashedNotebook;
+/** One account-bound page of Trash items. */
+export interface AccountTrashPage {
+    /** Account that supplied the Trash items. */
+    accountId: string;
+    /** Trashed notes and notebooks on this page. */
+    items: TrashItem[];
+    /** Whether a later page is available. */
+    hasMore: boolean;
+}
+/** Input for restoring a note or notebook from Joplin Trash. */
+export interface RestoreTrashItemInput {
+    /** Joplin ID of the trashed note or notebook. */
+    id: string;
+}
+/** Result of restoring a note or notebook from Joplin Trash. */
+export interface RestoredTrashItemResult {
+    /** Restored note or notebook ID. */
+    id: string;
+    /** Restored parent notebook ID, or an empty string for the root. */
+    parent_id: string;
+    /** Always true after the restore succeeds. */
+    restored: true;
+}
+/** Restored item result enriched with its account identity. */
+export interface AccountRestoredTrashItemResult extends RestoredTrashItemResult {
+    /** Account that owns the restored item. */
+    accountId: string;
+}
 /** Complete safe notebook listing and its account binding. */
 export interface NotebookListResult {
     /** Account that supplied the notebooks. */
@@ -397,6 +459,42 @@ export interface BackendAttachment extends AttachmentMetadata {
     /** Filename safe to expose to callers; never a local storage path. */
     filename: string;
 }
+/** Input for listing notes linked to a resource. */
+export interface AttachmentNotesInput extends PageOptions {
+    /** Joplin resource ID. */
+    id: string;
+}
+/** Note linked to an attachment resource. */
+export interface AttachmentNoteSummary {
+    /** Joplin note ID. */
+    id: string;
+    /** Note title. */
+    title: string;
+    /** Parent notebook ID, or an empty string for the root. */
+    parent_id: string;
+    /** Creation time in Unix epoch milliseconds. */
+    created_time: number;
+    /** Last update time in Unix epoch milliseconds. */
+    updated_time: number;
+    /** Deletion time in Unix epoch milliseconds; zero when the note is not trashed. */
+    deleted_time: number;
+    /** Whether this is a conflict note, encoded as 0 or 1. */
+    is_conflict: 0 | 1;
+}
+/** One page of notes linked to an attachment resource. */
+export interface AttachmentNotesPage {
+    /** Joplin resource ID whose linked notes were listed. */
+    attachment_id: string;
+    /** Linked note metadata on this page. */
+    items: AttachmentNoteSummary[];
+    /** Whether a later page is available. */
+    hasMore: boolean;
+}
+/** Attachment note page enriched with its account identity. */
+export interface AccountAttachmentNotesPage extends AttachmentNotesPage {
+    /** Account that supplied the linked notes. */
+    accountId: string;
+}
 /** Metadata-only attachment returned by an account service. */
 export interface AccountAttachment extends AttachmentMetadata {
     /** Account that owns the resource. */
@@ -479,6 +577,8 @@ export interface JoplinBackend {
     /** Read the fixed in-memory synchronization and decryption summary. */
     status(signal?: AbortSignal): Promise<HeadlessStatusSummary>;
     listNotebooks(options?: PageOptions, signal?: AbortSignal): Promise<Page<Notebook>>;
+    /** List a page of trashed notes and notebooks (default page size 20, maximum 100). */
+    listTrash(options?: PageOptions, signal?: AbortSignal): Promise<Page<TrashItem>>;
     /** Return every safe notebook reported by the backend. */
     listAllNotebooks?(signal?: AbortSignal): Promise<Notebook[]>;
     listNotes(options?: PageOptions & { notebookId?: string }, signal?: AbortSignal): Promise<Page<Note>>;
@@ -510,6 +610,10 @@ export interface JoplinBackend {
     updateNotebook(id: string, input: NotebookUpdate, signal?: AbortSignal): Promise<Notebook>;
     /** Move a notebook and its subtree to Joplin Trash. */
     deleteNotebook(id: string, signal?: AbortSignal): Promise<void>;
+    /** Restore a note from Joplin Trash. */
+    restoreNote(input: RestoreTrashItemInput, signal?: AbortSignal): Promise<RestoredTrashItemResult>;
+    /** Restore a notebook from Joplin Trash. */
+    restoreNotebook(input: RestoreTrashItemInput, signal?: AbortSignal): Promise<RestoredTrashItemResult>;
     /** Read safe tag metadata by id. */
     getTag(id: string, signal?: AbortSignal): Promise<Tag>;
     /** Find the oldest matching tag using Tag.loadByTitle's trimming, SQLite NOCASE collation and NFC fallback. */
@@ -530,6 +634,8 @@ export interface JoplinBackend {
     removeTagFromNote?(tagId: string, noteId: string, signal?: AbortSignal): Promise<void>;
     /** List linked resource metadata for a note, following every core API page. */
     listNoteAttachments(noteId: string, signal?: AbortSignal): Promise<BackendAttachment[]>;
+    /** List one page of notes linked to a resource (default page size 20, maximum 100). */
+    listAttachmentNotes(input: AttachmentNotesInput, signal?: AbortSignal): Promise<AttachmentNotesPage>;
     /** Read metadata for one Joplin resource. */
     getAttachment(resourceId: string, signal?: AbortSignal): Promise<BackendAttachment>;
     /** Read one resource's current bytes as standard base64. */
@@ -718,6 +824,8 @@ export interface AccountService {
     /** Read account-bound semantic state and the core process status summary. */
     status(signal?: AbortSignal): Promise<AccountStatus>;
     listNotebooks(options?: PageOptions, signal?: AbortSignal): Promise<Page<Notebook & { accountId: string }>>;
+    /** List one account-bound page of trashed notes and notebooks (default page size 20, maximum 100). */
+    listTrash(options?: PageOptions, signal?: AbortSignal): Promise<AccountTrashPage>;
     /** Return all readable notebooks with counts from eligible note metadata. */
     listAllNotebooks(signal?: AbortSignal): Promise<NotebookListResult>;
     listNotes(options?: PageOptions & { notebookId?: string }, signal?: AbortSignal): Promise<Page<AccountNote>>;
@@ -735,6 +843,8 @@ export interface AccountService {
     updateNote(id: string, input: NoteUpdate, signal?: AbortSignal): Promise<AccountNote>;
     /** Move an eligible note to Trash. */
     deleteNote(id: string, signal?: AbortSignal): Promise<DeletedNoteResult>;
+    /** Restore a note from this account's Joplin Trash. */
+    restoreNote(input: RestoreTrashItemInput, signal?: AbortSignal): Promise<AccountRestoredTrashItemResult>;
     /** Read an eligible note with its native revision id and readable labels. */
     readNoteWithRevision(id: string, signal?: AbortSignal): Promise<ReadableAccountRevisionNote>;
     /** Apply changes only when the current native revision matches the supplied base id. */
@@ -759,10 +869,14 @@ export interface AccountService {
     updateNotebook(id: string, input: NotebookUpdate, signal?: AbortSignal): Promise<Notebook & { accountId: string }>;
     /** Move a notebook subtree to Joplin Trash. */
     deleteNotebook(id: string, signal?: AbortSignal): Promise<DeletedNotebookResult>;
+    /** Restore a notebook from this account's Joplin Trash. */
+    restoreNotebook(input: RestoreTrashItemInput, signal?: AbortSignal): Promise<AccountRestoredTrashItemResult>;
     /** Create a standalone tag without attaching it to a note. */
     createTag(title: string, signal?: AbortSignal): Promise<Tag & { accountId: string }>;
     /** List attachment metadata linked to an eligible note. */
     listNoteAttachments(noteId: string, signal?: AbortSignal): Promise<AccountAttachment[]>;
+    /** List one account-bound page of notes linked to a resource (default page size 20, maximum 100). */
+    listAttachmentNotes(input: AttachmentNotesInput, signal?: AbortSignal): Promise<AccountAttachmentNotesPage>;
     /** Read metadata for an eligible, unlocked resource. */
     getAttachment(resourceId: string, signal?: AbortSignal): Promise<AccountAttachment>;
     /** Read an eligible, unlocked resource and return its bytes as base64. */

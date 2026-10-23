@@ -6,6 +6,8 @@ import { createMaintenanceService } from './src/maintenance.mjs';
 import { createRevisionService } from './src/revisions.mjs';
 import { createConflictService } from './src/conflicts.mjs';
 import { createAttachmentService } from './src/attachments.mjs';
+import { createTrashService } from './src/trash.mjs';
+import { createAttachmentReferenceService } from './src/attachment-references.mjs';
 import { requireValue, ServiceError, pagination } from './src/errors.mjs';
 export { ServiceError } from './src/errors.mjs';
 export { bindEmbeddingProvider, embeddingSpace, embeddingFingerprint, noteFingerprint } from './src/embeddings.mjs';
@@ -115,6 +117,8 @@ export function createAccountRegistry(configurations, factories = {}) {
 				...createConflictService({ backend, permit, accountId }),
 				...createMaintenanceService({ backend, permit, accountId }),
 				...createAttachmentService({ backend, permit, accountId }),
+				...createTrashService({ backend, permit, accountId }),
+				...createAttachmentReferenceService({ backend, permit, accountId }),
 				accountId,
 				async status(signal) {
 					permit('read');

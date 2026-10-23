@@ -35,6 +35,8 @@ import { createHeadlessRevisionActions } from './headless/revisions';
 import { createHeadlessMaintenanceActions } from './headless/maintenance';
 import createHeadlessAttachmentActions from './headless/attachments';
 import createHeadlessConflictActions from './headless/conflicts';
+import createHeadlessTrashActions from './headless/trash';
+import createHeadlessAttachmentReferenceActions from './headless/attachmentReferences';
 
 type FolderOrNoteType = ModelType.Note | ModelType.Folder | 'folderOrNote';
 
@@ -104,6 +106,8 @@ export class Application extends BaseApplication {
 			createHeadlessMaintenanceActions(),
 			createHeadlessAttachmentActions(),
 			createHeadlessConflictActions(),
+			createHeadlessTrashActions(),
+			createHeadlessAttachmentReferenceActions(),
 		);
 		clipper.initialize(createHeadlessActionApi(
 			() => ({ ...this.store().getState(), syncPending: reg.syncSchedulingPending() ?? this.store().getState().syncPending }),

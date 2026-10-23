@@ -3,6 +3,8 @@ import { createMaintenanceClient } from './maintenance-client.mjs';
 import { createRevisionClient } from './revision-client.mjs';
 import { createConflictClient } from './conflict-client.mjs';
 import { createAttachmentClient } from './attachment-client.mjs';
+import { createTrashClient } from './trash-client.mjs';
+import { createAttachmentReferenceClient } from './attachment-reference-client.mjs';
 
 /** Fields used by note reads and metadata scans. */
 const noteFields = 'id,parent_id,title,body,created_time,updated_time,is_todo,todo_due,todo_completed,source,source_application,source_url,markup_language,encryption_applied,deleted_time,is_locked';
@@ -223,6 +225,8 @@ export function createJoplinClient(config) {
 		...createMaintenanceClient(request),
 		...createRevisionClient(request),
 		...createConflictClient(request),
+		...createTrashClient(request),
+		...createAttachmentReferenceClient(request),
 		...createAttachmentClient({ request, baseUrl, token, timeoutMs }),
 		/** Reads the core process's in-memory synchronization and decryption summary. */
 		async status(signal) {

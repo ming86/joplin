@@ -1,5 +1,7 @@
 import { revisionConflictOutputSchemas } from './revision-conflict-output-schemas.mjs';
 import { maintenanceAttachmentOutputSchemas } from './maintenance-attachment-output-schemas.mjs';
+import { trashOutputSchemas } from './trash-output-schemas.mjs';
+import { attachmentReferenceOutputSchemas } from './attachment-reference-output-schemas.mjs';
 
 /** Describe an output record without closing fields retained from backend records. */
 const object = (properties, required = Object.keys(properties)) => ({ type: 'object', properties, required });
@@ -181,7 +183,7 @@ const errorSchema = object({ error: object({
 	action: { type: 'string', description: 'Inspection advice included when the write outcome is unknown.' },
 }, ['code']) });
 /** Exhaustive catalog mapping; missing entries are registration errors. */
-const successSchemas = { ...coreOutputSchemas, ...revisionConflictOutputSchemas, ...maintenanceAttachmentOutputSchemas };
+const successSchemas = { ...coreOutputSchemas, ...revisionConflictOutputSchemas, ...maintenanceAttachmentOutputSchemas, ...trashOutputSchemas, ...attachmentReferenceOutputSchemas };
 
 /** Return the existing success or structured error contract for one registered tool. */
 export function getToolOutputSchema(name) {
