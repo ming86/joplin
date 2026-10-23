@@ -709,8 +709,19 @@ export interface SyncStatusSummary {
     running: boolean;
     /** Whether another synchronization is waiting to run. */
     pending: boolean;
+    /** Current scheduler execution kind, including preparation and authentication; null when idle. It may be non-null while `running` is false. */
+    kind: 'full' | 'upload' | 'poll' | null;
+    /** Timing for the latest periodic full execution, or null before the first one. Retained across polls, uploads, and ordinary full syncs, including failures, and reset when the service restarts. */
+    lastPeriodicFullSync: PeriodicFullSyncSummary | null;
     /** Last in-memory synchronization report, or null before the first report. */
     report: SyncReportSummary | null;
+}
+/** Start and completion times for the latest periodic full synchronization. */
+export interface PeriodicFullSyncSummary {
+    /** Nonnegative safe integer Unix epoch milliseconds when the execution started. */
+    startTime: number;
+    /** Nonnegative safe integer Unix epoch milliseconds when it completed, or null while still executing. Completion is recorded for both success and failure. */
+    completedTime: number | null;
 }
 /** The batch represented by the decryption worker's reported progress. */
 export interface DecryptionBatchSummary {

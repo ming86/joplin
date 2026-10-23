@@ -67,12 +67,25 @@ const syncReport = object({
 	state: { type: ['string', 'null'], enum: ['idle', 'in_progress', null], description: 'Last report state; may remain in_progress after sync completes.' },
 	startTime: nullableTime, completedTime: nullableTime, counters: syncCounters, errorCount: number,
 });
+/** Timestamp fields for the most recent periodic full synchronization. */
+const syncTimestamp = { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER, description: 'Nonnegative safe integer Unix epoch milliseconds.' };
+const nullableSyncTimestamp = { type: ['integer', 'null'], minimum: 0, maximum: Number.MAX_SAFE_INTEGER, description: 'Nonnegative safe integer Unix epoch milliseconds, or null until the periodic full synchronization completes.' };
+const periodicFullSync = object({
+	startTime: syncTimestamp,
+	completedTime: nullableSyncTimestamp,
+});
 /** Current process status combined with the account and semantic index state. */
 const status = object({
 	accountEmail: { ...nullableString, description: 'Joplin account email, or null when unavailable.' },
 	accountId: { type: 'string', description: 'Local account binding ID selected by the registry.' },
 	semantic, observedAt: time, serviceStartedAt: time,
-	sync: object({ running: boolean, pending: boolean, report: { anyOf: [syncReport, { type: 'null' }] } }),
+	sync: object({
+		running: boolean,
+		pending: boolean,
+		kind: { type: ['string', 'null'], enum: ['full', 'upload', 'poll', null], description: 'Current scheduler execution kind, including scheduler preparation and authentication. It may be non-null while running is false; null means the scheduler is idle.' },
+		lastPeriodicFullSync: { description: 'Null until the first periodic full execution. Once started, its timing remains available across polls, uploads, and ordinary full syncs, including when it failed; it resets when the service restarts.', anyOf: [periodicFullSync, { type: 'null' }] },
+		report: { anyOf: [syncReport, { type: 'null' }] },
+	}),
 	decryption: object({
 		state: { type: ['string', 'null'], enum: ['idle', 'started', null] },
 		batch: { description: 'Last reported batch while started; may still describe the preceding run until progress arrives.', anyOf: [object({ itemIndex: { type: 'number', description: 'Zero-based index within the reported batch.' }, itemCount: number }), { type: 'null' }] },

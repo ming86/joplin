@@ -214,7 +214,7 @@ export function createTools(service, { allowWrites = false, noteFileResources, r
 		});
 	}
 
-	add('get_status', 'Return the Joplin account email and local binding ID, plus semantic index state, live sync details, and decryption worker state and last-reported batch.', object({}), (_args, signal) => service.status(signal));
+	add('get_status', 'Return the Joplin account email and local binding ID, semantic index state, current sync scheduler kind and latest report, last periodic full sync timing, and decryption worker state and last-reported batch. The scheduler kind can be present during preparation or authentication before sync.running becomes true.', object({}), (_args, signal) => service.status(signal));
 	add('list_notebooks', 'List all readable notebooks (folders) with their ids, titles, parent ids and note counts. Use parent_id to reconstruct the notebook tree.', object({}), async (_args, signal) => {
 		const result = await service.listAllNotebooks(signal);
 		// This Desktop-compatible tool exposes the complete notebook list without sidecar pagination metadata.

@@ -47,7 +47,7 @@ function pageResult(data, map) {
 	return { items: data.items.map(map), hasMore: data.has_more };
 }
 
-/** Validate and allowlist the headless service's live sync/decryption summary. */
+/** Validate and allowlist the headless service's scheduler, sync, and decryption summary. */
 function headlessStatusResult(data) {
 	const timestamp = value => Number.isSafeInteger(value) && value >= 0;
 	const nullableTimestamp = value => value === null || timestamp(value);
@@ -56,9 +56,21 @@ function headlessStatusResult(data) {
 	requireValue(data && typeof data === 'object' && (typeof data.accountEmail === 'string' || data.accountEmail === null)
 		&& timestamp(data.observedAt) && timestamp(data.serviceStartedAt)
 		&& data.sync && typeof data.sync === 'object' && typeof data.sync.running === 'boolean' && typeof data.sync.pending === 'boolean'
+		&& ['full', 'upload', 'poll', null].includes(data.sync.kind)
+		&& (data.sync.lastPeriodicFullSync === null || (data.sync.lastPeriodicFullSync && typeof data.sync.lastPeriodicFullSync === 'object'
+			&& !Array.isArray(data.sync.lastPeriodicFullSync) && timestamp(data.sync.lastPeriodicFullSync.startTime)
+			&& nullableTimestamp(data.sync.lastPeriodicFullSync.completedTime)))
 		&& data.decryption && typeof data.decryption === 'object'
 		&& (data.decryption.state === null || data.decryption.state === 'idle' || data.decryption.state === 'started')
 		&& typeof data.decryption.missingMasterKey === 'boolean' && count(data.decryption.disabledItemCount), 'invalid_backend_response');
+
+	let lastPeriodicFullSync = null;
+	if (data.sync.lastPeriodicFullSync !== null) {
+		lastPeriodicFullSync = {
+			startTime: data.sync.lastPeriodicFullSync.startTime,
+			completedTime: data.sync.lastPeriodicFullSync.completedTime,
+		};
+	}
 
 	let report = null;
 	if (data.sync.report !== null) {
@@ -95,6 +107,8 @@ function headlessStatusResult(data) {
 		sync: {
 			running: data.sync.running,
 			pending: data.sync.pending,
+			kind: data.sync.kind,
+			lastPeriodicFullSync,
 			report: report,
 		},
 		decryption: {
