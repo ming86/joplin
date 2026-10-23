@@ -294,7 +294,7 @@ test('stdio fragmented UTF-8, CRLF, multiple frames, invalid JSON and EOF', asyn
 	await new Promise(r => setTimeout(r, 30)); input.end(); await t.done;
 	const responses = data.trim().split('\n').map(JSON.parse);
 	assert.ok(responses.some(r => r.error?.code === -32700)); assert.ok(responses.some(r => r.error?.code === -32600));
-	assert.equal(responses.find(r => r.id === 2).result.structuredContent.accountId, 'alice');
+	assert.equal(responses.find(r => r.id === 2).result.structuredContent.accountEmail, 'alice@example.test');
 });
 test('stdio accepts a request larger than the former frame cap', async () => {
 	const input = new PassThrough(); const output = new PassThrough(); let data = '';

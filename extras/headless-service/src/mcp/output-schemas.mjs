@@ -19,8 +19,8 @@ const nullableString = { type: ['string', 'null'] };
 const nullableTime = { type: ['number', 'null'], description: 'Unix epoch milliseconds, or null before this event is recorded.' };
 /** Native timestamp format shared by note and process fields. */
 const time = { type: 'number', description: 'Unix epoch milliseconds.' };
-/** Account identity attached by the bound account service. */
-const accountId = { type: 'string', description: 'Account that supplied this result.' };
+/** Authenticated Joplin profile email, or null when identity is unavailable. */
+const accountEmail = { ...nullableString, description: 'Authenticated Joplin account email, or null when unavailable.' };
 
 /** Fields retained from a native note; only its identity is always required. */
 const noteProperties = {
@@ -29,7 +29,7 @@ const noteProperties = {
 	is_todo: { type: 'number', description: 'Native to-do flag, encoded as 0 or 1.' },
 	todo_completed: { type: 'number', description: 'Completion time in Unix epoch milliseconds, or 0 while open.' },
 	markup_language: { type: 'number', description: 'Native Joplin markup language value.' },
-	encryption_applied: number, deleted_time: time, is_locked: number, accountId,
+	encryption_applied: number, deleted_time: time, is_locked: number, accountEmail,
 };
 /** Note list metadata with the body replaced by a short preview. */
 const { body: _body, ...summaryProperties } = noteProperties;
@@ -37,7 +37,7 @@ const { body: _body, ...summaryProperties } = noteProperties;
 const summary = object({ ...summaryProperties,
 	preview: { type: 'string', description: 'First 320 UTF-16 code units of the note body.' },
 	bodyTruncated: boolean,
-}, ['id', 'accountId', 'preview', 'bodyTruncated']);
+}, ['id', 'accountEmail', 'preview', 'bodyTruncated']);
 /** Notebook metadata normalized by the account service. */
 const notebook = object({ id: string, title: string, parent_id: { ...nullableString, description: 'Parent notebook id, or null for a top-level notebook.' } });
 /** Complete notebook list rows include counts of readable, non-deleted notes. */
@@ -92,21 +92,24 @@ const readProperties = {
 	offsetUnit: { type: 'string', const: 'utf16-code-unit' },
 };
 /** Required fields synthesized by the read tool in addition to the service identity. */
-const readRequired = ['id', 'accountId', 'revision_id', 'body', 'notebook_id', 'notebook_title', 'tags', 'is_todo', 'todo_completed', 'body_length', 'body_offset', 'body_returned_chars', 'has_more', 'offset', 'nextOffset', 'totalLength', 'offsetUnit'];
+const readRequired = ['id', 'accountEmail', 'revision_id', 'body', 'notebook_id', 'notebook_title', 'tags', 'is_todo', 'todo_completed', 'body_length', 'body_offset', 'body_returned_chars', 'has_more', 'offset', 'nextOffset', 'totalLength', 'offsetUnit'];
 /** Success contracts for the core tools, including the defined Desktop semantic result. */
 const coreOutputSchemas = {
 	get_status: status,
 	list_notebooks: exactObject({ notebooks: array(countedNotebook) }),
 	list_tags: object({ tags: array(object({ id: string, title: string })) }),
-	list_notes: object({ items: array(summary), hasMore: boolean }),
+	list_notes: object({
+		accountEmail: { ...accountEmail, description: 'Authenticated Joplin account email when the service supplies page-level account attribution; null when unavailable.' },
+		items: array(summary), hasMore: boolean,
+	}, ['items', 'hasMore']),
 	search_notes: exactObject({
-		accountId, requestedMode: { type: 'string', enum: ['keyword', 'semantic', 'hybrid'] },
+		accountEmail, requestedMode: { type: 'string', enum: ['keyword', 'semantic', 'hybrid'] },
 		executedMode: { type: ['string', 'null'], enum: ['keyword', 'semantic', 'hybrid', null] }, semantic,
 		hasMore: boolean,
 		results: array(searchResult),
 		total: { type: 'integer', description: 'Exact eligible keyword match count when supported by the backend.' },
 		candidateWindow: { type: 'number', description: 'Number of candidates considered from each search source.' }, truncated: boolean, notebookId: string,
-	}, ['accountId', 'requestedMode', 'executedMode', 'semantic', 'hasMore', 'results']),
+	}, ['accountEmail', 'requestedMode', 'executedMode', 'semantic', 'hasMore', 'results']),
 	semantic_search_notes: { ...object({ results: array(object({
 		note_id: string, title: nullableString, notebook_id: nullableString,
 		chunk_index: { type: 'number', description: 'Chunk index within the source note.' }, chunk_text: string,

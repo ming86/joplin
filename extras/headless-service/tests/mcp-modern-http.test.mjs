@@ -96,7 +96,7 @@ test('modern HTTP discovers, lists, reads and saves through the account service 
 	}
 	const read = await exchange(server, call(3, 'read_note', { id: noteId }));
 	assertComplete(read);
-	assert.equal(read.json.result.structuredContent.accountId, 'alice');
+	assert.equal(read.json.result.structuredContent.accountEmail, 'alice@example.test');
 	assert.equal(read.json.result.structuredContent.body, 'alice');
 	const saved = await exchange(server, call(4, 'create_note', { parentId: folderId, title: 'Modern HTTP', body: 'Saved once' }));
 	assertComplete(saved);

@@ -59,7 +59,7 @@ test('HTTP MCP initializes without a version header and serves account-bound rea
 	assert.ok(list.json.result.tools.every(tool => tool.annotations.readOnlyHint));
 	const read = await exchange(server, call(3, 'read_note', { id: noteId }));
 	assert.equal(read.status, 200);
-	assert.equal(read.json.result.structuredContent.accountId, 'alice');
+	assert.equal(read.json.result.structuredContent.accountEmail, 'alice@example.test');
 	assert.equal(read.json.result.structuredContent.body, 'alice');
 	const denied = await exchange(server, call(4, 'create_note', { parentId: folderId, title: 'x' }));
 	assert.equal(denied.json.error.code, -32602);

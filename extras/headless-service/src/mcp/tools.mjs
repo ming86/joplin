@@ -4,6 +4,7 @@ import { registerConflictTools } from './conflict-tools.mjs';
 import { registerMaintenanceTools } from './maintenance-tools.mjs';
 import { isMcpToolResult, registerAttachmentTools } from './attachment-tools.mjs';
 import { getToolOutputSchema } from './output-schemas.mjs';
+import { createAccountResultPresenter } from './account-identity.mjs';
 
 const id = { type: 'string', pattern: '^[a-f0-9]{32}$' };
 const page = { type: 'integer', minimum: 1, maximum: 1000000 };
@@ -145,6 +146,7 @@ function makeSnippet(bodyText, query) {
 
 /** Register the Desktop-compatible tool catalog plus the headless utilities. */
 export function createTools(service, { allowWrites = false } = {}) {
+	const present = createAccountResultPresenter(service);
 	const tools = new Map();
 	/** Store each definition with its runner and MCP safety annotations. */
 	function add(name, description, inputSchema, run, annotations = readAnnotations) {
@@ -379,7 +381,14 @@ export function createTools(service, { allowWrites = false } = {}) {
 			try {
 				if (signal?.aborted) throw new ServiceError('request_cancelled');
 				const value = await tool.run(args, signal);
-				return isMcpToolResult(value) ? value : toolResult(value);
+				if (isMcpToolResult(value)) {
+					// Project resource metadata without traversing or serializing its file bytes.
+					const metadata = await present(name, value.structuredContent);
+					value.structuredContent = metadata;
+					value.content[0] = { type: 'text', text: JSON.stringify(metadata) };
+					return value;
+				}
+				return toolResult(await present(name, value));
 			} catch (error) {
 				const known = error instanceof ServiceError;
 				const safeMessage = known && revisionToolNames.has(name)

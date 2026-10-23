@@ -37,7 +37,7 @@ const revisionSummary = object({
 	revision_id: { type: 'string', description: 'Native Joplin revision identifier.' },
 	captured_time: { type: 'number', description: 'Revision capture time in Unix epoch milliseconds.' },
 	parent_revision_id: { anyOf: [{ type: 'string' }, { type: 'null' }], description: 'Parent revision identifier, or null for the first revision.' },
-	accountId: { type: 'string', description: 'Account that supplied this revision.' },
+	accountEmail: { type: ['string', 'null'], description: 'Authenticated Joplin account email, or null when unavailable.' },
 });
 
 /** One tracked metadata field changed between two revision snapshots. */
@@ -91,7 +91,7 @@ originalSideSchema.oneOf.push(object({
 /** Success output JSON Schemas for the native revision and conflict MCP tools. */
 export const revisionConflictOutputSchemas = {
 	list_note_revisions: object({
-		accountId: { type: 'string', description: 'Account that supplied the revision history.' },
+		accountEmail: { type: ['string', 'null'], description: 'Authenticated Joplin account email, or null when unavailable.' },
 		items: { type: 'array', items: revisionSummary, description: 'Revision rows on this page, newest first.' },
 		hasMore: { type: 'boolean', description: 'Whether another visible revision exists after this page.' },
 	}),
@@ -106,11 +106,11 @@ export const revisionConflictOutputSchemas = {
 			additionalProperties: jsonValueSchema,
 			description: 'JSON-safe tracked metadata from the historical note.',
 		},
-		accountId: { type: 'string', description: 'Account that supplied this revision.' },
+		accountEmail: { type: ['string', 'null'], description: 'Authenticated Joplin account email, or null when unavailable.' },
 		...bodyChunkProperties,
 	}),
 	compare_note_revisions: object({
-		accountId: { type: 'string', description: 'Account that supplied the revisions.' },
+		accountEmail: { type: ['string', 'null'], description: 'Authenticated Joplin account email, or null when unavailable.' },
 		note_id: { type: 'string', description: 'Original note identifier.' },
 		from_revision_id: { type: 'string', description: 'Native revision identifier used as the comparison base.' },
 		to_revision_id: { type: 'string', description: 'Native destination revision identifier, also returned when the current live state was captured.' },
@@ -120,7 +120,7 @@ export const revisionConflictOutputSchemas = {
 		metadata_changes: { type: 'array', items: metadataChange, description: 'Tracked metadata changes, sorted by field name.' },
 	}),
 	list_conflicts: object({
-		accountId: { type: 'string', description: 'Account that supplied the conflicts.' },
+		accountEmail: { type: ['string', 'null'], description: 'Authenticated Joplin account email, or null when unavailable.' },
 		items: {
 			type: 'array',
 			items: object({
@@ -135,7 +135,7 @@ export const revisionConflictOutputSchemas = {
 		hasMore: { type: 'boolean', description: 'Whether another readable conflict exists after this page.' },
 	}),
 	read_conflict: object({
-		accountId: { type: 'string', description: 'Account that supplied both conflict sides.' },
+		accountEmail: { type: ['string', 'null'], description: 'Authenticated Joplin account email, or null when unavailable.' },
 		conflict: { ...conflictSideSchema, description: 'Conflict copy and its current availability on this device.' },
 		original: { ...originalSideSchema, description: 'Linked original note and its current availability, or an unlinked state.' },
 	}),
