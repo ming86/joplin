@@ -102,7 +102,31 @@ test('revision client rejects missing or invalid complete-body line counts', asy
 			...(counts ?? {}),
 			metadata_changes: [],
 		}));
-		await assert.rejects(client.compareNoteRevisions({ note_id: noteId, from_revision_id: rev1 }), { code: 'invalid_backend_response' });
+		await assert.rejects(client.compareNoteRevisions({ note_id: noteId, from_revision_id: rev1 }), error => {
+			assert.equal(error.code, 'invalid_backend_response');
+			assert.equal(error.diagnostics.path, 'services/headless');
+			assert.equal(error.diagnostics.operation, 'compareNoteRevisions');
+			assert.equal(error.diagnostics.stage, 'validation');
+			return true;
+		});
+	}
+});
+
+test('revision read validators attach action context to malformed backend values', async () => {
+	const malformedCases = [
+		['listNoteRevisions', () => createRevisionClient(async () => ({ items: [{}], hasMore: false })).listNoteRevisions({ note_id: noteId })],
+		['readNoteRevision', () => createRevisionClient(async () => ({})).readNoteRevision({ note_id: noteId, revision_id: rev1 })],
+		['compareNoteRevisions', () => createRevisionClient(async () => ({})).compareNoteRevisions({ note_id: noteId, from_revision_id: rev1 })],
+	];
+	for (const [operation, invoke] of malformedCases) {
+		await assert.rejects(invoke(), error => {
+			assert.equal(error.code, 'invalid_backend_response');
+			assert.equal(error.diagnostics.method, 'POST');
+			assert.equal(error.diagnostics.path, 'services/headless');
+			assert.equal(error.diagnostics.operation, operation);
+			assert.equal(error.diagnostics.stage, 'validation');
+			return true;
+		});
 	}
 });
 
@@ -117,14 +141,44 @@ test('revision client requires a base revision and preserves safe native failure
 		assert.equal(error.code, 'note_conflict');
 		assert.equal(error.outcomeUnknown, false);
 		assert.ok(!error.message.includes('private native detail'));
+		assert.equal(error.diagnostics.method, 'POST');
+		assert.equal(error.diagnostics.path, 'services/headless');
+		assert.equal(error.diagnostics.operation, 'updateNote');
+		assert.equal(error.diagnostics.stage, 'validation');
 		return true;
 	});
 	assert.equal(calls, 1);
+
+	const unknownEnvelope = createRevisionClient(async () => ({ error: {
+		code: 'unexpected_native_error', message: 'private native detail', applied: false,
+	} }));
+	await assert.rejects(unknownEnvelope.updateNoteWithRevision(noteId, { base_revision_id: rev1, body: 'new' }), error => {
+		assert.equal(error.code, 'write_outcome_unknown');
+		assert.equal(error.outcomeUnknown, true);
+		assert.ok(!error.message.includes('private native detail'));
+		assert.equal(error.diagnostics.operation, 'updateNote');
+		assert.equal(error.diagnostics.stage, 'validation');
+		return true;
+	});
 
 	const malformedWrite = createRevisionClient(async () => ({ id: noteId, title: 'bad response' }));
 	await assert.rejects(malformedWrite.updateNoteWithRevision(noteId, { base_revision_id: rev1, body: 'new' }), error => {
 		assert.equal(error.code, 'write_outcome_unknown');
 		assert.equal(error.outcomeUnknown, true);
+		assert.equal(error.cause.code, 'invalid_backend_response');
+		assert.equal(error.diagnostics.path, 'services/headless');
+		assert.equal(error.diagnostics.operation, 'updateNote');
+		assert.equal(error.diagnostics.stage, 'validation');
+		return true;
+	});
+	const malformedCapture = createRevisionClient(async () => ({ id: noteId, title: 'bad response' }));
+	await assert.rejects(malformedCapture.readNoteWithRevision(noteId), error => {
+		assert.equal(error.code, 'write_outcome_unknown');
+		assert.equal(error.outcomeUnknown, true);
+		assert.equal(error.cause.code, 'invalid_backend_response');
+		assert.equal(error.diagnostics.path, 'services/headless');
+		assert.equal(error.diagnostics.operation, 'readNote');
+		assert.equal(error.diagnostics.stage, 'validation');
 		return true;
 	});
 

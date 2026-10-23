@@ -47,7 +47,14 @@ test('maintenance client accepts a missing native tag and rejects malformed look
 	assert.equal(await missing.findTagByTitle('Missing'), null);
 
 	const malformed = createMaintenanceClient(async () => ({ tag: { id: 'wrong', title: 'Wrong' } }));
-	await assert.rejects(malformed.findTagByTitle('Wrong'), { code: 'invalid_backend_response' });
+	await assert.rejects(malformed.findTagByTitle('Wrong'), error => {
+		assert.equal(error.code, 'invalid_backend_response');
+		assert.equal(error.diagnostics.method, 'POST');
+		assert.equal(error.diagnostics.path, 'services/headless');
+		assert.equal(error.diagnostics.operation, 'findTagByTitle');
+		assert.equal(error.diagnostics.stage, 'validation');
+		return true;
+	});
 	await assert.rejects(createMaintenanceClient(async () => null).findTagByTitle('Missing'), { code: 'invalid_backend_response' });
 
 	const unavailable = createMaintenanceClient(async () => { throw new ServiceError('tag_unavailable'); });
@@ -57,10 +64,40 @@ test('maintenance client accepts a missing native tag and rejects malformed look
 test('maintenance client rejects encrypted tags and marks invalid write responses uncertain', async () => {
 	const encrypted = createMaintenanceClient(async () => ({ id: tagId, title: 'Private', encryption_applied: 1 }));
 	await assert.rejects(encrypted.getTag(tagId), { code: 'tag_unavailable' });
+	const malformedRead = createMaintenanceClient(async () => ({ id: 'wrong', title: 'Wrong', encryption_applied: 0 }));
+	await assert.rejects(malformedRead.getTag(tagId), error => {
+		assert.equal(error.code, 'invalid_backend_response');
+		assert.equal(error.diagnostics.method, 'GET');
+		assert.equal(error.diagnostics.path, 'tags/id');
+		assert.equal(error.diagnostics.operation, 'getTag');
+		assert.equal(error.diagnostics.stage, 'validation');
+		assert.ok(!JSON.stringify(error.diagnostics).includes(tagId));
+		return true;
+	});
 
 	const malformed = createMaintenanceClient(async () => ({ id: 'wrong', title: 'Wrong', parent_id: '' }));
-	await assert.rejects(malformed.updateNotebook(notebookId, { title: 'Name' }), {
-		code: 'write_outcome_unknown', outcomeUnknown: true,
+	await assert.rejects(malformed.updateNotebook(notebookId, { title: 'Name' }), error => {
+		assert.equal(error.code, 'write_outcome_unknown');
+		assert.equal(error.outcomeUnknown, true);
+		assert.equal(error.cause.code, 'invalid_backend_response');
+		assert.equal(error.diagnostics.method, 'POST');
+		assert.equal(error.diagnostics.path, 'services/headless');
+		assert.equal(error.diagnostics.operation, 'maintenanceUpdateNotebook');
+		assert.equal(error.diagnostics.stage, 'validation');
+		return true;
+	});
+
+	const malformedTag = createMaintenanceClient(async () => ({ id: 'wrong', title: 'Wrong', encryption_applied: 0 }));
+	await assert.rejects(malformedTag.updateTag(tagId, { title: 'New' }), error => {
+		assert.equal(error.code, 'write_outcome_unknown');
+		assert.equal(error.outcomeUnknown, true);
+		assert.equal(error.cause.code, 'invalid_backend_response');
+		assert.equal(error.diagnostics.method, 'PUT');
+		assert.equal(error.diagnostics.path, 'tags/id');
+		assert.equal(error.diagnostics.operation, 'updateTag');
+		assert.equal(error.diagnostics.stage, 'validation');
+		assert.ok(!JSON.stringify(error.diagnostics).includes(tagId));
+		return true;
 	});
 });
 

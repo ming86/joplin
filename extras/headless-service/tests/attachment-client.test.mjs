@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createAttachmentClient } from '../src/attachment-client.mjs';
+import { logOperationError } from '../src/diagnostics.mjs';
 
 const noteId = 'a'.repeat(32);
 const firstResourceId = 'b'.repeat(32);
@@ -167,6 +168,9 @@ test('known prewrite errors are mapped safely while unknown write results stay u
 		assert.equal(error.code, 'invalid_attachment_input');
 		assert.equal(error.outcomeUnknown, false);
 		assert.notEqual(error.message, 'raw backend detail');
+		assert.equal(error.diagnostics.operation, 'createAttachment');
+		assert.equal(error.diagnostics.path, 'services/headless');
+		assert.equal(error.diagnostics.stage, 'validation');
 		return true;
 	});
 	assert.equal(fixture.calls.filter(call => call.route === 'services/headless').length, 1);
@@ -176,6 +180,8 @@ test('known prewrite errors are mapped safely while unknown write results stay u
 		assert.equal(error.code, 'write_outcome_unknown');
 		assert.equal(error.outcomeUnknown, true);
 		assert.notEqual(error.message, 'secret payload');
+		assert.equal(error.diagnostics.operation, 'updateAttachment');
+		assert.equal(error.diagnostics.stage, 'validation');
 		return true;
 	});
 	assert.equal(fixture.calls.filter(call => call.route === 'services/headless').length, 2);
@@ -184,9 +190,62 @@ test('known prewrite errors are mapped safely while unknown write results stay u
 test('malformed metadata or a mismatched update id reports uncertainty without another write', async t => {
 	const fixture = createFixture();
 	fixture.setActionReply({ id: createdResourceId, title: 'missing required metadata' });
-	await assert.rejects(fixture.client.createAttachment({ filename: 'report.txt', contentBase64: 'AQ==' }), { code: 'write_outcome_unknown', outcomeUnknown: true });
+	await assert.rejects(fixture.client.createAttachment({ filename: 'report.txt', contentBase64: 'AQ==' }), error => {
+		assert.equal(error.code, 'write_outcome_unknown');
+		assert.equal(error.outcomeUnknown, true);
+		assert.equal(error.cause.code, 'invalid_backend_response');
+		assert.equal(error.diagnostics.operation, 'createAttachment');
+		assert.equal(error.diagnostics.path, 'services/headless');
+		assert.equal(error.diagnostics.stage, 'validation');
+		return true;
+	});
 
 	fixture.setActionReply(resource(secondResourceId));
 	await assert.rejects(fixture.client.updateAttachment(firstResourceId, { title: 'changed' }), { code: 'write_outcome_unknown', outcomeUnknown: true });
 	assert.equal(fixture.calls.filter(call => call.route === 'services/headless').length, 2);
+});
+
+test('binary read failures retain their cause and log only fixed route metadata', async () => {
+	const fixture = createFixture();
+	const originalFetch = globalThis.fetch;
+	const networkError = new Error(`failed https://files.example/file?token=${token} secret-body`);
+	let logged;
+	globalThis.fetch = async () => { throw networkError; };
+	try {
+		await assert.rejects(fixture.client.readAttachment(firstResourceId), error => {
+			assert.equal(error.code, 'backend_unavailable');
+			assert.equal(error.cause, networkError);
+			assert.equal(error.diagnostics.method, 'GET');
+			assert.equal(error.diagnostics.path, 'resources/id/file');
+			assert.equal(error.diagnostics.operation, 'readAttachment');
+			const originalError = console.error;
+			console.error = value => { logged = value; };
+			try { logOperationError(error, { tool: 'read_attachment', operation: 'readAttachment' }); }
+			finally { console.error = originalError; }
+			assert.ok(!logged.includes(token));
+			assert.ok(!logged.includes('secret-body'));
+			assert.ok(!logged.includes(firstResourceId));
+			return true;
+		});
+
+		const bodyError = new Error(`body contained private text ${token}`);
+		globalThis.fetch = async () => ({ ok: true, status: 200, async arrayBuffer() { throw bodyError; } });
+		await assert.rejects(fixture.client.readAttachment(firstResourceId), error => {
+			assert.equal(error.code, 'attachment_file_unavailable');
+			assert.equal(error.cause, bodyError);
+			assert.equal(error.diagnostics.stage, 'body');
+			assert.equal(error.diagnostics.status, 200);
+			return true;
+		});
+
+		globalThis.fetch = async () => new Response('private response body', { status: 404 });
+		await assert.rejects(fixture.client.readAttachment(firstResourceId), error => {
+			assert.equal(error.code, 'not_found');
+			assert.equal(error.diagnostics.status, 404);
+			assert.equal(error.diagnostics.path, 'resources/id/file');
+			return true;
+		});
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
 });

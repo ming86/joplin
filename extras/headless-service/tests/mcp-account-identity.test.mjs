@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { ServiceError } from '../src/errors.mjs';
 import { createAccountResultPresenter } from '../src/mcp/account-identity.mjs';
 import { getToolOutputSchema } from '../src/mcp/output-schemas.mjs';
 
@@ -108,6 +109,32 @@ test('returns nullable identity for missing status, missing email, and lookup fa
 	assert.deepEqual(await present('read_note', { accountId }), { accountEmail });
 	assert.deepEqual(await present('read_note', { accountId }), { accountEmail });
 	assert.equal(calls, 2);
+});
+
+test('logs failed auxiliary status lookup while preserving the successful result', async () => {
+	const cause = new Error('private backend response');
+	const service = {
+		async status() {
+			throw new ServiceError('backend_unavailable', false, 'backend_unavailable', {
+				cause,
+				diagnostics: { method: 'GET', path: '/status', status: 503 },
+			});
+		},
+	};
+	const original = console.error;
+	const entries = [];
+	console.error = (...args) => entries.push(args);
+	try {
+		const result = await createAccountResultPresenter(service)('read_note', { accountId, id: 'note' });
+		assert.deepEqual(result, { accountEmail: null, id: 'note' });
+		assert.equal(entries.length, 1);
+		const log = JSON.parse(entries[0][0]);
+		assert.equal(log.operation, 'account_identity');
+		assert.equal(log.method, 'GET');
+		assert.equal(log.path, '/status');
+		assert.equal(log.status, 503);
+		assert.ok(!JSON.stringify(log).includes('private backend response'));
+	} finally { console.error = original; }
 });
 
 test('output schemas describe nullable emails only where results carry account identity', () => {

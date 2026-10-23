@@ -70,6 +70,10 @@ test('Trash client validates list inputs and translates only documented unapplie
 		assert.equal(error.outcomeUnknown, false);
 		assert.equal(error.message, 'The requested item is no longer in the Trash.');
 		assert.ok(!error.message.includes('private native detail'));
+		assert.equal(error.diagnostics.method, 'POST');
+		assert.equal(error.diagnostics.path, 'services/headless');
+		assert.equal(error.diagnostics.operation, 'restoreNote');
+		assert.equal(error.diagnostics.stage, 'validation');
 		return true;
 	});
 
@@ -88,15 +92,40 @@ test('Trash client rejects malformed reads and treats unusable restore replies a
 	const malformedPage = createTrashClient(async () => ({
 		items: [{ ...noteItem, is_conflict: true }], hasMore: false,
 	}));
-	await assert.rejects(malformedPage.listTrash(), { code: 'invalid_backend_response' });
-
-	const malformedRestore = createTrashClient(async () => ({ id: noteId, parent_id: parentId, restored: false }));
-	await assert.rejects(malformedRestore.restoreNote({ id: noteId }), error => {
-		assert.equal(error.code, 'write_outcome_unknown');
-		assert.equal(error.outcomeUnknown, true);
+	await assert.rejects(malformedPage.listTrash(), error => {
+		assert.equal(error.code, 'invalid_backend_response');
+		assert.equal(error.diagnostics.path, 'services/headless');
+		assert.equal(error.diagnostics.operation, 'listTrash');
+		assert.equal(error.diagnostics.stage, 'validation');
 		return true;
 	});
 
-	const unknownErrorEnvelope = createTrashClient(async () => ({ error: { code: 'unexpected', applied: true } }));
-	await assert.rejects(unknownErrorEnvelope.restoreNotebook({ id: notebookId }), { code: 'write_outcome_unknown' });
+	let restoreCalls = 0;
+	const malformedRestore = createTrashClient(async () => {
+		restoreCalls++;
+		return { id: noteId, parent_id: parentId, restored: false };
+	});
+	await assert.rejects(malformedRestore.restoreNote({ id: noteId }), error => {
+		assert.equal(error.code, 'write_outcome_unknown');
+		assert.equal(error.outcomeUnknown, true);
+		assert.equal(error.cause.code, 'invalid_backend_response');
+		assert.equal(error.diagnostics.path, 'services/headless');
+		assert.equal(error.diagnostics.operation, 'restoreNote');
+		assert.equal(error.diagnostics.stage, 'validation');
+		return true;
+	});
+	assert.equal(restoreCalls, 1);
+
+	let unknownCalls = 0;
+	const unknownErrorEnvelope = createTrashClient(async () => {
+		unknownCalls++;
+		return { error: { code: 'unexpected', applied: true } };
+	});
+	await assert.rejects(unknownErrorEnvelope.restoreNotebook({ id: notebookId }), error => {
+		assert.equal(error.code, 'write_outcome_unknown');
+		assert.equal(error.diagnostics.operation, 'restoreNotebook');
+		assert.equal(error.diagnostics.stage, 'validation');
+		return true;
+	});
+	assert.equal(unknownCalls, 1);
 });

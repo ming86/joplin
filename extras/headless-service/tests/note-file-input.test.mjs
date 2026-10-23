@@ -3,9 +3,10 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
 import { createBinaryFileReader, createNoteBodyFileReader } from '../src/mcp/note-file-input.mjs';
+import { logOperationError } from '../src/diagnostics.mjs';
 
 /** Build a Node-compatible fake transport that connects through the supplied DNS callback. */
-function transport({ readerFactory = createNoteBodyFileReader, addresses = [{ address: '93.184.216.34', family: 4 }], chunks = [Buffer.from('body')], status = 200, stalled = false, dnsError = null } = {}) {
+function transport({ readerFactory = createNoteBodyFileReader, addresses = [{ address: '93.184.216.34', family: 4 }], chunks = [Buffer.from('body')], status = 200, stalled = false, dnsError = null, streamError = null } = {}) {
 	const seen = { lookups: 0, requests: 0, connected: false, requestDestroyed: false, response: null };
 	const read = readerFactory({
 		lookup(host, options, callback) {
@@ -30,7 +31,10 @@ function transport({ readerFactory = createNoteBodyFileReader, addresses = [{ ad
 				if (error) { req.emit('error', error); return; }
 				seen.connected = true;
 				seen.addresses = result;
-				const response = stalled ? new Readable({ read() {} }) : Readable.from(chunks);
+				const source = streamError
+					? (async function* () { yield Buffer.from('partial'); throw streamError; }())
+					: chunks;
+				const response = stalled ? new Readable({ read() {} }) : Readable.from(source);
 				response.statusCode = status;
 				seen.response = response;
 				callback(response);
@@ -122,16 +126,58 @@ test('accepts public IPv6 DNS results through the connection lookup', async () =
 test('rejects redirects and non-success responses without following another URL', async () => {
 	for (const status of [301, 302, 307, 400, 403, 500]) {
 		const { read, seen } = transport({ status });
-		await fails(read(file), 'note_file_download_failed');
+		await assert.rejects(read(file), error => {
+			assert.equal(error.code, 'note_file_download_failed');
+			assert.equal(error.diagnostics.status, status);
+			assert.equal(error.diagnostics.path, 'client-file');
+			return true;
+		});
 		assert.equal(seen.requests, 1);
 		assert.equal(seen.response.destroyed, true);
 	}
 });
 
 test('maps DNS failures to safe errors', async () => {
-	const { read, seen } = transport({ dnsError: new Error('secret signed URL') });
-	await fails(read(file), 'note_file_download_failed');
+	const dnsError = new Error('secret signed URL https://files.example/note.md?signature=private');
+	const { read, seen } = transport({ dnsError });
+	let logged;
+	await assert.rejects(read(file), error => {
+		assert.equal(error.code, 'note_file_download_failed');
+		assert.equal(error.cause, dnsError);
+		assert.equal(error.diagnostics.path, 'client-file');
+		assert.equal(error.diagnostics.stage, 'dns');
+		const originalError = console.error;
+		console.error = value => { logged = value; };
+		try { logOperationError(error, { tool: 'write_note', operation: 'read_note_body_file' }); }
+		finally { console.error = originalError; }
+		assert.ok(!logged.includes('signature=private'));
+		assert.ok(!logged.includes('secret signed URL'));
+		assert.ok(!logged.includes('file-123'));
+		return true;
+	});
 	assert.equal(seen.connected, false);
+});
+
+test('retains streaming failures as causes and logs no file body or signed URL', async () => {
+	const streamError = new Error('private body and https://files.example/note.md?signature=private');
+	const { read, seen } = transport({ streamError });
+	let logged;
+	await assert.rejects(read(file), error => {
+		assert.equal(error.code, 'note_file_download_failed');
+		assert.equal(error.cause, streamError);
+		assert.equal(error.diagnostics.path, 'client-file');
+		assert.equal(error.diagnostics.stage, 'body');
+		assert.equal(error.diagnostics.status, 200);
+		const originalError = console.error;
+		console.error = value => { logged = value; };
+		try { logOperationError(error, { tool: 'write_note', operation: 'read_note_body_file' }); }
+		finally { console.error = originalError; }
+		assert.ok(!logged.includes('signature=private'));
+		assert.ok(!logged.includes('private body'));
+		assert.ok(!logged.includes('partial'));
+		return true;
+	});
+	assert.equal(seen.response.destroyed, true);
 });
 
 test('respects cancellation before downloading and while streaming, closing the transport', async () => {
