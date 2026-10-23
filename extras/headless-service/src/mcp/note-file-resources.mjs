@@ -19,7 +19,7 @@ function safeTitle(value) {
 	return truncated || 'note';
 }
 
-/** Create an in-memory store for immutable, short-lived exports of native note snapshots. */
+/** Create an in-memory store for immutable, short-lived UTF-8 text exports. */
 export function createNoteFileResources({ now = Date.now, lifetimeMs = defaultLifetimeMs } = {}) {
 	if (typeof now !== 'function') throw new Error('invalid_note_file_clock');
 	if (!Number.isFinite(lifetimeMs) || lifetimeMs <= 0) throw new Error('invalid_note_file_lifetime');
@@ -73,6 +73,35 @@ export function createNoteFileResources({ now = Date.now, lifetimeMs = defaultLi
 		return { uri: entry.uri, mimeType: entry.mimeType, blob: entry.bytes.toString('base64') };
 	}
 
+	/** Store exact UTF-8 bytes and return the common file and MCP resource descriptors. */
+	function storeText({ text, filename, mimeType }) {
+		if (closed) throw new ServiceError('note_file_unavailable');
+
+		const time = currentTime();
+		pruneExpired(time);
+		const bytes = Buffer.from(text, 'utf8');
+		const expiresAt = time + lifetimeMs;
+		if (!Number.isFinite(expiresAt) || Math.abs(expiresAt) > 8.64e15) throw new Error('invalid_note_file_lifetime');
+		const sha256 = createHash('sha256').update(bytes).digest('hex');
+		let uri;
+		do { uri = `joplin-note-file://${randomUUID()}/${encodeURIComponent(filename)}`; } while (entries.has(uri));
+		const entry = Object.freeze({ uri, filename, mimeType, bytes, size: bytes.length, sha256, expiresAt });
+		entries.set(uri, entry);
+		scheduleCleanup(time);
+
+		return {
+			file: {
+				uri,
+				filename,
+				mime_type: mimeType,
+				size: entry.size,
+				sha256,
+				expires_at: new Date(expiresAt).toISOString(),
+			},
+			resource: resource(entry),
+		};
+	}
+
 	return Object.freeze({
 		/**
 		 * Store a rich native note snapshot as immutable UTF-8 bytes.
@@ -87,36 +116,29 @@ export function createNoteFileResources({ now = Date.now, lifetimeMs = defaultLi
 				throw new ServiceError('invalid_note_input');
 			}
 
-			const time = currentTime();
-			pruneExpired(time);
 			const filename = `${safeTitle(note.title)}-${note.id.slice(-8)}.${note.markup_language === 2 ? 'html' : 'md'}`;
 			const mimeType = note.markup_language === 2 ? 'text/html; charset=utf-8' : 'text/markdown; charset=utf-8';
-			const bytes = Buffer.from(note.body, 'utf8');
-			const expiresAt = time + lifetimeMs;
-			if (!Number.isFinite(expiresAt) || Math.abs(expiresAt) > 8.64e15) throw new Error('invalid_note_file_lifetime');
-			const sha256 = createHash('sha256').update(bytes).digest('hex');
-			let uri;
-			do { uri = `joplin-note-file://${randomUUID()}/${encodeURIComponent(filename)}`; } while (entries.has(uri));
-			const entry = Object.freeze({ uri, filename, mimeType, bytes, size: bytes.length, sha256, expiresAt });
-			entries.set(uri, entry);
-			scheduleCleanup(time);
+			return storeText({ text: note.body, filename, mimeType });
+		},
 
-			return {
-				file: {
-					uri,
-					filename,
-					mime_type: mimeType,
-					size: entry.size,
-					sha256,
-					expires_at: new Date(expiresAt).toISOString(),
-				},
-				resource: resource(entry),
-			};
+		/**
+		 * Store caller-provided text as an immutable UTF-8 snapshot.
+		 * @param {{text: string, filename: string, mimeType: string}} input Text and contextual download metadata supplied by the caller. This export does not claim a native note revision.
+		 * @returns {{file: {uri: string, filename: string, mime_type: string, size: number, sha256: string, expires_at: string}, resource: {uri: string, mimeType: string, blob: string}}} Download metadata and its embedded MCP resource.
+		 */
+		exportText(input) {
+			if (closed) throw new ServiceError('note_file_unavailable');
+			if (!input || typeof input !== 'object' || Array.isArray(input)
+				|| typeof input.text !== 'string' || typeof input.filename !== 'string' || !input.filename
+				|| typeof input.mimeType !== 'string' || !input.mimeType) {
+				throw new ServiceError('invalid_text_export_input');
+			}
+			return storeText(input);
 		},
 
 		/**
 		 * Read one active export using its exact opaque URI.
-		 * @param {string} uri Resource URI returned by exportNote.
+		 * @param {string} uri Resource URI returned by exportNote or exportText.
 		 * @returns {{contents: Array<{uri: string, mimeType: string, blob: string}>}} MCP resource-read result.
 		 * @throws {ServiceError} note_file_unavailable when the URI is unknown, expired, or closed.
 		 */

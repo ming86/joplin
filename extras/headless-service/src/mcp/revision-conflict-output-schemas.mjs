@@ -1,9 +1,10 @@
 /** Build a closed object schema for the fixed result records. */
-const object = (properties, required = Object.keys(properties)) => ({
+const object = (properties, required = Object.keys(properties), description) => ({
 	type: 'object',
 	properties,
 	required,
 	additionalProperties: false,
+	...(description ? { description } : {}),
 });
 
 /** JSON-safe values retained in revision metadata. */
@@ -32,6 +33,41 @@ const bodyChunkProperties = {
 	offsetUnit: { const: 'utf16-code-unit', description: 'Unit used by the body offsets and lengths.' },
 };
 
+/** File metadata returned when a complete text body is stored as an MCP resource. */
+const fileDescriptor = object({
+	uri: { type: 'string', description: 'Opaque resource URI used to read the exported file.' },
+	filename: { type: 'string', description: 'Suggested download filename.' },
+	mime_type: { type: 'string', description: 'MIME type of the UTF-8 file.' },
+	size: { type: 'integer', minimum: 0, description: 'File size in UTF-8 bytes.' },
+	sha256: { type: 'string', pattern: '^[a-f0-9]{64}$', description: 'SHA-256 of the exact UTF-8 file bytes.' },
+	expires_at: { type: 'string', format: 'date-time', description: 'Date and time after which the resource URI expires.' },
+});
+
+/** Full-body measurements returned when body text is omitted. */
+const bodyMeasureProperties = {
+	body_length: { type: 'integer', minimum: 0, description: 'Full body length in UTF-16 code units.' },
+	body_size_bytes: { type: 'integer', minimum: 0, description: 'Full body size in UTF-8 bytes.' },
+	body_sha256: { type: 'string', pattern: '^[a-f0-9]{64}$', description: 'SHA-256 of the full body encoded as UTF-8.' },
+};
+
+/**
+ * Keep a union of fields visible to clients that inspect object properties, while
+ * requiring one exact closed shape to match the selected output mode.
+ */
+function outputModeSchema(variants, description) {
+	const properties = Object.assign({}, ...variants.map(variant => variant.properties));
+	const sharedRequired = variants.map(variant => variant.required)
+		.reduce((shared, required) => shared.filter(field => required.includes(field)));
+	return {
+		type: 'object',
+		properties,
+		required: sharedRequired,
+		additionalProperties: false,
+		description,
+		oneOf: variants,
+	};
+}
+
 /** Summary row in a note revision page. */
 const revisionSummary = object({
 	revision_id: { type: 'string', description: 'Native Joplin revision identifier.' },
@@ -47,12 +83,11 @@ const metadataChange = object({
 	to: { ...metadataValue, description: 'Value after the change, including whether the field exists.' },
 });
 
-/** Allowlisted current note fields included when a conflict side is available. */
-const conflictSnapshot = object({
+/** Current native note fields retained for every available conflict output mode. */
+const conflictNoteContext = {
 	id: { type: 'string', description: 'Native note identifier.' },
 	parent_id: { type: 'string', description: 'Parent notebook identifier; an empty string denotes the root.' },
 	title: { type: 'string', description: 'Current note title.' },
-	body: { type: 'string', description: 'Current note body in its native markup format.' },
 	created_time: { type: 'number', description: 'Note creation time in Joplin millisecond timestamp format.' },
 	updated_time: { type: 'number', description: 'Note update time in Joplin millisecond timestamp format.' },
 	is_todo: { type: 'number', description: 'Native to-do flag, encoded numerically as 0 or 1.' },
@@ -60,8 +95,24 @@ const conflictSnapshot = object({
 	markup_language: { type: 'number', description: 'Native markup language identifier.' },
 	is_conflict: { type: 'number', description: 'Native conflict flag, encoded numerically as 0 or 1.' },
 	conflict_original_id: { type: 'string', description: 'Original note identifier, or an empty string when unlinked.' },
-	...bodyChunkProperties,
-});
+};
+
+/** Exact note shape for one available conflict side output mode. */
+const conflictNote = outputModeSchema([
+	object({
+		...conflictNoteContext,
+		body: { type: 'string', description: 'Current note body in its native markup format; may be a chunk.' },
+		...bodyChunkProperties,
+	}, Object.keys({ ...conflictNoteContext, body: true, ...bodyChunkProperties }), 'Available conflict note with a UTF-16-safe inline body chunk.'),
+	object({
+		...conflictNoteContext,
+		file: { ...fileDescriptor, description: 'Complete current note body exported as a UTF-8 file.' },
+	}, [...Object.keys(conflictNoteContext), 'file'], 'Available conflict note with its body exported as a UTF-8 file.'),
+	object({
+		...conflictNoteContext,
+		...bodyMeasureProperties,
+	}, [...Object.keys(conflictNoteContext), ...Object.keys(bodyMeasureProperties)], 'Available conflict note with body measurements and no body text.'),
+], 'Native fields for an available conflict side and the selected body output mode.');
 
 /** Create the status-specific result schema for one conflict side. */
 function conflictSide(statuses, idSchema) {
@@ -70,12 +121,12 @@ function conflictSide(statuses, idSchema) {
 			object({
 				id: idSchema,
 				status: { const: 'available', description: 'The side is readable on this device.' },
-				note: { ...conflictSnapshot, description: 'Current note snapshot with a UTF-16-safe body chunk.' },
-			}),
+				note: { ...conflictNote, description: 'Current native note fields and the selected body output mode.' },
+			}, ['id', 'status', 'note'], 'Available side with readable current note fields.'),
 			...statuses.map(status => object({
 				id: idSchema,
 				status: { const: status, description: 'Why the side has no readable note content.' },
-			})),
+			}, ['id', 'status'], `Unavailable side: ${status}.`)),
 		],
 	};
 }
@@ -86,7 +137,20 @@ const originalSideSchema = conflictSide(['missing', 'trashed', 'encrypted', 'loc
 originalSideSchema.oneOf.push(object({
 	id: { type: 'null', description: 'No original note is linked to this conflict.' },
 	status: { const: 'unlinked', description: 'The conflict has no linked original note.' },
-}));
+}, ['id', 'status'], 'No original note is linked to this conflict.'));
+
+const revisionContext = {
+	note_id: { type: 'string', description: 'Original note identifier, including when the live note has been deleted.' },
+	revision_id: { type: 'string', description: 'Native Joplin revision identifier.' },
+	captured_time: { type: 'number', description: 'Revision capture time in Unix epoch milliseconds.' },
+	title: { type: 'string', description: 'Historical note title.' },
+	metadata: {
+		type: 'object',
+		additionalProperties: jsonValueSchema,
+		description: 'JSON-safe tracked metadata from the historical note.',
+	},
+	accountEmail: { type: ['string', 'null'], description: 'Authenticated Joplin account email, or null when unavailable.' },
+};
 
 /** Success output JSON Schemas for the native revision and conflict MCP tools. */
 export const revisionConflictOutputSchemas = {
@@ -95,30 +159,42 @@ export const revisionConflictOutputSchemas = {
 		items: { type: 'array', items: revisionSummary, description: 'Revision rows on this page, newest first.' },
 		hasMore: { type: 'boolean', description: 'Whether another visible revision exists after this page.' },
 	}),
-	read_note_revision: object({
-		note_id: { type: 'string', description: 'Original note identifier, including when the live note has been deleted.' },
-		revision_id: { type: 'string', description: 'Native Joplin revision identifier.' },
-		captured_time: { type: 'number', description: 'Revision capture time in Unix epoch milliseconds.' },
-		title: { type: 'string', description: 'Historical note title.' },
-		body: { type: 'string', description: 'Historical note body in its original markup format; may be a chunk.' },
-		metadata: {
-			type: 'object',
-			additionalProperties: jsonValueSchema,
-			description: 'JSON-safe tracked metadata from the historical note.',
-		},
-		accountEmail: { type: ['string', 'null'], description: 'Authenticated Joplin account email, or null when unavailable.' },
-		...bodyChunkProperties,
-	}),
-	compare_note_revisions: object({
-		accountEmail: { type: ['string', 'null'], description: 'Authenticated Joplin account email, or null when unavailable.' },
-		note_id: { type: 'string', description: 'Original note identifier.' },
-		from_revision_id: { type: 'string', description: 'Native revision identifier used as the comparison base.' },
-		to_revision_id: { type: 'string', description: 'Native destination revision identifier, also returned when the current live state was captured.' },
-		to_current: { type: 'boolean', description: 'True when the destination was captured from the current live note during this request.' },
-		title_diff: { type: 'string', description: 'Unified title patch, or an empty string when unchanged.' },
-		body_diff: { type: 'string', description: 'Unified body patch, or an empty string when unchanged.' },
-		metadata_changes: { type: 'array', items: metadataChange, description: 'Tracked metadata changes, sorted by field name.' },
-	}),
+	read_note_revision: outputModeSchema([
+		object({
+			...revisionContext,
+			body: { type: 'string', description: 'Historical note body in its original markup format; may be a chunk.' },
+			...bodyChunkProperties,
+		}, [...Object.keys(revisionContext), 'body', ...Object.keys(bodyChunkProperties)], 'Historical note revision with its body inline.'),
+		object({
+			...revisionContext,
+			file: { ...fileDescriptor, description: 'Complete historical note body exported as a UTF-8 file.' },
+		}, [...Object.keys(revisionContext), 'file'], 'Historical note revision with its body exported as a UTF-8 file.'),
+		object({
+			...revisionContext,
+			...bodyMeasureProperties,
+		}, [...Object.keys(revisionContext), ...Object.keys(bodyMeasureProperties)], 'Historical note revision with body measurements and no body text.'),
+	], 'Historical note context and exactly one body output mode.'),
+	compare_note_revisions: outputModeSchema([
+		object({
+			accountEmail: { type: ['string', 'null'], description: 'Authenticated Joplin account email, or null when unavailable.' },
+			note_id: { type: 'string', description: 'Original note identifier.' },
+			from_revision_id: { type: 'string', description: 'Native revision identifier used as the comparison base.' },
+			to_revision_id: { type: 'string', description: 'Native destination revision identifier, also returned when the current live state was captured.' },
+			to_current: { type: 'boolean', description: 'True when the destination was captured from the current live note during this request.' },
+			title_diff: { type: 'string', description: 'Unified title patch, or an empty string when unchanged.' },
+			body_diff: { type: 'string', description: 'Unified body patch, or an empty string when unchanged.' },
+			metadata_changes: { type: 'array', items: metadataChange, description: 'Tracked metadata changes, sorted by field name.' },
+		}, undefined, 'Revision comparison with both text diffs inline.'),
+		object({
+			accountEmail: { type: ['string', 'null'], description: 'Authenticated Joplin account email, or null when unavailable.' },
+			note_id: { type: 'string', description: 'Original note identifier.' },
+			from_revision_id: { type: 'string', description: 'Native revision identifier used as the comparison base.' },
+			to_revision_id: { type: 'string', description: 'Native destination revision identifier, also returned when the current live state was captured.' },
+			to_current: { type: 'boolean', description: 'True when the destination was captured from the current live note during this request.' },
+			metadata_changes: { type: 'array', items: metadataChange, description: 'Tracked metadata changes, sorted by field name.' },
+			file: { ...fileDescriptor, description: 'Both text diffs exported together as a UTF-8 file.' },
+		}, undefined, 'Revision comparison with text diffs exported together as a UTF-8 file.'),
+	], 'Revision comparison context with either both inline diffs or one file containing both diffs.'),
 	list_conflicts: object({
 		accountEmail: { type: ['string', 'null'], description: 'Authenticated Joplin account email, or null when unavailable.' },
 		items: {

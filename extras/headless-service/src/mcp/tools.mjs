@@ -5,7 +5,7 @@ import { registerConflictTools } from './conflict-tools.mjs';
 import { registerMaintenanceTools } from './maintenance-tools.mjs';
 import { embeddedResourceResult, isMcpToolResult, registerAttachmentTools } from './attachment-tools.mjs';
 import { createNoteFileResources } from './note-file-resources.mjs';
-import { readNoteBodyFile } from './note-file-input.mjs';
+import { readBinaryFile, readNoteBodyFile } from './note-file-input.mjs';
 import { getToolOutputSchema } from './output-schemas.mjs';
 import { createAccountResultPresenter } from './account-identity.mjs';
 
@@ -48,7 +48,7 @@ const revisionErrorMessages = new Map([
 	['note_file_invalid_utf8', 'The edited file must contain valid UTF-8 text.'],
 	['note_file_unavailable', 'The exported note file is no longer available. Read the note again to export a fresh file.'],
 	['note_file_slice_conflict', 'File and metadata output cannot be combined with slicing selectors; omit offset, max_chars and length.'],
-	['note_file_body_conflict', 'body_file cannot be combined with body, append, prepend or replace_text.'],
+	['note_file_body_conflict', 'body_file cannot be combined with other body fields.'],
 	['revision_invalid_request', 'The revision request is invalid.'],
 	['revision_not_found', 'The requested note revision was not found.'],
 	['revision_forbidden', 'This note revision cannot be accessed.'],
@@ -69,6 +69,7 @@ const revisionErrorMessages = new Map([
 const conflictErrorMessages = new Map([
 	['conflict_not_found', 'The requested device-local sync conflict was not found.'],
 	['invalid_conflict_input', 'The conflict request is invalid.'],
+	['note_file_slice_conflict', 'File and metadata output cannot be combined with slicing selectors; omit offset, max_chars and length.'],
 ]);
 const revisionToolNames = new Set([
 	'read_note', 'get_note', 'update_note',
@@ -166,10 +167,15 @@ function makeSnippet(bodyText, query) {
 }
 
 /** Register the Desktop-compatible tool catalog plus the headless utilities. */
-export function createTools(service, { allowWrites = false, noteFileResources, readBodyFile = readNoteBodyFile } = {}) {
+export function createTools(service, { allowWrites = false, noteFileResources, readBodyFile = readNoteBodyFile, readFile = readBinaryFile } = {}) {
 	const present = createAccountResultPresenter(service);
 	// Direct tool users allocate a snapshot store only when a file is requested.
 	let fileResources = noteFileResources;
+	/** Reuse the account/server export store, allocating lazily for direct catalog callers. */
+	const getFileResources = () => {
+		fileResources ??= createNoteFileResources();
+		return fileResources;
+	};
 	const tools = new Map();
 	/** Store each definition with its runner and MCP safety annotations. */
 	function add(name, description, inputSchema, run, annotations = readAnnotations, metadata) {
@@ -287,8 +293,7 @@ export function createTools(service, { allowWrites = false, noteFileResources, r
 		const text = note.body ?? '';
 		if (args.output === 'file') {
 			// Export the body and revision from this one native snapshot so the edited file can be checked against its source.
-			fileResources ??= createNoteFileResources();
-			const { file, resource } = fileResources.exportNote(note);
+			const { file, resource } = getFileResources().exportNote(note);
 			const { body: _body, ...metadata } = note;
 			const presentedMetadata = await present(legacyFields ? 'get_note' : 'read_note', {
 				...metadata,
@@ -348,21 +353,36 @@ export function createTools(service, { allowWrites = false, noteFileResources, r
 	if (allowWrites) {
 		const createNoteSchema = object({
 			title: { ...title, description: 'Note title.' },
-			body: { ...body, description: 'Note body in Markdown.' },
+			body: { ...body, description: 'Note body in Markdown. Use body for inline or small notes; use body_file for large generated notes.' },
+			body_file: {
+				...object({
+					download_url: { type: 'string', minLength: 1, description: 'Public HTTPS download URL supplied for the UTF-8 note body.' },
+					file_id: { type: 'string', minLength: 1, description: 'File id supplied by the client.' },
+					mime_type: { type: 'string', description: 'Optional file MIME type.' },
+					file_name: { type: 'string', description: 'Optional file name.' },
+				}, ['download_url', 'file_id']),
+			description: 'Complete UTF-8 note body supplied as a file. Use for large generated notes to avoid placing the body in model context. The file is downloaded and validated as UTF-8 before note creation. It cannot be combined with body. The create response includes note metadata only, not the body.',
+			},
 			notebook_id: { ...id, description: 'Notebook id. Provide this or parentId. Use list_notebooks to find ids.' },
 			parentId: { ...id, description: 'Legacy alias for notebook_id. Provide this or notebook_id.' },
 			is_todo: { type: 'boolean', description: 'Set to true to create the note as a to-do.' },
 		}, ['title']);
 		createNoteSchema.anyOf = [{ required: ['notebook_id'] }, { required: ['parentId'] }];
-		add('create_note', 'Create a note in a readable notebook. Provide notebook_id or the legacy parentId alias; use list_notebooks to find notebook ids.',
+		add('create_note', 'Create a note in a readable notebook. Use body_file for large generated note bodies; it is downloaded and validated before creation, and the response contains note metadata only. Provide notebook_id or the legacy parentId alias; use list_notebooks to find notebook ids.',
 			createNoteSchema, async (args, signal) => {
-				const note = await service.createNote(args, signal);
+				if (Object.hasOwn(args, 'body_file') && Object.hasOwn(args, 'body')) throw new ServiceError('note_file_body_conflict');
+				let createArgs = args;
+				if (Object.hasOwn(args, 'body_file')) {
+					const { body_file, ...noteFields } = args;
+					createArgs = { ...noteFields, body: await readBodyFile(body_file, signal) };
+				}
+				const note = await service.createNote(createArgs, signal);
 				return {
 					id: note.id,
 					title: note.title,
 					notebook_id: note.notebook_id ?? note.parent_id ?? null,
 				};
-			}, createAnnotations);
+			}, createAnnotations, { 'openai/fileParams': ['body_file'] });
 
 		const updateSchema = object({
 			id: { ...id, description: 'The note id to update.' },
@@ -435,10 +455,10 @@ export function createTools(service, { allowWrites = false, noteFileResources, r
 		add('manage_tags', 'Add or remove tags on a note. Tags are addressed by title; added titles that do not already exist are created automatically.', manageTagsSchema, (args, signal) => service.manageTags(args, signal), createAnnotations);
 	}
 
-	registerRevisionTools(add, service);
-	registerConflictTools(add, service);
+	registerRevisionTools(add, service, { getFileResources });
+	registerConflictTools(add, service, { getFileResources });
 	if (allowWrites) registerMaintenanceTools(add, service);
-	registerAttachmentTools(add, service, { allowWrites });
+	registerAttachmentTools(add, service, { allowWrites, readFile });
 
 	return Object.freeze({
 		list: () => [...tools.values()].map(tool => structuredClone(tool.definition)),
@@ -471,7 +491,9 @@ export function createTools(service, { allowWrites = false, noteFileResources, r
 				return toolResult(await present(name, value));
 			} catch (error) {
 				const known = error instanceof ServiceError;
-				const safeMessage = known && revisionToolNames.has(name)
+				const noteFileInputError = known && name === 'create_note'
+					&& (error.code.startsWith('note_file_') || error.code === 'invalid_note_file_input');
+				const safeMessage = known && (revisionToolNames.has(name) || noteFileInputError)
 					? revisionErrorMessages.get(error.code)
 					: known && conflictToolNames.has(name) ? conflictErrorMessages.get(error.code) : undefined;
 				return toolResult({ error: {

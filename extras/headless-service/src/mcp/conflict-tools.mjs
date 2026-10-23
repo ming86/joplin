@@ -1,3 +1,7 @@
+import { createHash } from 'node:crypto';
+import { ServiceError } from '../errors.mjs';
+import { embeddedResourcesResult } from './attachment-tools.mjs';
+
 /** MCP schema for native 32-character Joplin IDs. */
 const id = { type: 'string', pattern: '^[a-f0-9]{32}$' };
 /** MCP schema for the existing page-number range. */
@@ -42,8 +46,35 @@ function chunkSide(side, offset, maxChars) {
 	};
 }
 
+/** Measure one complete captured body using the note read tools' length conventions. */
+function bodyMetadata(text) {
+	return {
+		body_length: text.length,
+		body_size_bytes: Buffer.byteLength(text, 'utf8'),
+		body_sha256: createHash('sha256').update(text, 'utf8').digest('hex'),
+	};
+}
+
+/** Return an available side without its body, plus metadata or an immutable file export. */
+function completeSide(side, output, sideName, getFileResources) {
+	if (side.status !== 'available' || !side.note) return { value: { id: side.id, status: side.status } };
+	const { body, ...note } = side.note;
+	if (output === 'metadata') {
+		return { value: { id: side.id, status: side.status, note: { ...note, ...bodyMetadata(body) } } };
+	}
+
+	const extension = side.note.markup_language === 2 ? 'html' : 'md';
+	const mimeType = side.note.markup_language === 2 ? 'text/html; charset=utf-8' : 'text/markdown; charset=utf-8';
+	const { file, resource } = getFileResources().exportText({
+		text: body,
+		filename: `${sideName}-${side.note.id}.${extension}`,
+		mimeType,
+	});
+	return { value: { id: side.id, status: side.status, note: { ...note, file } }, resource };
+}
+
 /** Register the two read-only MCP tools for device-local sync conflicts. */
-export function registerConflictTools(add, service) {
+export function registerConflictTools(add, service, { getFileResources } = {}) {
 	add('list_conflicts',
 		'List this device\'s local sync conflicts. Use read_conflict to inspect the conflict copy and original note as they currently exist on this device.',
 		object({
@@ -55,19 +86,34 @@ export function registerConflictTools(add, service) {
 	);
 
 	add('read_conflict',
-		'Read the current conflict copy and original note content for one device-local sync conflict. Each side keeps its availability status; current note content is returned only when that side is available. Use offset and max_chars for UTF-16-safe body chunks. To edit either note, first call read_note for that note, then pass its revision_id as base_revision_id to update_note.',
+		'Read the current conflict copy and original note for one device-local sync conflict. Each side keeps its availability status; note content is returned only when that side is available. Use output=metadata when the body size is unknown, or output=file to read a large body without inline content. This response does not provide an edit revision: call read_note for the note you plan to edit, then pass its current revision_id as base_revision_id to update_note.',
 		object({
 			id: { ...id, description: 'The conflict note id returned by list_conflicts.' },
+			output: { type: 'string', enum: ['inline', 'file', 'metadata'], default: 'inline', description: 'Return complete bodies inline, as UTF-8 files, or metadata only. Use metadata when size is unknown and file for large bodies. File and metadata output cannot be combined with offset or max_chars.' },
 			offset: { type: 'integer', description: 'UTF-16 code-unit offset applied independently to each available note body. Defaults to 0; returned offsets avoid splitting a surrogate pair.', minimum: 0 },
 			max_chars: { type: 'integer', description: 'Maximum UTF-16 code units returned from each available note body. Omitted or 0 returns the full body from offset; a boundary may include one extra code unit to keep a surrogate pair intact.', minimum: 0 },
 		}, ['id']),
 		async (args, signal) => {
+			const output = args.output ?? 'inline';
+			if (output !== 'inline' && ['offset', 'max_chars'].some(key => Object.hasOwn(args, key))) {
+				throw new ServiceError('note_file_slice_conflict');
+			}
+
 			const result = await service.readConflict({ id: args.id }, signal);
-			return {
-				...result,
-				conflict: chunkSide(result.conflict, args.offset, args.max_chars),
-				original: chunkSide(result.original, args.offset, args.max_chars),
-			};
+			if (output === 'inline') {
+				return {
+					...result,
+					conflict: chunkSide(result.conflict, args.offset, args.max_chars),
+					original: chunkSide(result.original, args.offset, args.max_chars),
+				};
+			}
+
+			const conflict = completeSide(result.conflict, output, 'conflict', getFileResources);
+			const original = completeSide(result.original, output, 'original', getFileResources);
+			const metadata = { ...result, conflict: conflict.value, original: original.value };
+			if (output === 'metadata') return metadata;
+
+			return embeddedResourcesResult(metadata, [conflict.resource, original.resource].filter(Boolean));
 		},
 		readAnnotations,
 	);

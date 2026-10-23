@@ -53,14 +53,13 @@ function fileUrl(file) {
 }
 
 /**
- * Create a file reader with injectable Node transports for focused network tests.
- * The lookup callback returns only validated addresses directly to the connection;
- * HTTPS never performs a second, unvalidated DNS resolution or follows redirects.
- * Exact-byte Codex and ChatGPT file roundtrips are recorded in
- * chatgpt-work/DESKTOP-MCP-PARITY-HANDOFF.md. Those clients adapt local paths to
- * downloadable references; this reader does not open paths on the client's machine.
+ * Create the shared HTTPS downloader with injectable Node transports for focused tests.
+ * DNS results are validated and pinned to the connection; requests do not follow redirects.
+ * Codex and ChatGPT adapt local paths to downloadable references; this service fetches those
+ * references and never opens paths on the client's machine. Exact-byte findings are in
+ * chatgpt-work/DESKTOP-MCP-PARITY-HANDOFF.md.
  */
-export function createNoteBodyFileReader({ lookup = dnsLookup, request = httpsRequest } = {}) {
+function createFileDownloader({ lookup = dnsLookup, request = httpsRequest } = {}) {
 	/** Resolve all addresses once and pin the connection to that validated result. */
 	function publicLookup(hostname, options, callback) {
 		lookup(hostname, { all: true, verbatim: true }, (error, addresses) => {
@@ -74,8 +73,8 @@ export function createNoteBodyFileReader({ lookup = dnsLookup, request = httpsRe
 		});
 	}
 
-	/** Download a complete UTF-8 file, retaining its BOM and every valid text byte. */
-	return async function readNoteBodyFile(file, signal) {
+	/** Download a complete file as bytes without decoding or altering its contents. */
+	return async function downloadFile(file, signal) {
 		const url = fileUrl(file);
 		if (signal?.aborted) throw new ServiceError('request_cancelled');
 		const combined = signal ? AbortSignal.any([signal, AbortSignal.timeout(10000)]) : AbortSignal.timeout(10000);
@@ -88,16 +87,9 @@ export function createNoteBodyFileReader({ lookup = dnsLookup, request = httpsRe
 				req.end();
 			});
 			if (response.statusCode < 200 || response.statusCode >= 300) throw new ServiceError('note_file_download_failed');
-			const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 			const parts = [];
-			for await (const chunk of response) {
-				// Keep decoder state across chunks; the final flush below rejects a truncated multibyte character.
-				try { parts.push(decoder.decode(chunk, { stream: true })); }
-				catch { throw new ServiceError('note_file_invalid_utf8'); }
-			}
-			try { parts.push(decoder.decode()); }
-			catch { throw new ServiceError('note_file_invalid_utf8'); }
-			return parts.join('');
+			for await (const chunk of response) parts.push(Buffer.from(chunk));
+			return Buffer.concat(parts);
 		} catch (error) {
 			if (signal?.aborted) throw new ServiceError('request_cancelled');
 			if (error instanceof ServiceError) throw error;
@@ -105,6 +97,33 @@ export function createNoteBodyFileReader({ lookup = dnsLookup, request = httpsRe
 		} finally {
 			response?.destroy();
 			req?.destroy();
+		}
+	};
+}
+
+/**
+ * Create a client file reader that returns exact bytes, including data that is not valid UTF-8.
+ * Optional lookup and request functions override the Node transports for focused tests.
+ */
+export function createBinaryFileReader(options = {}) {
+	return createFileDownloader(options);
+}
+
+/** Read an HTTPS client file reference as a Buffer; failures precede any save. */
+export const readBinaryFile = createBinaryFileReader();
+
+/**
+ * Create a strict UTF-8 note-body reader, retain its BOM, and reject malformed text.
+ * Optional lookup and request functions override the Node transports for focused tests.
+ */
+export function createNoteBodyFileReader(options = {}) {
+	const downloadFile = createFileDownloader(options);
+	return async function readNoteBodyFile(file, signal) {
+		const bytes = await downloadFile(file, signal);
+		try {
+			return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+		} catch {
+			throw new ServiceError('note_file_invalid_utf8');
 		}
 	};
 }
