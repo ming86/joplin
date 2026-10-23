@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { ServiceError } from '../errors.mjs';
 import { embeddedResourcesResult } from './attachment-tools.mjs';
+import { bodyTotalLineCount } from './body-line-count.mjs';
 
 /** MCP schema for native 32-character Joplin IDs. */
 const id = { type: 'string', pattern: '^[a-f0-9]{32}$' };
@@ -25,6 +26,7 @@ function bodyChunk(text, requestedOffset, requestedLength) {
 	const hasMore = end < text.length;
 	return {
 		body,
+		body_total_line_count: bodyTotalLineCount(text),
 		body_length: text.length,
 		body_offset: offset,
 		body_returned_chars: body.length,
@@ -52,6 +54,7 @@ function bodyMetadata(text) {
 		body_length: text.length,
 		body_size_bytes: Buffer.byteLength(text, 'utf8'),
 		body_sha256: createHash('sha256').update(text, 'utf8').digest('hex'),
+		body_total_line_count: bodyTotalLineCount(text),
 	};
 }
 
@@ -70,7 +73,7 @@ function completeSide(side, output, sideName, getFileResources) {
 		filename: `${sideName}-${side.note.id}.${extension}`,
 		mimeType,
 	});
-	return { value: { id: side.id, status: side.status, note: { ...note, file } }, resource };
+	return { value: { id: side.id, status: side.status, note: { ...note, body_total_line_count: bodyTotalLineCount(body), file } }, resource };
 }
 
 /** Register the two read-only MCP tools for device-local sync conflicts. */
@@ -86,7 +89,7 @@ export function registerConflictTools(add, service, { getFileResources } = {}) {
 	);
 
 	add('read_conflict',
-		'Read the current conflict copy and original note for one device-local sync conflict. Each side keeps its availability status; note content is returned only when that side is available. Use output=metadata when the body size is unknown, or output=file to read a large body without inline content. This response does not provide an edit revision: call read_note for the note you plan to edit, then pass its current revision_id as base_revision_id to update_note.',
+		'Read the current conflict copy and original note for one device-local sync conflict. Each side keeps its availability status; note content is returned only when that side is available. body_total_line_count describes each complete available body in every output mode, independent of body chunks and visual wrapping: CRLF, LF and lone CR each count as one break, a trailing break adds a final empty line, and an empty body has one line. Use output=metadata when the body size is unknown, or output=file to read a large body without inline content. This response does not provide an edit revision: call read_note for the note you plan to edit, then pass its current revision_id as base_revision_id to update_note.',
 		object({
 			id: { ...id, description: 'The conflict note id returned by list_conflicts.' },
 			output: { type: 'string', enum: ['inline', 'file', 'metadata'], default: 'inline', description: 'Return complete bodies inline, as UTF-8 files, or metadata only. Use metadata when size is unknown and file for large bodies. File and metadata output cannot be combined with offset or max_chars.' },

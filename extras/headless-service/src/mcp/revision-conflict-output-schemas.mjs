@@ -23,6 +23,7 @@ const metadataValue = {
 
 /** UTF-16-safe body chunk fields added by the revision and conflict readers. */
 const bodyChunkProperties = {
+	body_total_line_count: { type: 'integer', minimum: 1, description: 'Logical line count of the complete body, independent of this chunk. CRLF, LF and lone CR each count as one break; a trailing break adds a final empty line, and an empty body has one line.' },
 	body_length: { type: 'integer', description: 'Total body length in UTF-16 code units.' },
 	body_offset: { type: 'integer', description: 'Actual body start offset in UTF-16 code units, adjusted to avoid splitting a surrogate pair.' },
 	body_returned_chars: { type: 'integer', description: 'Number of body UTF-16 code units returned.' },
@@ -48,6 +49,7 @@ const bodyMeasureProperties = {
 	body_length: { type: 'integer', minimum: 0, description: 'Full body length in UTF-16 code units.' },
 	body_size_bytes: { type: 'integer', minimum: 0, description: 'Full body size in UTF-8 bytes.' },
 	body_sha256: { type: 'string', pattern: '^[a-f0-9]{64}$', description: 'SHA-256 of the full body encoded as UTF-8.' },
+	body_total_line_count: { type: 'integer', minimum: 1, description: 'Logical line count of the complete body; CRLF, LF and lone CR each count as one break, a trailing break adds a final empty line, and an empty body has one line.' },
 };
 
 /**
@@ -106,8 +108,9 @@ const conflictNote = outputModeSchema([
 	}, Object.keys({ ...conflictNoteContext, body: true, ...bodyChunkProperties }), 'Available conflict note with a UTF-16-safe inline body chunk.'),
 	object({
 		...conflictNoteContext,
+		body_total_line_count: { type: 'integer', minimum: 1, description: 'Logical line count of the complete current body, independent of body chunks or visual wrapping.' },
 		file: { ...fileDescriptor, description: 'Complete current note body exported as a UTF-8 file.' },
-	}, [...Object.keys(conflictNoteContext), 'file'], 'Available conflict note with its body exported as a UTF-8 file.'),
+	}, [...Object.keys(conflictNoteContext), 'body_total_line_count', 'file'], 'Available conflict note with its body exported as a UTF-8 file.'),
 	object({
 		...conflictNoteContext,
 		...bodyMeasureProperties,
@@ -167,8 +170,9 @@ export const revisionConflictOutputSchemas = {
 		}, [...Object.keys(revisionContext), 'body', ...Object.keys(bodyChunkProperties)], 'Historical note revision with its body inline.'),
 		object({
 			...revisionContext,
+			body_total_line_count: { type: 'integer', minimum: 1, description: 'Logical line count of the complete historical body, independent of body chunks or visual wrapping.' },
 			file: { ...fileDescriptor, description: 'Complete historical note body exported as a UTF-8 file.' },
-		}, [...Object.keys(revisionContext), 'file'], 'Historical note revision with its body exported as a UTF-8 file.'),
+		}, [...Object.keys(revisionContext), 'body_total_line_count', 'file'], 'Historical note revision with its body exported as a UTF-8 file.'),
 		object({
 			...revisionContext,
 			...bodyMeasureProperties,
@@ -181,6 +185,8 @@ export const revisionConflictOutputSchemas = {
 			from_revision_id: { type: 'string', description: 'Native revision identifier used as the comparison base.' },
 			to_revision_id: { type: 'string', description: 'Native destination revision identifier, also returned when the current live state was captured.' },
 			to_current: { type: 'boolean', description: 'True when the destination was captured from the current live note during this request.' },
+			from_body_total_line_count: { type: 'integer', minimum: 1, description: 'Logical line count of the complete source revision body; CRLF, LF and lone CR each count as one break, and trailing breaks include the final empty line.' },
+			to_body_total_line_count: { type: 'integer', minimum: 1, description: 'Logical line count of the complete destination revision body; CRLF, LF and lone CR each count as one break, and trailing breaks include the final empty line.' },
 			title_diff: { type: 'string', description: 'Unified title patch, or an empty string when unchanged.' },
 			body_diff: { type: 'string', description: 'Unified body patch, or an empty string when unchanged.' },
 			metadata_changes: { type: 'array', items: metadataChange, description: 'Tracked metadata changes, sorted by field name.' },
@@ -191,6 +197,8 @@ export const revisionConflictOutputSchemas = {
 			from_revision_id: { type: 'string', description: 'Native revision identifier used as the comparison base.' },
 			to_revision_id: { type: 'string', description: 'Native destination revision identifier, also returned when the current live state was captured.' },
 			to_current: { type: 'boolean', description: 'True when the destination was captured from the current live note during this request.' },
+			from_body_total_line_count: { type: 'integer', minimum: 1, description: 'Logical line count of the complete source revision body; CRLF, LF and lone CR each count as one break, and trailing breaks include the final empty line.' },
+			to_body_total_line_count: { type: 'integer', minimum: 1, description: 'Logical line count of the complete destination revision body; CRLF, LF and lone CR each count as one break, and trailing breaks include the final empty line.' },
 			metadata_changes: { type: 'array', items: metadataChange, description: 'Tracked metadata changes, sorted by field name.' },
 			file: { ...fileDescriptor, description: 'Both text diffs exported together as a UTF-8 file.' },
 		}, undefined, 'Revision comparison with text diffs exported together as a UTF-8 file.'),

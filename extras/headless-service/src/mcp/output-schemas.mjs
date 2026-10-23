@@ -91,6 +91,7 @@ const readProperties = {
 	body_length: { type: 'number', description: 'Full body length in UTF-16 code units.' },
 	body_size_bytes: { type: 'integer', minimum: 0, description: 'Full body size in UTF-8 bytes.' },
 	body_sha256: { type: 'string', pattern: '^[a-f0-9]{64}$', description: 'SHA-256 of the exact note body encoded as UTF-8.' },
+	body_total_line_count: { type: 'integer', minimum: 1, description: 'Logical line count of the complete note body; CRLF, LF and lone CR each count as one break, a trailing break adds a final empty line, and an empty body has one line.' },
 	body_offset: { type: 'number', description: 'Start offset of the returned body in UTF-16 code units.' },
 	body_returned_chars: { type: 'number', description: 'Returned body length in UTF-16 code units.' },
 	has_more: boolean,
@@ -100,9 +101,9 @@ const readProperties = {
 	offsetUnit: { type: 'string', const: 'utf16-code-unit' },
 };
 /** Required fields synthesized by the read tool in addition to the service identity. */
-const readRequired = ['id', 'accountEmail', 'revision_id', 'body', 'notebook_id', 'notebook_title', 'tags', 'is_todo', 'todo_completed', 'todo_due', 'source_url', 'source', 'source_application', 'body_length', 'body_offset', 'body_returned_chars', 'has_more', 'offset', 'nextOffset', 'totalLength', 'offsetUnit'];
+const readRequired = ['id', 'accountEmail', 'revision_id', 'body', 'notebook_id', 'notebook_title', 'tags', 'is_todo', 'todo_completed', 'todo_due', 'source_url', 'source', 'source_application', 'body_total_line_count', 'body_length', 'body_offset', 'body_returned_chars', 'has_more', 'offset', 'nextOffset', 'totalLength', 'offsetUnit'];
 /** Metadata-only reads require the same revision and note context plus full-body measurements. */
-const metadataReadRequired = ['id', 'accountEmail', 'revision_id', 'notebook_id', 'notebook_title', 'tags', 'is_todo', 'todo_completed', 'todo_due', 'source_url', 'source', 'source_application', 'body_length', 'body_size_bytes', 'body_sha256'];
+const metadataReadRequired = ['id', 'accountEmail', 'revision_id', 'notebook_id', 'notebook_title', 'tags', 'is_todo', 'todo_completed', 'todo_due', 'source_url', 'source', 'source_application', 'body_length', 'body_size_bytes', 'body_sha256', 'body_total_line_count'];
 /** File metadata describes the complete immutable UTF-8 snapshot; bytes live in the resource block. */
 const noteFile = exactObject({ uri: string, filename: string, mime_type: string,
 	size: { type: 'integer', minimum: 0, description: 'Full UTF-8 file size in bytes.' },
@@ -112,7 +113,7 @@ const noteFile = exactObject({ uri: string, filename: string, mime_type: string,
 function noteReadSchema(legacy = false) {
 	return {
 		...object({ ...readProperties, ...(legacy ? {} : { is_todo: boolean, todo_completed: boolean }), file: noteFile },
-			['id', 'accountEmail', 'revision_id', 'notebook_id', 'notebook_title', 'tags', 'is_todo', 'todo_completed', 'todo_due', 'source_url', 'source', 'source_application']),
+			['id', 'accountEmail', 'revision_id', 'notebook_id', 'notebook_title', 'tags', 'is_todo', 'todo_completed', 'todo_due', 'source_url', 'source', 'source_application', 'body_total_line_count']),
 		anyOf: [
 			{
 				required: readRequired,
@@ -160,10 +161,11 @@ const coreOutputSchemas = {
 			body_length: { type: 'number', description: 'Saved body length in UTF-16 code units; included for body_file updates.' },
 			body_size_bytes: { type: 'integer', minimum: 0, description: 'Saved body size in UTF-8 bytes; included for body_file updates.' },
 			body_sha256: { type: 'string', pattern: '^[a-f0-9]{64}$', description: 'SHA-256 of the saved body encoded as UTF-8; included for body_file updates.' },
+			body_total_line_count: { type: 'integer', minimum: 1, description: 'Logical line count of the complete saved body; included for body_file updates.' },
 		}, ['id', 'updated_time', 'revision_id', 'previous_revision_id', 'changed']),
 		anyOf: [
-			{ not: { anyOf: [{ required: ['body_length'] }, { required: ['body_size_bytes'] }, { required: ['body_sha256'] }] } },
-			{ required: ['body_length', 'body_size_bytes', 'body_sha256'] },
+			{ not: { anyOf: [{ required: ['body_length'] }, { required: ['body_size_bytes'] }, { required: ['body_sha256'] }, { required: ['body_total_line_count'] }] } },
+			{ required: ['body_length', 'body_size_bytes', 'body_sha256', 'body_total_line_count'] },
 		],
 	},
 	delete_note: object({ id: string, trashed: { type: 'boolean', const: true } }),
