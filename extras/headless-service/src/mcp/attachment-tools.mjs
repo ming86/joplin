@@ -12,7 +12,7 @@ export function isMcpToolResult(value) {
 }
 
 /** Build a native MCP result with metadata text and binary bytes in one resource block. */
-function embeddedResourceResult(metadata, uri, mimeType, blob) {
+export function embeddedResourceResult(metadata, uri, mimeType, blob) {
 	const result = {
 		content: [
 			{ type: 'text', text: JSON.stringify(metadata) },

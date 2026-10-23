@@ -41,7 +41,7 @@ function assertCacheHints(result) {
 	assert.ok(['public', 'private'].includes(result.cacheScope));
 }
 
-test('modern discovery works before initialization and advertises only the implemented core capability', async t => {
+test('modern discovery works before initialization and advertises the implemented capabilities', async t => {
 	const session = createSession();
 	t.after(() => session.close());
 
@@ -49,7 +49,7 @@ test('modern discovery works before initialization and advertises only the imple
 	assert.equal(response.id, 1);
 	assert.equal(response.result.resultType, 'complete');
 	assert.deepEqual(new Set(response.result.supportedVersions), new Set(modernVersions));
-	assert.deepEqual(response.result.capabilities, { tools: {} });
+	assert.deepEqual(response.result.capabilities, { tools: {}, resources: {} });
 	assertCacheHints(response.result);
 	assertServerInfo(response.result);
 });

@@ -84,7 +84,7 @@ test('modern HTTP discovers, lists, reads and saves through the account service 
 	const discover = await exchange(server, request(1, 'server/discover'));
 	assertComplete(discover);
 	assert.ok(discover.json.result.supportedVersions.includes(version));
-	assert.deepEqual(discover.json.result.capabilities, { tools: {} });
+	assert.deepEqual(discover.json.result.capabilities, { tools: {}, resources: {} });
 	const listed = await exchange(server, request(2, 'tools/list'));
 	assertComplete(listed);
 	assert.ok(listed.json.result.tools.some(tool => tool.name === 'create_note'));
@@ -146,15 +146,18 @@ test('modern HTTP reports unsupported versions and unknown methods with their sp
 		assert.ok(response.json.error.data.supported.includes(version));
 	}
 	assertError(await exchange(server, request(2, 'unknown/method')), 404, -32601, 2);
-	// Routing headers remain valid for standard methods outside this tools-only catalog.
+	// The resource route is implemented; unknown opaque URIs receive a safe resource error.
+	const unavailable = await exchange(server, request(3, 'resources/read', { uri: 'note://example/readable' }), { 'Mcp-Name': 'note://example/readable' });
+	assertError(unavailable, 200, -32002, 3);
+	assert.equal(JSON.stringify(unavailable.json).includes('note://example/readable'), false);
+	// Routing headers remain valid for standard methods outside this server's catalog.
 	for (const [method, params, nameHeader] of [
-		['resources/read', { uri: 'note://example/readable' }, 'note://example/readable'],
 		['prompts/get', { name: 'summarize' }, 'summarize'],
 		['prompts/get', { name: '笔记' }, `=?base64?${Buffer.from('笔记').toString('base64')}?=`],
 	]) {
-		const message = request(3, method, params);
-		assertError(await exchange(server, message, { 'Mcp-Name': nameHeader }), 404, -32601, 3);
-		assertError(await exchange(server, message, { 'Mcp-Name': 'different-name' }), 400, -32020, 3);
+		const message = request(4, method, params);
+		assertError(await exchange(server, message, { 'Mcp-Name': nameHeader }), 404, -32601, 4);
+		assertError(await exchange(server, message, { 'Mcp-Name': 'different-name' }), 400, -32020, 4);
 	}
 });
 

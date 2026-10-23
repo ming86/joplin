@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createTools } from '../src/mcp/tools.mjs';
+import { createNoteFileResources } from '../src/mcp/note-file-resources.mjs';
 import { isMcpToolResult } from '../src/mcp/attachment-tools.mjs';
 
 const noteId = 'a'.repeat(32);
@@ -95,6 +96,23 @@ test('list_notes preserves optional page attribution and satisfies the advertise
 				assert.ok([rule.type].flat().includes(type), key);
 			}
 		}
+	}
+});
+
+test('note file exports project metadata before embedding the exact UTF-8 body', async t => {
+	const store = createNoteFileResources();
+	t.after(() => store.close());
+	const { tools } = fixture({}, { noteFileResources: store });
+	for (const name of ['read_note', 'get_note']) {
+		const result = await tools.call(name, { id: noteId, output: 'file' });
+		const value = assertMatchingContent(result);
+		assertEmail(value);
+		assert.equal(isMcpToolResult(result), true);
+		assert.equal(Object.hasOwn(value, 'body'), false);
+		assert.equal(result.content.length, 2);
+		assert.equal(Buffer.from(result.content[1].resource.blob, 'base64').toString('utf8'), note.body);
+		assert.deepEqual(store.read(value.file.uri).contents, [result.content[1].resource]);
+		assert.equal(result.content[0].text.includes(accountId), false);
 	}
 });
 

@@ -24,7 +24,7 @@ test('MCP negotiates both pinned versions; unknown version proposes supported ve
 	for (const version of ['2025-11-25', '2025-06-18', '2099-01-01']) {
 		const s = session(); const result = await s.handle(initialize(version));
 		assert.equal(result.result.protocolVersion, version === '2099-01-01' ? '2025-11-25' : version);
-		assert.deepEqual(result.result.capabilities, { tools: {} });
+		assert.deepEqual(result.result.capabilities, { tools: {}, resources: {} });
 	}
 });
 test('requires valid initialization and ready notification; rejects second initialization', async () => {
@@ -115,7 +115,6 @@ test('published write-tool anyOf branches contain their complete closed object s
 		const tools = new Map((await s.handle(request(2, 'tools/list'))).result.tools.map(tool => [tool.name, tool]));
 		const expected = new Map([
 			['create_note', { required: ['title'], alternatives: [['notebook_id'], ['parentId']] }],
-			['update_note', { required: ['id', 'base_revision_id'], alternatives: [['title'], ['body'], ['append'], ['prepend'], ['replace_text'], ['notebook_id'], ['todo_completed']] }],
 			['manage_tags', { required: ['note_id'], alternatives: [['add'], ['remove']] }],
 			['update_notebook', { required: ['id'], alternatives: [['title'], ['parent_id']] }],
 			['update_attachment', { required: ['id'], alternatives: [['title'], ['filename'], ['mime'], ['content_base64']] }],

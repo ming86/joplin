@@ -1,6 +1,7 @@
 import http from 'node:http';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { createMcpSession, modernProtocolVersion, protocolVersions, rpcError, unsupportedProtocolVersion } from './session.mjs';
+import { createNoteFileResources } from './note-file-resources.mjs';
 
 /** Preserve the session concurrency limit across otherwise independent POSTs. */
 const maxDispatches = 8;
@@ -128,6 +129,8 @@ export async function startMcpHttpServer({ service, allowWrites = false, bearerT
 	if (!Array.isArray(allowedOrigins) || !allowedOrigins.every(validOrigin)) throw new Error('invalid_mcp_http_origins');
 	const expectedCredential = credentialDigest(`Bearer ${bearerToken}`);
 	const origins = new Set(allowedOrigins);
+	// Share one store across per-POST sessions so exports survive later reads; server shutdown clears it.
+	const noteFileResources = createNoteFileResources();
 	const sessions = new Set();
 	const probes = new Set();
 	const pending = new Set();
@@ -189,7 +192,7 @@ export async function startMcpHttpServer({ service, allowWrites = false, bearerT
 		if (kind === 'response') return respond(res, 202);
 		if (closing) return respond(res, 503, { error: 'server_closing' });
 		if (sessions.size >= maxDispatches) return respond(res, 503, { error: 'too_many_requests' });
-		const session = createMcpSession(service, { allowWrites, stateless: true });
+		const session = createMcpSession(service, { allowWrites, stateless: true, noteFileResources });
 		sessions.add(session);
 		try {
 			// A disconnected client does not cancel a write; only shutdown closes the session.
@@ -230,10 +233,18 @@ export async function startMcpHttpServer({ service, allowWrites = false, bearerT
 			for (const session of sessions) session.close();
 			for (const controller of probes) controller.abort();
 			closePromise = new Promise(resolve => {
-				const timer = setTimeout(() => { server.closeAllConnections(); resolve(); }, shutdownMs);
+				const timer = setTimeout(() => {
+					server.closeAllConnections();
+					noteFileResources.close();
+					resolve();
+				}, shutdownMs);
 				const stopped = new Promise(done => server.close(done));
 				server.closeIdleConnections();
-				void Promise.allSettled([stopped, ...pending]).then(() => { clearTimeout(timer); resolve(); });
+				void Promise.allSettled([stopped, ...pending]).then(() => {
+					clearTimeout(timer);
+					noteFileResources.close();
+					resolve();
+				});
 			});
 			return closePromise;
 		},

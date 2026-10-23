@@ -178,7 +178,7 @@ test('HTTP MCP launcher serves authenticated stateless requests and stops cleanl
 	assert.equal(discovered.body.result.resultType, 'complete');
 	assert.ok(discovered.body.result.supportedVersions.includes(modernProtocolVersion));
 	assert.ok(discovered.body.result.supportedVersions.includes('2025-11-25'));
-	assert.deepEqual(discovered.body.result.capabilities, { tools: {} });
+	assert.deepEqual(discovered.body.result.capabilities, { tools: {}, resources: {} });
 	assert.equal(discovered.body.result.ttlMs, 0);
 	assert.equal(discovered.body.result.cacheScope, 'private');
 	assert.deepEqual(discovered.body.result._meta?.['io.modelcontextprotocol/serverInfo'], serverInfo);

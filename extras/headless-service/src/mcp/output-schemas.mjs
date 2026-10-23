@@ -93,6 +93,22 @@ const readProperties = {
 };
 /** Required fields synthesized by the read tool in addition to the service identity. */
 const readRequired = ['id', 'accountEmail', 'revision_id', 'body', 'notebook_id', 'notebook_title', 'tags', 'is_todo', 'todo_completed', 'body_length', 'body_offset', 'body_returned_chars', 'has_more', 'offset', 'nextOffset', 'totalLength', 'offsetUnit'];
+/** File metadata describes the complete immutable UTF-8 snapshot; bytes live in the resource block. */
+const noteFile = exactObject({ uri: string, filename: string, mime_type: string,
+	size: { type: 'integer', minimum: 0, description: 'Full UTF-8 file size in bytes.' },
+	sha256: { type: 'string', pattern: '^[a-f0-9]{64}$' }, expires_at: { type: 'string', format: 'date-time' },
+});
+/** Keep the success contract an object while requiring either inline body fields or file metadata. */
+function noteReadSchema(legacy = false) {
+	return {
+		...object({ ...readProperties, ...(legacy ? {} : { is_todo: boolean, todo_completed: boolean }), file: noteFile },
+			['id', 'accountEmail', 'revision_id', 'notebook_id', 'notebook_title', 'tags', 'is_todo', 'todo_completed']),
+		anyOf: [
+			{ required: readRequired, not: { required: ['file'] } },
+			{ required: ['file'], not: { required: ['body'] } },
+		],
+	};
+}
 /** Success contracts for the core tools, including the defined Desktop semantic result. */
 const coreOutputSchemas = {
 	get_status: status,
@@ -115,8 +131,8 @@ const coreOutputSchemas = {
 		chunk_index: { type: 'number', description: 'Chunk index within the source note.' }, chunk_text: string,
 		score: { type: 'number', description: 'Similarity score rounded to three decimal places.' },
 	})), total: { type: 'number', description: 'Number of returned matching chunks.' } }), description: 'On success, returns ranked note chunks with source ids, matching text and similarity scores.' },
-	read_note: object({ ...readProperties, is_todo: boolean, todo_completed: boolean }, readRequired),
-	get_note: object(readProperties, readRequired),
+	read_note: noteReadSchema(),
+	get_note: noteReadSchema(true),
 	create_note: exactObject({ id: string, title: string, notebook_id: string }),
 	update_note: exactObject({ id: string, updated_time: time, revision_id: string, previous_revision_id: nullableString, changed: boolean }),
 	delete_note: object({ id: string, trashed: { type: 'boolean', const: true } }),

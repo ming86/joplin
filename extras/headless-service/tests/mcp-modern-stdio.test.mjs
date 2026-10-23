@@ -77,7 +77,7 @@ test('stdio serves modern discovery, tool listing and tool calls without initial
 	assert.ok(protocolVersions.includes(modernProtocolVersion));
 	assert.ok(discovery.supportedVersions.includes(modernProtocolVersion));
 	assert.ok(discovery.supportedVersions.includes('2025-11-25'));
-	assert.deepEqual(discovery.capabilities, { tools: {} });
+	assert.deepEqual(discovery.capabilities, { tools: {}, resources: {} });
 	assert.equal(discovery.ttlMs, 0);
 	assert.equal(discovery.cacheScope, 'private');
 	assert.deepEqual(discovery._meta?.['io.modelcontextprotocol/serverInfo'], serverInfo);
