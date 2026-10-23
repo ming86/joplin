@@ -88,6 +88,58 @@ test('Desktop read tools expose rich metadata and return full bodies by default 
 	} finally { session.close(); }
 });
 
+test('MCP note metadata schemas and revision updates preserve due and source URL fields', async () => {
+	const b = backend();
+	const due = 1700000000123;
+	let created;
+	let updated;
+	b.createNote = async input => {
+		created = input;
+		return { ...note, parent_id: input.parentId, title: input.title, body: input.body };
+	};
+	b.updateNoteWithRevision = async (_id, input) => {
+		updated = input;
+		return { ...note, updated_time: 101, revision_id: 'c'.repeat(32), previous_revision_id: initialRevisionId, changed: true };
+	};
+	const session = createSession(b);
+	await ready(session);
+	try {
+		const tools = (await session.handle(request(2, 'tools/list'))).result.tools;
+		const createSchema = tools.find(tool => tool.name === 'create_note').inputSchema;
+		const updateSchema = tools.find(tool => tool.name === 'update_note').inputSchema;
+		for (const schema of [createSchema, updateSchema]) {
+			assert.equal(schema.properties.todo_due.type, 'integer');
+			assert.equal(Object.hasOwn(schema.properties.todo_due, 'minimum'), false);
+			assert.match(schema.properties.todo_due.description, /Unix epoch milliseconds.*negative values.*0 to clear/i);
+			assert.equal(schema.properties.source_url.type, 'string');
+			assert.match(schema.properties.source_url.description, /empty string to clear/i);
+			assert.equal(Object.hasOwn(schema.properties, 'source'), false);
+			assert.equal(Object.hasOwn(schema.properties, 'source_application'), false);
+		}
+		assert.match(updateSchema.properties.is_todo.description, /resets its existing due date and completion state/i);
+		assert.match(updateSchema.properties.is_todo.description, /explicitly supplied todo_due and todo_completed values are applied after that reset/i);
+
+		const createdResult = await invoke(session, 'create_note', {
+			title: 'Todo with source', body: 'body', notebook_id: folderId, is_todo: true, todo_due: due, source_url: 'https://example.test/source',
+		});
+		assert.equal(createdResult.isError, false);
+		assert.deepEqual(created, {
+			title: 'Todo with source', body: 'body', parentId: folderId, is_todo: 1, todo_due: due, source_url: 'https://example.test/source',
+		});
+
+		const updatedResult = await invoke(session, 'update_note', {
+			id: noteId, base_revision_id: initialRevisionId,
+			is_todo: true, todo_due: 0, todo_completed: false, source_url: '',
+		}, 3);
+		assert.equal(updatedResult.isError, false);
+		assert.deepEqual(updated, {
+			base_revision_id: initialRevisionId, is_todo: true, todo_due: 0, todo_completed: false, source_url: '',
+		});
+		assert.deepEqual(Object.keys(updatedResult.structuredContent).sort(), ['changed', 'id', 'previous_revision_id', 'revision_id', 'updated_time']);
+		assert.equal(JSON.stringify(updatedResult.structuredContent).includes('body'), false);
+	} finally { session.close(); }
+});
+
 test('MCP note, search, and tag fields accept values beyond the former arbitrary size limits', async () => {
 	const b = backend();
 	const title = 't'.repeat(1025);
@@ -717,7 +769,7 @@ test('keyword search returns an exact eligible total without changing the reques
 			{ page: 1, fields: 'id,encryption_applied,deleted_time,is_locked' },
 			{ page: 2, fields: 'id,encryption_applied,deleted_time,is_locked' },
 		]);
-		assert.deepEqual(requestedPage, { page: 2, limit: 1, fields: 'id,parent_id,title,body,created_time,updated_time,is_todo,todo_completed,markup_language,encryption_applied,deleted_time,is_locked' });
+		assert.deepEqual(requestedPage, { page: 2, limit: 1, fields: 'id,parent_id,title,body,created_time,updated_time,is_todo,todo_due,todo_completed,source,source_application,source_url,markup_language,encryption_applied,deleted_time,is_locked' });
 		assert.ok(metadataPages.every(({ fields }) => !fields.split(',').includes('body')));
 	} finally { session.close(); }
 });

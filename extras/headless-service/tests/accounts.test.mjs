@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createAccountRegistry } from '../index.mjs';
-import { account, backend, noteId, note } from './fixtures.mjs';
+import { account, backend, folderId, noteId, note } from './fixtures.mjs';
 
 const code = expected => error => error.code === expected;
 
@@ -133,6 +133,71 @@ test('non-Markdown notes remain readable and accept updates without changing the
 	assert.deepEqual(update, { title: 'Renamed' });
 	assert.equal(updated.title, 'Renamed');
 	assert.equal(updated.markup_language, 2);
+});
+
+test('account note create, read and update preserve due dates and origin URLs', async () => {
+	const fake = backend();
+	const createdInputs = [];
+	const updatePatches = [];
+	const original = {
+		...note,
+		is_todo: 1,
+		todo_due: -987654321,
+		todo_completed: 654321,
+		source: 'mobile-import',
+		source_application: 'net.example.mobile',
+		source_url: 'https://example.test/original',
+	};
+	fake.getNote = async () => ({ ...original });
+	fake.createNote = async input => {
+		createdInputs.push(structuredClone(input));
+		return {
+			...original,
+			parent_id: input.parentId,
+			title: input.title,
+			body: input.body,
+			is_todo: input.is_todo,
+			todo_due: input.todo_due,
+			source_url: input.source_url,
+		};
+	};
+	fake.updateNote = async (_id, patch) => {
+		updatePatches.push(structuredClone(patch));
+		return { ...original, ...patch, parent_id: patch.parentId ?? original.parent_id };
+	};
+	const service = createAccountRegistry([account()], { makeBackend: () => fake }).forPrincipal('alice', 'alice');
+
+	const created = await service.createNote({ title: 'Due reminder', is_todo: true, todo_due: -1, source_url: '' });
+	assert.deepEqual(createdInputs, [{ title: 'Due reminder', body: '', parentId: folderId, is_todo: 1, todo_due: -1, source_url: '' }]);
+	assert.equal(created.todo_due, -1);
+	assert.equal(created.source, 'mobile-import');
+	assert.equal(created.source_application, 'net.example.mobile');
+	assert.equal(created.source_url, '');
+
+	const read = await service.getNote(noteId);
+	assert.equal(read.todo_due, -987654321);
+	assert.equal(read.source, 'mobile-import');
+	assert.equal(read.source_application, 'net.example.mobile');
+	assert.equal(read.source_url, 'https://example.test/original');
+
+	const updated = await service.updateNote(noteId, { is_todo: false, source_url: '' });
+	assert.deepEqual(updatePatches[0], { is_todo: 0, todo_due: 0, todo_completed: 0, source_url: '' });
+	assert.equal(updated.is_todo, 0);
+	assert.equal(updated.todo_due, 0);
+	assert.equal(updated.todo_completed, 0);
+	assert.equal(updated.source_url, '');
+
+	const completionStart = Date.now();
+	const explicitValues = await service.updateNote(noteId, { is_todo: false, todo_due: -5, todo_completed: true });
+	assert.deepEqual(Object.keys(updatePatches[1]), ['is_todo', 'todo_due', 'todo_completed']);
+	assert.equal(updatePatches[1].is_todo, 0);
+	assert.equal(updatePatches[1].todo_due, -5);
+	assert.ok(updatePatches[1].todo_completed >= completionStart && updatePatches[1].todo_completed <= Date.now());
+	assert.equal(explicitValues.todo_due, -5);
+
+	for (const invalid of [1.5]) {
+		await assert.rejects(service.updateNote(noteId, { todo_due: invalid }), code('invalid_note_input'));
+	}
 });
 
 test('missing account ID is rejected rather than coerced to a valid string', () => {

@@ -245,6 +245,59 @@ describe('services/HeadlessNoteService', () => {
 		await expect(updateNote({ id: note.id, base_revision_id: moved.revision_id, changes: { title: 'Stale' } })).rejects.toMatchObject({ code: 'note_conflict' });
 	});
 
+	it('resets dates on a to-do type change and applies explicit values afterward', async () => {
+		const oldCompletion = 9_000_000_000_000;
+		const note = await Note.save({ title: 'Type change', is_todo: 1, todo_due: 123, todo_completed: oldCompletion });
+		const initial = await readNote(note.id);
+		const convertedToNote = await updateNote({ id: note.id, base_revision_id: initial.revision_id, changes: { is_todo: false } });
+		expect(convertedToNote).toMatchObject({ is_todo: 0, todo_due: 0, todo_completed: 0 });
+
+		// Dates remain editable on an ordinary note, and repeating its current type preserves them.
+		const datedNote = await updateNote({ id: note.id, base_revision_id: convertedToNote.revision_id, changes: { todo_due: 789, todo_completed: true } });
+		expect(datedNote).toMatchObject({ is_todo: 0, todo_due: 789 });
+		expect(datedNote.todo_completed).toBeGreaterThan(0);
+		const sameType = await updateNote({ id: note.id, base_revision_id: datedNote.revision_id, changes: { is_todo: false } });
+		expect(sameType).toMatchObject({ changed: false, todo_due: 789, todo_completed: datedNote.todo_completed });
+
+		// A type switch clears a previous completion before an explicit true supplies a fresh one.
+		await Note.save({ id: note.id, todo_completed: oldCompletion });
+		const beforeTodo = await readNote(note.id);
+		const convertedToTodo = await updateNote({
+			id: note.id,
+			base_revision_id: beforeTodo.revision_id,
+			changes: { is_todo: true, todo_due: 1000, todo_completed: true },
+		});
+		expect(convertedToTodo).toMatchObject({ is_todo: 1, todo_due: 1000 });
+		expect(convertedToTodo.todo_completed).toBeGreaterThan(0);
+		expect(convertedToTodo.todo_completed).toBeLessThan(oldCompletion);
+	});
+
+	it('records due and source URL edits in native history and rejects a stale source URL base', async () => {
+		const note = await Note.save({
+			title: 'Source metadata',
+			is_todo: 1,
+			todo_due: 100,
+			source: 'clipper',
+			source_application: 'web-clipper',
+			source_url: 'https://before.example',
+		});
+		const initial = await readNote(note.id);
+		expect(initial).toMatchObject({ source: 'clipper', source_application: 'web-clipper', source_url: 'https://before.example' });
+		const edited = await updateNote({
+			id: note.id,
+			base_revision_id: initial.revision_id,
+			changes: { todo_due: -200, source_url: 'https://after.example' },
+		});
+		const revisions = await Revision.allByType(BaseModel.TYPE_NOTE, note.id);
+		expect(await Revision.mergeDiffsStrict(revisions[0])).toMatchObject({ metadata: { todo_due: 100, source_url: 'https://before.example' } });
+		expect(edited.todo_due).toBe(-200);
+		expect(await Revision.mergeDiffsStrict(revisions[1])).toMatchObject({ metadata: { todo_due: -200, source_url: 'https://after.example' } });
+
+		await Note.save({ id: note.id, source_url: 'https://external.example' });
+		await expect(updateNote({ id: note.id, base_revision_id: edited.revision_id, changes: { source_url: 'https://overwrite.example' } })).rejects.toMatchObject({ code: 'note_conflict' });
+		expect((await Note.load(note.id)).source_url).toBe('https://external.example');
+	});
+
 	it('keeps native reconstruction ordered after a captured snapshot and a backdated note save', async () => {
 		const note = await Note.save({ title: 'Initial', body: 'A' });
 		const first = await readNote(note.id);

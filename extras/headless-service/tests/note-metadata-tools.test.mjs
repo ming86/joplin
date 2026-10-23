@@ -23,7 +23,11 @@ function fixture() {
 				body,
 				tags: ['unicode'],
 				is_todo: 1,
+				todo_due: -1,
 				todo_completed: 0,
+				source_url: 'https://example.test/source',
+				source: 'native-source-id',
+				source_application: 'net.example.reader',
 				revision_id: revisionId,
 				previous_revision_id: null,
 				changed: false,
@@ -33,9 +37,16 @@ function fixture() {
 		async status() { return { accountEmail: 'reader@example.test' }; },
 	};
 	const noteFileResources = {
-		exportNote() {
+		exportNote(note) {
 			exports++;
-			throw new Error('metadata reads must not export note files');
+			const uri = 'joplin-note-file://snapshot/metadata-note.md';
+			return {
+				file: {
+					uri, filename: 'metadata-note.md', mime_type: 'text/markdown; charset=utf-8',
+					size: Buffer.byteLength(note.body), sha256: 'c'.repeat(64), expires_at: '2026-10-23T00:00:00.000Z',
+				},
+				resource: { uri, mimeType: 'text/markdown; charset=utf-8', blob: Buffer.from(note.body).toString('base64') },
+			};
 		},
 	};
 	return {
@@ -64,6 +75,10 @@ test('metadata reads return native context and exact UTF-16 and UTF-8 body measu
 		assert.deepEqual(value.tags, ['unicode']);
 		assert.equal(value.is_todo, name === 'get_note' ? 1 : true);
 		assert.equal(value.todo_completed, name === 'get_note' ? 0 : false);
+		assert.equal(value.todo_due, -1);
+		assert.equal(value.source_url, 'https://example.test/source');
+		assert.equal(value.source, 'native-source-id');
+		assert.equal(value.source_application, 'net.example.reader');
 		assert.equal(value.body_length, body.length);
 		assert.equal(value.body_size_bytes, Buffer.byteLength(body, 'utf8'));
 		assert.equal(value.body_sha256, createHash('sha256').update(body, 'utf8').digest('hex'));
@@ -74,6 +89,29 @@ test('metadata reads return native context and exact UTF-16 and UTF-8 body measu
 	}
 	assert.equal(context.reads, 2);
 	assert.equal(context.exports, 0);
+});
+
+test('read and get note project pre-1970 due dates and source metadata in every output mode', async () => {
+	const context = fixture();
+	const { tools } = context;
+	for (const name of ['read_note', 'get_note']) {
+		for (const output of ['inline', 'file', 'metadata']) {
+			const result = await tools.call(name, { id: noteId, output });
+			assert.equal(result.isError, false);
+			const value = result.structuredContent;
+			assert.equal(value.todo_due, -1);
+			assert.equal(value.source_url, 'https://example.test/source');
+			assert.equal(value.source, 'native-source-id');
+			assert.equal(value.source_application, 'net.example.reader');
+			assert.equal(value.is_todo, name === 'get_note' ? 1 : true);
+			assert.equal(value.todo_completed, name === 'get_note' ? 0 : false);
+			if (output === 'inline') assert.equal(value.body, body);
+			else assert.equal(Object.hasOwn(value, 'body'), false);
+			if (output === 'file') assert.ok(value.file);
+		}
+	}
+	assert.equal(context.reads, 6);
+	assert.equal(context.exports, 2);
 });
 
 test('metadata reads reject all slicing selectors before reading a note', async () => {
@@ -100,6 +138,17 @@ test('read tool schemas describe metadata as a distinct body-free result mode', 
 		assert.match(definition.description, /partial edits for small changes/i);
 
 		const success = definition.outputSchema.anyOf[0];
+		for (const field of ['todo_due', 'source_url', 'source', 'source_application']) {
+			assert.ok(success.properties[field], field);
+			assert.ok(success.required.includes(field), `${name} requires ${field}`);
+		}
+		assert.equal(success.properties.todo_due.type, 'integer');
+		assert.equal(Object.hasOwn(success.properties.todo_due, 'minimum'), false);
+		assert.match(success.properties.todo_due.description, /Unix epoch milliseconds.*negative values.*0 means no due date/);
+		assert.equal(success.properties.source_url.type, 'string');
+		assert.match(success.properties.source_url.description, /empty string means no source URL/);
+		assert.equal(success.properties.source.type, 'string');
+		assert.equal(success.properties.source_application.type, 'string');
 		const metadata = success.anyOf.find(branch => branch.required.includes('body_size_bytes'));
 		assert.ok(metadata);
 		for (const required of ['body_length', 'body_size_bytes', 'body_sha256']) assert.ok(metadata.required.includes(required), required);

@@ -41,6 +41,68 @@ test('real loopback transport implements a Joplin-shaped read/write/search/event
 	assert.deepEqual(writes.slice(1).map(([, , body]) => body), [{ body: 'hello' }, { body: 'updated' }]);
 });
 
+test('Joplin note adapter carries due and source URL fields through split-body creates and reads origin metadata', async t => {
+	const writes = [];
+	let stored;
+	const url = await server(t, async (req, res) => {
+		const target = new URL(req.url, 'http://local');
+		res.setHeader('Content-Type', 'application/json');
+		if (req.method === 'POST' || req.method === 'PUT') {
+			const body = await readJson(req);
+			writes.push([req.method, target.pathname, body]);
+			if (req.method === 'POST') {
+				stored = {
+					...body,
+					id: noteId,
+					created_time: 1,
+					updated_time: 2,
+					source: 'mobile-import',
+					source_application: 'net.example.mobile',
+					encryption_applied: 0,
+					deleted_time: 0,
+					is_locked: 0,
+				};
+			} else stored = { ...stored, ...body };
+			return res.end(JSON.stringify(stored));
+		}
+		if (req.method === 'GET' && target.pathname === `/notes/${noteId}`) {
+			assert.match(target.searchParams.get('fields'), /(?:^|,)todo_due(?:,|$)/);
+			assert.match(target.searchParams.get('fields'), /(?:^|,)source(?:,|$)/);
+			assert.match(target.searchParams.get('fields'), /(?:^|,)source_application(?:,|$)/);
+			assert.match(target.searchParams.get('fields'), /(?:^|,)source_url(?:,|$)/);
+			return res.end(JSON.stringify(stored));
+		}
+		res.writeHead(404); res.end();
+	});
+	const client = createJoplinClient({ baseUrl: url, token: 'private' });
+	const created = await client.createNote({
+		title: 'Imported reminder',
+		body: 'body supplied through a file input',
+		parentId: folderId,
+		is_todo: 1,
+		todo_due: 0,
+		source_url: 'https://example.test/article',
+	});
+	assert.equal(created.todo_due, 0);
+	assert.equal(created.source_url, 'https://example.test/article');
+	assert.deepEqual(writes.slice(0, 2), [
+		['POST', '/notes', { title: 'Imported reminder', body: '', parent_id: folderId, is_todo: 1, todo_due: 0, source_url: 'https://example.test/article', markup_language: 1 }],
+		['PUT', `/notes/${noteId}`, { body: 'body supplied through a file input' }],
+	]);
+
+	const updated = await client.updateNote(noteId, { is_todo: 0, todo_due: -1, source_url: '' });
+	assert.equal(updated.todo_due, -1);
+	assert.equal(updated.source_url, '');
+	assert.deepEqual(writes[2], ['PUT', `/notes/${noteId}`, { is_todo: 0, todo_due: -1, source_url: '' }]);
+
+	const read = await client.getNote(noteId);
+	assert.equal(read.source, 'mobile-import');
+	assert.equal(read.source_application, 'net.example.mobile');
+	assert.equal(read.todo_due, -1);
+	assert.equal(read.source_url, '');
+	await assert.rejects(client.updateNote(noteId, { source: 'caller-supplied-origin' }), code('unsupported_note_property'));
+});
+
 test('complete backend collections continue beyond 50 pages until has_more is false', async t => {
 	const pages = [];
 	const url = await server(t, (req, res) => {

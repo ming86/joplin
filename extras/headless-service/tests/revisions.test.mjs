@@ -17,7 +17,11 @@ const note = {
 	created_time: 1,
 	updated_time: 2,
 	is_todo: 0,
+	todo_due: -4321,
 	todo_completed: 0,
+	source: 'mobile-import',
+	source_application: 'net.example.mobile',
+	source_url: 'https://example.test/source',
 	markup_language: 1,
 	encryption_applied: 0,
 	deleted_time: 0,
@@ -31,24 +35,44 @@ test('revision client sends only fixed flat headless actions and validates nativ
 		{ ...note },
 		{ ...note, previous_revision_id: rev1, changed: true },
 		{ items: [{ revision_id: rev1, captured_time: 3, parent_revision_id: null }], hasMore: false },
-		{ note_id: noteId, revision_id: rev1, captured_time: 3, title: 'Old', body: 'old', metadata: { parent_id: notebookId } },
+		{ note_id: noteId, revision_id: rev1, captured_time: 3, title: 'Old', body: 'old', metadata: { parent_id: notebookId, is_todo: 1, todo_due: 0, source: 'mobile-import', source_application: 'net.example.mobile', source_url: 'https://example.test/source' } },
 		{ note_id: noteId, from_revision_id: rev1, to_revision_id: rev2, to_current: true, title_diff: '@@ title @@', body_diff: '@@ body @@', metadata_changes: [{ field: 'parent_id', from: { present: true, value: notebookId }, to: { present: false } }] },
 	];
 	const client = createRevisionClient(async (...args) => { calls.push(args); return responses.shift(); });
 	const signal = new AbortController().signal;
-	assert.equal((await client.readNoteWithRevision(noteId, signal)).revision_id, rev2);
-	assert.equal((await client.updateNoteWithRevision(noteId, { base_revision_id: rev1, append: '!' }, signal)).changed, true);
+	const current = await client.readNoteWithRevision(noteId, signal);
+	assert.equal(current.revision_id, rev2);
+	assert.equal(current.todo_due, -4321);
+	assert.equal(current.source, 'mobile-import');
+	assert.equal(current.source_application, 'net.example.mobile');
+	assert.equal(current.source_url, 'https://example.test/source');
+	assert.equal((await client.updateNoteWithRevision(noteId, {
+		base_revision_id: rev1,
+		append: '!',
+		is_todo: true,
+		todo_due: -1,
+		source_url: '',
+	}, signal)).changed, true);
 	assert.deepEqual(await client.listNoteRevisions({ note_id: noteId, page: 2, limit: 3 }, signal), {
 		items: [{ revision_id: rev1, captured_time: 3, parent_revision_id: null }], hasMore: false,
 	});
-	assert.equal((await client.readNoteRevision({ note_id: noteId, revision_id: rev1 }, signal)).body, 'old');
+	const historical = await client.readNoteRevision({ note_id: noteId, revision_id: rev1 }, signal);
+	assert.equal(historical.body, 'old');
+	assert.deepEqual(historical.metadata, {
+		parent_id: notebookId,
+		is_todo: 1,
+		todo_due: 0,
+		source: 'mobile-import',
+		source_application: 'net.example.mobile',
+		source_url: 'https://example.test/source',
+	});
 	const comparison = await client.compareNoteRevisions({ note_id: noteId, from_revision_id: rev1 }, signal);
 	assert.equal(comparison.to_revision_id, rev2);
 	assert.equal(comparison.to_current, true);
 
 	assert.deepEqual(calls.map(call => call[3]), [
 		{ action: 'readNote', id: noteId },
-		{ action: 'updateNote', id: noteId, base_revision_id: rev1, changes: { append: '!' } },
+		{ action: 'updateNote', id: noteId, base_revision_id: rev1, changes: { append: '!', is_todo: true, todo_due: -1, source_url: '' } },
 		{ action: 'listNoteRevisions', note_id: noteId, page: 2, limit: 3 },
 		{ action: 'readNoteRevision', note_id: noteId, revision_id: rev1 },
 		{ action: 'compareNoteRevisions', note_id: noteId, from_revision_id: rev1 },
@@ -80,6 +104,21 @@ test('revision client requires a base revision and preserves safe native failure
 		assert.equal(error.outcomeUnknown, true);
 		return true;
 	});
+
+	let invalidWriteCalls = 0;
+	const invalidInput = createRevisionClient(async () => { invalidWriteCalls++; return {}; });
+	for (const changes of [
+		{ todo_due: 1.5 },
+		{ is_todo: 1 },
+		{ source: 'caller-origin' },
+		{ source_application: 'caller-app' },
+	]) {
+		await assert.rejects(invalidInput.updateNoteWithRevision(noteId, { base_revision_id: rev1, ...changes }), error => {
+			assert.ok(['invalid_note_input', 'unsupported_note_property'].includes(error.code));
+			return true;
+		});
+	}
+	assert.equal(invalidWriteCalls, 0);
 });
 
 test('revision service enriches the captured live note and forwards exact updates without sidecar reads', async () => {
@@ -108,7 +147,7 @@ test('revision service enriches the captured live note and forwards exact update
 	assert.equal(live.notebook_title, 'Research');
 	assert.deepEqual(live.tags, ['Work']);
 
-	const changes = { append: '!', notebook_id: 'f'.repeat(32), todo_completed: false };
+	const changes = { append: '!', notebook_id: 'f'.repeat(32), is_todo: true, todo_due: -1, todo_completed: false, source_url: '' };
 	const updated = await service.updateNoteWithRevision(noteId, { base_revision_id: rev1, ...changes });
 	assert.equal(backendCreations, 2);
 	assert.equal(updated.revision_id, rev2);
@@ -125,6 +164,7 @@ test('revision service enriches the captured live note and forwards exact update
 
 	await assert.rejects(service.updateNoteWithRevision(noteId, { body: 'missing base' }), { code: 'base_revision_required' });
 	await assert.rejects(service.updateNoteWithRevision(noteId, { base_revision_id: rev1, parent_id: notebookId }), { code: 'unsupported_note_property' });
+	await assert.rejects(service.updateNoteWithRevision(noteId, { base_revision_id: rev1, todo_due: 1.5 }), { code: 'invalid_note_input' });
 });
 
 test('revision service leaves permission and native history failures visible', async () => {
