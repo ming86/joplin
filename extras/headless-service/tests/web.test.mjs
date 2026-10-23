@@ -20,7 +20,7 @@ test('web reads metadata without bodies and preserves exact supported Markdown o
 test('web status uses the core summary without an extra reachability request and propagates status failures', async () => {
 	const f = webFixture(); let noteListRequests = 0;
 	f.backend.listNoteSummaries = async () => { noteListRequests++; throw new ServiceError('backend_request_failed'); };
-	f.backend.status = async () => ({ accountEmail: 'alice@example.test', observedAt: 1000, serviceStartedAt: 900, sync: { running: true, pending: true, report: null }, decryption: { state: 'started', batch: { itemIndex: 0, itemCount: 2 }, missingMasterKey: false, disabledItemCount: 0 } });
+	f.backend.status = async () => ({ accountEmail: 'alice@example.test', observedAt: 1000, serviceStartedAt: 900, sync: { running: true, pending: true, kind: 'poll', lastPeriodicFullSync: null, report: null }, decryption: { state: 'started', batch: { itemIndex: 0, itemCount: 2 }, missingMasterKey: false, disabledItemCount: 0 } });
 	const status = await f.service.status();
 	assert.equal(status.core, 'reachable'); assert.equal(Object.hasOwn(status, 'synchronization'), false);
 	assert.equal(status.sync.running, true); assert.equal(status.sync.pending, true); assert.equal(status.decryption.state, 'started');

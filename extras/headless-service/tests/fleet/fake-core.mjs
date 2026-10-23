@@ -64,7 +64,7 @@ const server = http.createServer(async (req, res) => {
      accountEmail: 'alice@example.test',
      observedAt: 1000,
      serviceStartedAt: 900,
-     sync: { running: false, pending: false, report: null },
+     sync: { running: false, pending: false, kind: null, lastPeriodicFullSync: null, report: null },
      decryption: { state: 'idle', batch: null, missingMasterKey: false, disabledItemCount: 0 },
     };
    } else { res.writeHead(400); return res.end('{}'); }

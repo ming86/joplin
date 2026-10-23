@@ -31,7 +31,7 @@ async function controller(shared = {}) {
 		if (shared.intercept) { const r = await shared.intercept(url, input); if (r) return r; }
 		if (url === '/api/status') return result(200, {
 			core: 'reachable', allowWrites: true, semantic: { state: 'unavailable' },
-			sync: { running: false, pending: false },
+			sync: { running: false, pending: false, kind: null, lastPeriodicFullSync: null },
 		});
 		if (url.startsWith('/api/notebooks')) return result(200, { items: [{ id: folderId, title: 'Personal' }], hasMore: false });
 		if (url.startsWith('/api/notes')) return result(200, { items: [shared.current.note], hasMore: false });

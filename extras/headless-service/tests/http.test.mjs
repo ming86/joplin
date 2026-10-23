@@ -120,7 +120,8 @@ test('complete backend collections continue beyond 50 pages until has_more is fa
 });
 
 test('headless status uses its fixed authenticated action, allowlists the summary, and fails explicitly', async t => {
-	let fail = false, accountEmail = 'alice@example.test';
+	let fail = false, accountEmail = 'alice@example.test', syncRunning = true, syncKind = 'full';
+	let periodicTiming = { startTime: 1600, completedTime: 1800 };
 	const url = await server(t, async (req, res) => {
 		const target = new URL(req.url, 'http://local');
 		assert.equal(target.pathname, '/services/headless');
@@ -133,8 +134,10 @@ test('headless status uses its fixed authenticated action, allowlists the summar
 			observedAt: 2000,
 			serviceStartedAt: 1000,
 			sync: {
-				running: true,
+				running: syncRunning,
 				pending: false,
+				kind: syncKind,
+				lastPeriodicFullSync: periodicTiming && { ...periodicTiming, privateField: 'not exposed' },
 				report: { state: 'in_progress', startTime: 1500, completedTime: null, counters: { noteConflict: 2, updateLocal: 3, privateCounter: 99 }, errorCount: 1, errors: ['private error'] },
 				privateField: 'not exposed',
 			},
@@ -151,9 +154,29 @@ test('headless status uses its fixed authenticated action, allowlists the summar
 		semantic: { state: 'unavailable', reason: 'not_implemented', embeddingSpaceId: 'test-space-v1' },
 		observedAt: 2000,
 		serviceStartedAt: 1000,
-		sync: { running: true, pending: false, report: { state: 'in_progress', startTime: 1500, completedTime: null, counters: { noteConflict: 2, updateLocal: 3 }, errorCount: 1 } },
+		sync: { running: true, pending: false, kind: 'full', lastPeriodicFullSync: { startTime: 1600, completedTime: 1800 }, report: { state: 'in_progress', startTime: 1500, completedTime: null, counters: { noteConflict: 2, updateLocal: 3 }, errorCount: 1 } },
 		decryption: { state: 'started', batch: { itemIndex: 1, itemCount: 8 }, missingMasterKey: true, disabledItemCount: 4 },
 	});
+	assert.deepEqual(status.sync.lastPeriodicFullSync, { startTime: 1600, completedTime: 1800 });
+	for (const [kind, running] of [['full', true], ['upload', false], ['poll', false], [null, false]]) {
+		syncKind = kind;
+		syncRunning = running;
+		const result = await service.status();
+		assert.equal(result.sync.kind, kind);
+		assert.equal(result.sync.running, running);
+	}
+	periodicTiming = null;
+	assert.equal((await service.status()).sync.lastPeriodicFullSync, null);
+	periodicTiming = { startTime: 1600, completedTime: 1800 };
+	syncKind = 'unknown';
+	await assert.rejects(service.status(), code('invalid_backend_response'));
+	syncKind = 'poll';
+	syncRunning = false;
+	periodicTiming = { startTime: -1, completedTime: null };
+	await assert.rejects(service.status(), code('invalid_backend_response'));
+	periodicTiming = undefined;
+	await assert.rejects(service.status(), code('invalid_backend_response'));
+	periodicTiming = { startTime: 1600, completedTime: 1800 };
 	accountEmail = null;
 	assert.equal((await service.status()).accountEmail, null);
 	accountEmail = 42;

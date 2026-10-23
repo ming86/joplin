@@ -67,7 +67,7 @@ export function createOutputSchemaTestSession({ allowWrites = true } = {}) {
 			return {
 				accountId, accountEmail: 'alice@example.test', semantic: { state: 'unavailable', reason: 'not_implemented' },
 				observedAt: 3, serviceStartedAt: 1,
-				sync: { running: false, pending: false, report: null },
+				sync: { running: false, pending: false, kind: null, lastPeriodicFullSync: null, report: null },
 				decryption: { state: 'idle', batch: null, missingMasterKey: false, disabledItemCount: 0 },
 			};
 		},
@@ -264,6 +264,25 @@ test('tool output samples preserve aliases, nullable history, semantic errors, a
 		assert.equal(status.accountId, accountId);
 		assert.deepEqual(schemas.get('get_status').properties.accountEmail.type, ['string', 'null']);
 		assert.ok(schemas.get('get_status').required.includes('accountEmail'));
+		const syncSchema = schemas.get('get_status').properties.sync;
+		assert.ok(syncSchema.required.includes('kind'));
+		assert.ok(syncSchema.required.includes('lastPeriodicFullSync'));
+		assert.deepEqual(syncSchema.properties.kind.enum, ['full', 'upload', 'poll', null]);
+		assert.match(syncSchema.properties.kind.description, /preparation and authentication/);
+		assert.match(syncSchema.properties.kind.description, /running is false/);
+		const periodicFullSyncSchema = syncSchema.properties.lastPeriodicFullSync;
+		assert.match(periodicFullSyncSchema.description, /including when it failed/);
+		assert.match(periodicFullSyncSchema.description, /resets when the service restarts/);
+		assert.deepEqual(periodicFullSyncSchema.anyOf[1], { type: 'null' });
+		const timingSchema = periodicFullSyncSchema.anyOf[0];
+		assert.ok(timingSchema.required.includes('startTime'));
+		assert.ok(timingSchema.required.includes('completedTime'));
+		assert.deepEqual(timingSchema.properties.startTime.type, 'integer');
+		assert.equal(timingSchema.properties.startTime.minimum, 0);
+		assert.equal(timingSchema.properties.startTime.maximum, Number.MAX_SAFE_INTEGER);
+		assert.deepEqual(timingSchema.properties.completedTime.type, ['integer', 'null']);
+		assert.match(timingSchema.properties.completedTime.description, /Unix epoch milliseconds/);
+		assert.match(timingSchema.properties.completedTime.description, /null until/);
 		const modernRead = results.get('read_note').structuredContent;
 		const legacyRead = results.get('get_note').structuredContent;
 		assert.equal(typeof modernRead.is_todo, 'boolean');

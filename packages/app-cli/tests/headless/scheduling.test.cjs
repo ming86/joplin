@@ -73,11 +73,15 @@ function headlessFixture(t, intervalMs = 10000) {
 		'@joplin/lib/shim': shim,
 	}).default;
 	const errors = [];
-	output.reg.setSyncSchedulingPolicy((run, pendingChanged) => new Scheduler(run, pendingChanged, intervalMs, () => errors.push(true)));
+	let scheduler;
+	output.reg.setSyncSchedulingPolicy((run, pendingChanged) => {
+		scheduler = new Scheduler(run, pendingChanged, intervalMs, () => errors.push(true));
+		return scheduler;
+	});
 	output.reg.setupRecurrentSync();
 	t.after(() => output.reg.setSyncSchedulingPolicy(null));
 	return {
-		...output, timers, errors,
+		...output, timers, errors, scheduler,
 		async advance(ms) {
 			const end = now + ms;
 			for (;;) {
@@ -96,6 +100,26 @@ function headlessFixture(t, intervalMs = 10000) {
 }
 
 const partialOptions = { syncSteps: ['update_remote'] };
+
+test('scheduler kind follows active execution through authentication and returns to null when idle', async t => {
+	const { reg, fakeSync, advance, scheduler } = headlessFixture(t);
+	assert.deepEqual(scheduler.status, { kind: null, lastPeriodicFullSync: null });
+	for (const [kind, options] of [['full', {}], ['upload', partialOptions], ['poll', { remoteChangesOnly: true }]]) {
+		const authentication = deferred();
+		const execution = deferred();
+		reg.syncTarget = () => ({ isAuthenticated: async () => { await authentication.promise; return true; }, synchronizer: async () => fakeSync });
+		fakeSync.start = async () => { await execution.promise; };
+		const scheduled = reg.scheduleSync(100, options);
+		assert.equal(scheduler.status.kind, null, 'queued work is not active execution');
+		await advance(100);
+		assert.equal(scheduler.status.kind, kind, 'authentication is part of scheduler execution');
+		authentication.resolve(); await turn();
+		assert.equal(scheduler.status.kind, kind);
+		execution.resolve(); await scheduled;
+		assert.equal(scheduler.status.kind, null);
+		assert.equal(scheduler.status.lastPeriodicFullSync, null, 'ordinary full requests are not periodic');
+	}
+});
 
 test('headless registry keeps its remote-check cadence independent of repeated local saves', async t => {
 	const { reg, calls, advance, timers, settings } = headlessFixture(t);
@@ -191,7 +215,7 @@ test('remote checks remain paused through a periodic full sync and restart after
 });
 
 test('periodic full sync delay restarts 120 seconds after success or failure settles', async t => {
-	const { reg, fakeSync, calls, advance, timers } = headlessFixture(t);
+	const { reg, fakeSync, calls, advance, timers, scheduler } = headlessFixture(t);
 	const startup = reg.scheduleSync(0);
 	await advance(0); await startup;
 	const periodicFull = deferred();
@@ -211,6 +235,8 @@ test('periodic full sync delay restarts 120 seconds after success or failure set
 	};
 
 	await advance(120000);
+	assert.deepEqual(scheduler.status, { kind: 'full', lastPeriodicFullSync: { startTime: 120000, completedTime: null } });
+	const activeSnapshot = scheduler.status;
 	assert.equal(calls.filter(options => !options.remoteChangesOnly).length, 2, 'the first periodic full sync starts after its delay');
 	await advance(120000);
 	assert.equal(calls.filter(options => !options.remoteChangesOnly).length, 2, 'a full sync still running does not queue another full sync');
@@ -218,9 +244,15 @@ test('periodic full sync delay restarts 120 seconds after success or failure set
 
 	periodicFull.resolve();
 	await advance(0);
+	assert.deepEqual(scheduler.status, { kind: null, lastPeriodicFullSync: { startTime: 120000, completedTime: 240000 } });
+	assert.equal(activeSnapshot.lastPeriodicFullSync.completedTime, null, 'snapshots do not change when execution settles');
+	scheduler.status.lastPeriodicFullSync.startTime = -1;
+	assert.equal(scheduler.status.lastPeriodicFullSync.startTime, 120000, 'callers cannot mutate scheduler timing');
 	await advance(119999);
+	assert.deepEqual(scheduler.status.lastPeriodicFullSync, { startTime: 120000, completedTime: 240000 }, 'intervening polls retain the periodic timing');
 	assert.equal(calls.filter(options => !options.remoteChangesOnly).length, 2, 'the next delay starts after the slow full sync finishes');
 	await advance(1);
+	assert.deepEqual(scheduler.status.lastPeriodicFullSync, { startTime: 360000, completedTime: null });
 	assert.equal(calls.filter(options => !options.remoteChangesOnly).length, 3, 'the next full sync starts 120 seconds after successful completion');
 
 	await advance(120000);
@@ -228,6 +260,7 @@ test('periodic full sync delay restarts 120 seconds after success or failure set
 	assert.equal(calls.filter(options => options.remoteChangesOnly).length, 22, 'remote checks remain suspended during that full sync');
 	failedPeriodicFull.resolve();
 	await advance(0); await turn();
+	assert.deepEqual(scheduler.status, { kind: null, lastPeriodicFullSync: { startTime: 360000, completedTime: 480000 } }, 'failed native synchronization still settles its scheduler execution');
 	assert([...timers].some(timer => timer.delay === 10000 && timer.due === 490000), 'the poll delay restarts after the failed full sync settles');
 	assert([...timers].some(timer => timer.delay === 120000 && timer.due === 600000), 'the next full-sync delay also starts after failure settles');
 	await advance(119999);
@@ -237,7 +270,7 @@ test('periodic full sync delay restarts 120 seconds after success or failure set
 });
 
 test('a remote poll and a queued local upload merge into an ordinary full sync', async t => {
-	const { reg, calls, advance } = headlessFixture(t);
+	const { reg, calls, advance, scheduler } = headlessFixture(t);
 	const startup = reg.scheduleSync(0);
 	await advance(0); await startup;
 	await advance(9000);
@@ -247,6 +280,42 @@ test('a remote poll and a queued local upload merge into an ordinary full sync',
 	assert.equal(calls.length, 2);
 	assert.equal(calls[1].syncSteps, undefined);
 	assert.equal(calls[1].remoteChangesOnly, undefined);
+	assert.equal(scheduler.status.lastPeriodicFullSync, null, 'promotion to full does not make a request periodic');
+});
+
+test('periodic identity survives coalescing and starts timing only when the queued request executes', async t => {
+	const { reg, fakeSync, advance, scheduler } = headlessFixture(t);
+	const running = deferred();
+	fakeSync.start = async () => { await running.promise; return {}; };
+	const startup = reg.scheduleSync(0);
+	await advance(0);
+	await advance(119000);
+	const ordinaryFull = reg.scheduleSync(0);
+	const upload = reg.scheduleSync(1000, partialOptions);
+	await advance(6000);
+	assert.equal(scheduler.status.kind, 'full');
+	assert.equal(scheduler.status.lastPeriodicFullSync, null, 'the periodic timer queued work but execution is still waiting');
+	running.resolve(); await startup;
+	await advance(0); await ordinaryFull; await upload;
+	const expected = { startTime: 125000, completedTime: 125000 };
+	assert.deepEqual(scheduler.status.lastPeriodicFullSync, expected, 'the periodic request joined an existing full request');
+	for (const options of [partialOptions, {}, { remoteChangesOnly: true }]) {
+		const next = reg.scheduleSync(0, options);
+		await advance(0); await next;
+		assert.deepEqual(scheduler.status.lastPeriodicFullSync, expected, 'other requests retain the most recent periodic timing');
+	}
+});
+
+test('periodic authentication rejection records completion without claiming successful synchronization', async t => {
+	const { reg, advance, errors, scheduler } = headlessFixture(t, 200000);
+	const authentication = deferred();
+	reg.syncTarget = () => ({ isAuthenticated: async () => { await authentication.promise; throw new Error('authentication unavailable'); } });
+	await advance(120000);
+	assert.deepEqual(scheduler.status.lastPeriodicFullSync, { startTime: 120000, completedTime: null });
+	await advance(5000);
+	authentication.resolve(); await turn();
+	assert.deepEqual(scheduler.status, { kind: null, lastPeriodicFullSync: { startTime: 120000, completedTime: 125000 } });
+	assert.equal(errors.length, 1);
 });
 
 test('native failure does not self-requeue, while a new edit during failure remains scheduled', async t => {

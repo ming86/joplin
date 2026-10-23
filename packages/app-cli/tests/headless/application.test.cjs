@@ -3,8 +3,9 @@ const assert = require('node:assert/strict');
 const load = require('./loadSource.cjs');
 
 // Exercise the real application wiring with fake Joplin workers. These are not sync integration tests.
-function fixture() {
+function fixture(options = {}) {
 	const events = [];
+	const schedulerStatus = { kind: null, lastPeriodicFullSync: null };
 	const profileCalls = [];
 	const settingValues = {
 		'sync.target': 9,
@@ -44,10 +45,13 @@ function fixture() {
 		'@joplin/lib/models/BaseItem': { setLocalChangeHandler: handler => events.push(handler ? 'attach-local-sync' : 'detach-local-sync') },
 		'@joplin/utils/Logger': Logger,
 		'./headless/DatabaseDriver': Driver,
+		'./headless/HeadlessSyncScheduler': class { get status() { return schedulerStatus; } },
 		'./headless/revisions': { createHeadlessRevisionActions: () => ({}) },
 		'./headless/maintenance': { createHeadlessMaintenanceActions: () => ({}) },
 		'./headless/attachments': { default: () => ({}), __esModule: true },
 		'./headless/conflicts': () => ({}),
+		'./headless/trash': () => ({}),
+		'./headless/attachmentReferences': () => ({}),
 		'./headless/status': load('packages/app-cli/app/headless/status.ts'),
 		'@joplin/lib/ClipperServer': { instance: () => instance },
 		'@joplin/lib/services/DecryptionWorker': { instance: () => ({
@@ -64,7 +68,10 @@ function fixture() {
 		},
 		'@joplin/lib/registry.js': { reg: {
 			scheduleSync: async () => events.push('schedule-sync'),
-			setSyncSchedulingPolicy: factory => events.push(factory ? 'attach-sync-policy' : 'detach-sync-policy'),
+			setSyncSchedulingPolicy: factory => {
+				events.push(factory ? 'attach-sync-policy' : 'detach-sync-policy');
+				if (factory) factory(async () => {}, () => {});
+			},
 			syncSchedulingPending: () => false,
 			cancelTimers: async () => events.push('cancel-sync-timers'),
 			syncTarget: () => ({
@@ -83,7 +90,10 @@ function fixture() {
 			}),
 		} },
 		'./headless/runService': { runService: async operations => {
-			await operations.start(); operations.ready(); await operations.stop();
+			await options.beforeStart?.(instance.actions);
+			await operations.start();
+			await options.afterStart?.(instance.actions, schedulerStatus);
+			operations.ready(); await operations.stop();
 		} },
 	});
 	const { Application } = load('packages/app-cli/app/app.ts', mocks);
@@ -119,6 +129,26 @@ test('headless application wires one owner: initialize, listen, drain sync/worke
 	assert.equal(profileCalls.length, 4);
 	await app.stopHeadless();
 	assert.equal(events.filter(value => value === 'close-db').length, 1);
+});
+
+test('application status reads the scheduler instance installed after action registration', async () => {
+	const { app } = fixture({
+		async beforeStart(actions) {
+			const summary = await actions.headless().status();
+			assert.equal(summary.sync.kind, null);
+			assert.equal(summary.sync.lastPeriodicFullSync, null);
+		},
+		async afterStart(actions, schedulerStatus) {
+			schedulerStatus.kind = 'full';
+			schedulerStatus.lastPeriodicFullSync = { startTime: 1000, completedTime: null };
+			const summary = await actions.headless().status();
+			assert.equal(summary.sync.kind, 'full');
+			assert.deepEqual(summary.sync.lastPeriodicFullSync, schedulerStatus.lastPeriodicFullSync);
+		},
+	});
+	app.headlessConfig_ = { databaseKey: Buffer.alloc(32) };
+	app.headlessInitialized_ = true;
+	await app.runHeadlessService();
 });
 
 test('headless driver is opt-in and standard CLI cannot accidentally invoke the daemon', async () => {

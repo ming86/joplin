@@ -25,7 +25,7 @@ test('status distinguishes an absent report, live activity, and the retained rep
 	const summary = summarizeHeadlessState(current, 2, 100);
 	assert.equal(summary.accountEmail, null);
 	assert.deepEqual(summary.sync, {
-		running: false, pending: true,
+		running: false, pending: true, kind: null, lastPeriodicFullSync: null,
 		report: { state: 'in_progress', startTime: 1000, completedTime: 2000,
 			counters: { createLocal: 4, fetchingTotal: 8, fetchingProcessed: 6 }, errorCount: 1 },
 	});
@@ -34,6 +34,22 @@ test('status distinguishes an absent report, live activity, and the retained rep
 	assert.ok(!JSON.stringify(summary).includes('secret'));
 	current.syncReport.createLocal = 5;
 	assert.equal(summary.sync.report.counters.createLocal, 4);
+});
+
+test('status reads live scheduler observations independently of Redux and copies periodic timing', async () => {
+	const schedulerStatus = { kind: 'full', lastPeriodicFullSync: { startTime: 1000, completedTime: null } };
+	const actions = createHeadlessActionApi(state, async () => 0, async () => null, {}, () => schedulerStatus);
+	const active = await actions.headless().status();
+	assert.equal(active.sync.running, false, 'scheduler preparation can precede the Redux running flag');
+	assert.equal(active.sync.kind, 'full');
+	assert.deepEqual(active.sync.lastPeriodicFullSync, { startTime: 1000, completedTime: null });
+	schedulerStatus.kind = null;
+	schedulerStatus.lastPeriodicFullSync.completedTime = 2000;
+	assert.equal(active.sync.lastPeriodicFullSync.completedTime, null);
+	const settled = await actions.headless().status();
+	assert.equal(settled.sync.kind, null);
+	settled.sync.lastPeriodicFullSync.startTime = -1;
+	assert.equal(schedulerStatus.lastPeriodicFullSync.startTime, 1000);
 });
 
 test('decryption exposes only the active batch and existing missing-key and disabled-record indicators', () => {
