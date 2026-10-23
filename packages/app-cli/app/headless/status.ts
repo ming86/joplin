@@ -1,4 +1,5 @@
 import type { State } from '@joplin/lib/reducer';
+import type { HeadlessSyncSchedulerStatus } from './HeadlessSyncScheduler';
 
 /** Sync operations whose numeric counters contain no item or backend details. */
 const syncCounterNames = [
@@ -18,8 +19,12 @@ export interface HeadlessStatus {
 	serviceStartedAt: number;
 	/** Live scheduler flags and the latest report, without implying overall synchronization progress. */
 	sync: {
-		/** Whether synchronization is currently running. */
+		/** Whether the native synchronizer reports running through Redux. */
 		running: boolean;
+		/** Active scheduler request, including authentication/preparation; separate from running. Null while idle. */
+		kind: HeadlessSyncSchedulerStatus['kind'];
+		/** Last executed periodic full request in this process; completion means settled, including failure. */
+		lastPeriodicFullSync: HeadlessSyncSchedulerStatus['lastPeriodicFullSync'];
 		/** Whether the scheduler reports a pending synchronization. */
 		pending: boolean;
 		/** Latest report in this process, or null before the first report with a start time. */
@@ -90,6 +95,7 @@ export function summarizeHeadlessState(
 	disabledItemCount: number,
 	serviceStartedAt: number,
 	accountEmail: string | null = null,
+	schedulerStatus: HeadlessSyncSchedulerStatus = { kind: null, lastPeriodicFullSync: null },
 ): HeadlessStatus {
 	const sourceReport = state.syncReport;
 	const startTime = safeNumber(sourceReport.startTime);
@@ -105,6 +111,8 @@ export function summarizeHeadlessState(
 		serviceStartedAt,
 		sync: {
 			running: state.syncStarted,
+			kind: schedulerStatus.kind,
+			lastPeriodicFullSync: schedulerStatus.lastPeriodicFullSync ? { ...schedulerStatus.lastPeriodicFullSync } : null,
 			pending: state.syncPending,
 			report: startTime === null ? null : {
 				state: sourceReport.state === 'idle' || sourceReport.state === 'in_progress' ? sourceReport.state : null,
@@ -129,6 +137,7 @@ export function createHeadlessActionApi(
 	getDisabledItemCount: ()=> Promise<number>,
 	getAccountEmail: ()=> Promise<string | null>,
 	extraActions: Record<string, unknown> = Object.create(null),
+	getSchedulerStatus?: ()=> HeadlessSyncSchedulerStatus,
 ) {
 	const serviceStartedAt = Date.now();
 	// Null prototypes keep inherited object methods outside the service/action allowlist.
@@ -138,7 +147,7 @@ export function createHeadlessActionApi(
 			try {
 				const disabledItemCount = await getDisabledItemCount();
 				const accountEmail = await getAccountEmail();
-				return summarizeHeadlessState(getState(), disabledItemCount, serviceStartedAt, accountEmail);
+				return summarizeHeadlessState(getState(), disabledItemCount, serviceStartedAt, accountEmail, getSchedulerStatus?.());
 			} catch {
 				// REST returns exception messages, so acquisition errors must not expose database details.
 				throw new Error('Headless status unavailable.');

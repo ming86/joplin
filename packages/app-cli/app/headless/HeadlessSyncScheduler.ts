@@ -2,7 +2,21 @@ import Synchronizer, { SyncStartOptions } from '@joplin/lib/Synchronizer';
 import type { SyncSchedulingPolicy } from '@joplin/lib/registry';
 import shim from '@joplin/lib/shim';
 
+/** Native work selected by a coalesced scheduler request. */
 type SyncIntent = 'full' | 'upload' | 'poll';
+
+/** Process-local scheduler observations, separate from the synchronizer's Redux state. */
+export interface HeadlessSyncSchedulerStatus {
+	/** Active request kind, including authentication and preparation, or null while idle. */
+	kind: SyncIntent | null;
+	/** Most recent periodic full request that started executing; retained until the next one starts. */
+	lastPeriodicFullSync: {
+		/** Epoch milliseconds when the scheduler started executing the request. */
+		startTime: number;
+		/** Epoch milliseconds when execution settled, including failure, or null while active. */
+		completedTime: number | null;
+	} | null;
+}
 
 /** One coalesced native sync request, with callers waiting for that request's completion. */
 interface PendingSync {
@@ -14,6 +28,8 @@ interface PendingSync {
 	due: number;
 	/** Whether this request must respect the existing mobile-data policy. */
 	wifiCheck: boolean;
+	/** Whether the periodic full-sync timer contributed to this coalesced request. */
+	periodicFullSync: boolean;
 	/** Waiting callers, resolved together when this request finishes or is cancelled. */
 	resolve: { resolve: ()=> void; reject: (error: unknown)=> void }[];
 }
@@ -32,6 +48,8 @@ export default class HeadlessSyncScheduler implements SyncSchedulingPolicy {
 	private running_ = false;
 	/** Intent of the active request, used to pause remote polls during a full sync. */
 	private runningIntent_: SyncIntent | null = null;
+	/** Timing of the last executed periodic full request; other request kinds leave it intact. */
+	private lastPeriodicFullSync_: HeadlessSyncSchedulerStatus['lastPeriodicFullSync'] = null;
 	/** Shutdown prevents callbacks and synchronizer follow-ups from reviving the scheduler. */
 	private stopped_ = false;
 	/** Recurrent timers are installed once, even while one-shot callbacks are being handled. */
@@ -50,6 +68,14 @@ export default class HeadlessSyncScheduler implements SyncSchedulingPolicy {
 	/** A queued request remains pending even while another run is active. */
 	public get pending() { return this.request_ !== null; }
 
+	/** Copy live scheduler observations without exposing mutable timing state to callers. */
+	public get status(): HeadlessSyncSchedulerStatus {
+		return {
+			kind: this.runningIntent_,
+			lastPeriodicFullSync: this.lastPeriodicFullSync_ ? { ...this.lastPeriodicFullSync_ } : null,
+		};
+	}
+
 	/** Classify the explicit periodic poll separately from local upload requests. */
 	private intentFor(options: SyncStartOptions): SyncIntent {
 		if (options.remoteChangesOnly) return 'poll';
@@ -58,14 +84,20 @@ export default class HeadlessSyncScheduler implements SyncSchedulingPolicy {
 
 	/** Merge requests before any asynchronous work, so authentication cannot race another request. */
 	public schedule(delay: number, options: SyncStartOptions, wifiCheck: boolean): Promise<void> {
+		return this.scheduleRequest_(delay, options, wifiCheck, false);
+	}
+
+	/** Retain periodic identity when its full request joins already queued work. */
+	private scheduleRequest_(delay: number, options: SyncStartOptions, wifiCheck: boolean, periodicFullSync: boolean): Promise<void> {
 		if (this.stopped_) return Promise.resolve();
 		const due = Date.now() + delay;
 		const intent = this.intentFor(options);
 		const promise = new Promise<void>((resolve, reject) => {
 			if (!this.request_) {
-				this.request_ = { intent, options, due, wifiCheck, resolve: [{ resolve, reject }] };
+				this.request_ = { intent, options, due, wifiCheck, periodicFullSync, resolve: [{ resolve, reject }] };
 			} else {
 				this.mergeRequest_(this.request_, intent, options, due);
+				this.request_.periodicFullSync = this.request_.periodicFullSync || periodicFullSync;
 				// An explicit request may run even if a periodic request needs a Wi-Fi check.
 				this.request_.wifiCheck = this.request_.wifiCheck && wifiCheck;
 				this.request_.resolve.push({ resolve, reject });
@@ -132,6 +164,7 @@ export default class HeadlessSyncScheduler implements SyncSchedulingPolicy {
 		this.request_ = null;
 		this.running_ = true;
 		this.runningIntent_ = request.intent;
+		if (request.periodicFullSync) this.lastPeriodicFullSync_ = { startTime: Date.now(), completedTime: null };
 		if (request.intent === 'full') this.clearPollTimeout_();
 		this.pendingChanged_(false);
 		try {
@@ -140,6 +173,7 @@ export default class HeadlessSyncScheduler implements SyncSchedulingPolicy {
 		} catch (error) {
 			for (const caller of request.resolve) caller.reject(error);
 		} finally {
+			if (request.periodicFullSync) this.lastPeriodicFullSync_.completedTime = Date.now();
 			this.running_ = false;
 			this.runningIntent_ = null;
 			this.pendingChanged_(this.pending);
@@ -187,16 +221,16 @@ export default class HeadlessSyncScheduler implements SyncSchedulingPolicy {
 	/** Wait for the full request, including any coalesced work, before restarting its delay. */
 	private async runPeriodicFullSync_() {
 		try {
-			await this.scheduleRecurring_({});
+			await this.scheduleRecurring_({}, true);
 		} finally {
 			this.scheduleNextFullSync_();
 		}
 	}
 
 	/** Keep periodic errors reported while joining the same coalesced request. */
-	private async scheduleRecurring_(options: SyncStartOptions) {
+	private async scheduleRecurring_(options: SyncStartOptions, periodicFullSync = false) {
 		try {
-			await this.schedule(0, options, true);
+			await this.scheduleRequest_(0, options, true, periodicFullSync);
 		} catch {
 			this.reportError_();
 		}

@@ -101,6 +101,8 @@ export class Application extends BaseApplication {
 		const logger = new Logger();
 		logger.setLevel(Logger.LEVEL_NONE);
 		clipper.setLogger(logger);
+		// Status is registered before startup installs the scheduler; read the instance when called.
+		let syncScheduler: HeadlessSyncScheduler | null = null;
 		const extraActions = Object.assign(Object.create(null),
 			createHeadlessRevisionActions(),
 			createHeadlessMaintenanceActions(),
@@ -117,11 +119,15 @@ export class Application extends BaseApplication {
 				return fileApi.driver().api();
 			}),
 			extraActions,
+			() => syncScheduler?.status ?? { kind: null, lastPeriodicFullSync: null },
 		));
 		clipper.setDispatch(action => this.dispatch(action));
 		await runService({
 			start: async () => {
-				reg.setSyncSchedulingPolicy((run, pendingChanged) => new HeadlessSyncScheduler(run, pendingChanged, this.headlessConfig_.syncIntervalSeconds * 1000, () => this.stdout('headless: sync scheduling failed')));
+				reg.setSyncSchedulingPolicy((run, pendingChanged) => {
+					syncScheduler = new HeadlessSyncScheduler(run, pendingChanged, this.headlessConfig_.syncIntervalSeconds * 1000, () => this.stdout('headless: sync scheduling failed'));
+					return syncScheduler;
+				});
 				BaseItem.setLocalChangeHandler(() => {
 					void reg.scheduleSync(reg.syncAsYouTypeInterval(), { syncSteps: Synchronizer.partialSyncSteps }).catch(() => { this.stdout('headless: sync scheduling failed'); });
 				});
