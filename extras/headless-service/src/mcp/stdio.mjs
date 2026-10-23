@@ -1,4 +1,5 @@
 import { rpcError } from './session.mjs';
+import { logOperationError } from '../diagnostics.mjs';
 
 // Newline-delimited UTF-8 JSON with concurrent dispatch allows cancellation to be
 // read while an HTTP-backed tool is still in progress.
@@ -55,7 +56,10 @@ export function serveStdio(session, { input = process.stdin, output = process.st
 			catch { send(rpcError(null, -32700, 'Parse error')); continue; }
 			// This outer limit includes cheap protocol methods to bound pipelined input.
 			if (pending.size >= 64 && message?.method !== 'notifications/cancelled') { send(rpcError(null, -32000, 'Too many pending requests')); void close(true); return; }
-			const operation = session.handle(message).then(send).catch(() => send(rpcError(null, -32603, 'Internal error')));
+			const operation = session.handle(message).then(send).catch(error => {
+				logOperationError(error, { operation: 'stdio' });
+				return send(rpcError(null, -32603, 'Internal error'));
+			});
 			pending.add(operation); void operation.finally(() => pending.delete(operation));
 		}
 	}

@@ -2,6 +2,7 @@ import http from 'node:http';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { createMcpSession, modernProtocolVersion, protocolVersions, rpcError, unsupportedProtocolVersion } from './session.mjs';
 import { createNoteFileResources } from './note-file-resources.mjs';
+import { logOperationError } from '../diagnostics.mjs';
 
 /** Preserve the session concurrency limit across otherwise independent POSTs. */
 const maxDispatches = 8;
@@ -160,7 +161,10 @@ export async function startMcpHttpServer({ service, allowWrites = false, bearerT
 			try {
 				await service.listNoteSummaries({ limit: 1 }, controller.signal);
 				respond(res, 200, { ready: true });
-			} catch { respond(res, 503, { ready: false }); }
+			} catch (error) {
+				logOperationError(error, { operation: 'readyz' });
+				respond(res, 503, { ready: false });
+			}
 			finally { probes.delete(controller); }
 			return;
 		}
@@ -202,12 +206,18 @@ export async function startMcpHttpServer({ service, allowWrites = false, bearerT
 			const errorCode = response.error?.code;
 			const status = errorCode === -32022 ? 400 : modern && errorCode === -32601 ? 404 : modern && errorCode === -32602 ? 400 : 200;
 			respond(res, status, json);
-		} catch { respond(res, 200, rpcError(message.id ?? null, -32603, 'Internal error')); }
+		} catch (error) {
+			logOperationError(error, { operation: 'http_mcp' });
+			respond(res, 200, rpcError(message.id ?? null, -32603, 'Internal error'));
+		}
 		finally { session.close(); sessions.delete(session); }
 	}
 
 	const server = http.createServer((req, res) => {
-		const operation = handle(req, res).catch(() => respond(res, 500, { error: 'internal_error' }));
+		const operation = handle(req, res).catch(error => {
+			logOperationError(error, { operation: 'http_request' });
+			respond(res, 500, { error: 'internal_error' });
+		});
 		pending.add(operation);
 		void operation.finally(() => pending.delete(operation));
 	});

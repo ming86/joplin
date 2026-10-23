@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { ServiceError } from '../errors.mjs';
+import { logOperationError } from '../diagnostics.mjs';
 import { registerRevisionTools } from './revision-tools.mjs';
 import { registerConflictTools } from './conflict-tools.mjs';
 import { registerTrashTools } from './trash-tools.mjs';
@@ -567,6 +568,8 @@ export function createTools(service, { allowWrites = false, noteFileResources, r
 				}
 				return toolResult(await present(name, value));
 			} catch (error) {
+				// Report infrastructure and unexpected failures while keeping public tool errors stable.
+				logOperationError(error, { tool: name });
 				const known = error instanceof ServiceError;
 				const noteFileInputError = known && name === 'create_note'
 					&& (error.code.startsWith('note_file_') || error.code === 'invalid_note_file_input');

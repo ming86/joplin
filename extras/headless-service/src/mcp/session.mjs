@@ -1,5 +1,6 @@
 import { createTools, toolResult } from './tools.mjs';
 import { ServiceError } from '../errors.mjs';
+import { logOperationError } from '../diagnostics.mjs';
 import { createNoteFileResources } from './note-file-resources.mjs';
 
 /** Protocol version selected independently by metadata on each modern request. */
@@ -144,7 +145,9 @@ export function createMcpSession(service, { allowWrites = false, maxConcurrent =
 			try {
 				const result = await tools.call(params.name, params.arguments ?? {}, controller.signal);
 				return modern && context.cancelled ? null : success(id, completeResult(result, version));
-			} catch {
+			} catch (error) {
+				// A failure escaping the tool wrapper still gets its tool name before the safe RPC result.
+				logOperationError(error, { tool: params.name, operation: 'mcp_tools_call' });
 				return modern && context.cancelled ? null : success(id, completeResult(toolResult({ error: { code: 'operation_failed' } }, true), version));
 			}
 			finally { active.delete(id); }

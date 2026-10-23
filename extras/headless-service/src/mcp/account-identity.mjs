@@ -1,3 +1,5 @@
+import { logOperationError } from '../diagnostics.mjs';
+
 /** Successful profile emails and pending lookups shared by all MCP sessions for a service. */
 const identities = new WeakMap();
 
@@ -53,7 +55,11 @@ export function createAccountResultPresenter(service) {
 					const email = profileEmail(status);
 					if (email !== null) identity.email = email;
 					return identity.email;
-				}, () => identity.email)
+				}, error => {
+					// Status only supplies optional identity, so report its failure and keep the operation usable.
+					logOperationError(error, { operation: 'account_identity' });
+					return identity.email;
+				})
 				.finally(() => { identity.pending = null; });
 		}
 		return identity.pending;
