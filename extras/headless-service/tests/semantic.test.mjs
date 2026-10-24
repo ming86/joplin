@@ -123,6 +123,39 @@ test('native note chunk replacement rolls back on invalid vector and stale revis
 	await f.store.enqueue([noteId]);assert.equal(await f.store.publish(n,row.revision,'new',[]),false);
 	assert.equal((await f.store.rank([1,0])).length,0); // pending notes not served
 });
+test('native rankChunks returns stable chunk hits and applies note and notebook scopes before top-k',native,async t=>{
+	const f=await fixture(t); const second='c'.repeat(32),third='d'.repeat(32),otherNotebook='e'.repeat(32);
+	const records=[
+		{...note,id:noteId,parent_id:folderId},
+		{...note,id:second,parent_id:folderId},
+		{...note,id:third,parent_id:otherNotebook},
+	];
+	await f.store.enqueue(records.map(record=>record.id));
+	for (const record of records) {
+		const state=await f.store.state(record.id);
+		const vectors=record.id===noteId?[[1,0],[1,0]]:record.id===second?[[1,0],[0,1]]:[[1,0]];
+		const values=vectors.map((vector,ordinal)=>({ordinal,start:ordinal*10,end:ordinal*10+10,text:`${record.id}-${ordinal}`,hash:`content-${record.id}-${ordinal}`,vector}));
+		await f.store.publish(record,state.revision,`source-${record.id}`,values);
+	}
+
+	const ranked=await f.store.rankChunks([1,0],{limit:10});
+	assert.deepEqual(ranked.map(candidate=>[candidate.id,candidate.chunk.ordinal]),[
+		[noteId,0],[noteId,1],[second,0],[third,0],[second,1],
+	]);
+	assert.equal(ranked[0].contentHash,`content-${noteId}-0`);
+	assert.deepEqual(ranked[0].chunk,{ordinal:0,start:0,end:10,offsetUnit:'utf8-byte'});
+	assert.deepEqual((await f.store.rankChunks([1,0],{limit:2})).map(candidate=>candidate.id),[noteId,noteId]);
+	assert.deepEqual((await f.store.rankChunks([1,0],{limit:1,noteIds:new Set([second])})).map(candidate=>candidate.id),[second]);
+	assert.deepEqual((await f.store.rankChunks([1,0],{limit:1,notebookId:otherNotebook})).map(candidate=>candidate.id),[third]);
+	assert.deepEqual(await f.store.rankChunks([1,0],{noteIds:new Set()}),[]);
+	assert.deepEqual((await f.store.rankChunks([1,0],{noteIds:new Set([second]),minScore:0.1})).map(candidate=>candidate.chunk.ordinal),[0]);
+
+	const noteRank=await f.store.rank([1,0]);
+	assert.deepEqual(noteRank.map(candidate=>candidate.id),[noteId,second,third]);
+	assert.deepEqual(Object.keys(noteRank[0]).sort(),['chunk','excerpt','hash','id','score']);
+	await assert.rejects(f.store.rankChunks([1,0],{signal:AbortSignal.abort()}),error=>error.code==='request_cancelled');
+	await assert.rejects(f.store.rank([1,0],100,undefined,AbortSignal.abort()),error=>error.code==='request_cancelled');
+});
 test('native index updates/deletes/excludes locked notes and avoids re-embedding unchanged content',native,async t=>{
 	const f=await fixture(t);await f.engine.runOnce();const count=f.calls();
 	await f.engine.runOnce({rescan:true});assert.equal(f.calls(),count);

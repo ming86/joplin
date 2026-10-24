@@ -119,6 +119,27 @@ test('complete backend collections continue beyond 50 pages until has_more is fa
 	assert.deepEqual(pages, Array.from({ length: 51 }, (_, index) => index + 1));
 });
 
+test('tag note IDs read only IDs across every page and honor cancellation', async t => {
+	const tagId = 'd'.repeat(32);
+	const noteIds = [noteId, 'e'.repeat(32)];
+	const pages = [];
+	const url = await server(t, (req, res) => {
+		const target = new URL(req.url, 'http://local');
+		assert.equal(target.pathname, `/tags/${tagId}/notes`);
+		assert.equal(target.searchParams.get('fields'), 'id');
+		assert.equal(target.searchParams.get('limit'), '100');
+		const page = Number(target.searchParams.get('page'));
+		pages.push(page);
+		res.end(JSON.stringify({ items: [{ id: noteIds[page - 1] }], has_more: page === 1 }));
+	});
+	const client = createJoplinClient({ baseUrl: url, token: 'private' });
+
+	assert.deepEqual(await client.getTagNoteIds(tagId), noteIds);
+	assert.deepEqual(pages, [1, 2], 'the final page is read before returning all note IDs');
+	await assert.rejects(client.getTagNoteIds(tagId, AbortSignal.abort()), code('request_cancelled'));
+	assert.deepEqual(pages, [1, 2], 'a pre-cancelled read sends no request');
+});
+
 test('headless status uses its fixed authenticated action, allowlists the summary, and fails explicitly', async t => {
 	let fail = false, accountEmail = 'alice@example.test', syncRunning = true, syncKind = 'full';
 	let periodicTiming = { startTime: 1600, completedTime: 1800 };

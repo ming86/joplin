@@ -358,6 +358,17 @@ export function createJoplinClient(config) {
 			const tags = await fetchAllPages(`notes/${identifier(noteId)}/tags`, { fields: 'id,title,encryption_applied' }, tagResult, signal);
 			return tags.filter(tag => tag.encryption_applied === 0).map(({ id, title }) => ({ id, title }));
 		},
+		/** Lists every note ID attached to a tag without fetching note bodies.
+		 * @param {string} tagId The 32-character Joplin tag ID.
+		 * @param {AbortSignal} [signal] Cancels the paginated read.
+		 * @returns {Promise<string[]>} Note IDs in API page order.
+		 */
+		async getTagNoteIds(tagId, signal) {
+			return fetchAllPages(`tags/${identifier(tagId)}/notes`, { fields: 'id' }, data => {
+				requireValue(data && typeof data === 'object' && typeof data.id === 'string' && /^[a-f0-9]{32}$/.test(data.id), 'invalid_backend_response');
+				return data.id;
+			}, signal);
+		},
 		/** Lists every decrypted tag. */
 		async listAllTags(signal) {
 			const tags = await fetchAllPages('tags', { fields: 'id,title,encryption_applied' }, tagResult, signal);

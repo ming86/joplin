@@ -8,6 +8,25 @@ import { chunkFingerprint } from './chunks.mjs';
 
 const require = createRequire(import.meta.url);
 const appId = 1246971185;
+/** Maximum rows loaded by one exact vector-ranking query. */
+const rankBatchSize = 200;
+
+/** Stop a ranking scan with the same public cancellation code used by the service.
+ * @param {AbortSignal | undefined} signal Caller cancellation signal.
+ */
+function throwIfRankingAborted(signal) {
+	if (signal?.aborted) throw new ServiceError('request_cancelled');
+}
+
+/** Order higher scores first, then note ID and (for chunk results) ordinal.
+ * @param {{id: string, score: number, chunk: {ordinal: number}}} a First candidate.
+ * @param {{id: string, score: number, chunk: {ordinal: number}}} b Second candidate.
+ * @param {boolean} byChunk Whether chunk ordinal is the final tie-breaker.
+ * @returns {number} Comparator result for Array#sort.
+ */
+function compareRankedCandidates(a, b, byChunk) {
+	return b.score - a.score || a.id.localeCompare(b.id) || (byChunk ? a.chunk.ordinal - b.chunk.ordinal : 0);
+}
 
 // One owner per semantic DB. This is deliberately independent of Joplin's DB
 // and imports no Joplin internals. All connection work is queued so await points
@@ -31,11 +50,14 @@ export async function openSemanticStore({ filename, accountId, key, sqliteModule
 	let tail = Promise.resolve(); let closed = false;
 	function queued(work) {
 		if (closed) return Promise.reject(new ServiceError('semantic_store_closed'));
-		const job = tail.then(work).catch(error => { throw error instanceof ServiceError ? error : new ServiceError('semantic_store_error'); });
+		const job = tail.then(work).catch(error => { throw error instanceof ServiceError ? error : new ServiceError('semantic_store_error', false, undefined, { cause: error }); });
 		tail = job.catch(() => {}); return job;
 	}
 	try {
-		try { fs.mkdirSync(lease, { mode: 0o700 }); ownsLease = true; } catch { throw new ServiceError('semantic_store_in_use'); }
+		try { fs.mkdirSync(lease, { mode: 0o700 }); ownsLease = true; } catch (error) {
+			if (error?.code === 'EEXIST') throw new ServiceError('semantic_store_in_use', false, undefined, { cause: error });
+			throw error;
+		}
 		fs.writeFileSync(path.join(lease, 'owner.json'), JSON.stringify({ pid: process.pid }), { mode: 0o600 });
 		if (!fs.existsSync(filename)) fs.closeSync(fs.openSync(filename, 'wx', 0o600));
 		fs.chmodSync(filename, 0o600);
@@ -82,6 +104,60 @@ export async function openSemanticStore({ filename, accountId, key, sqliteModule
 			await run(`INSERT INTO note_state(note_id,generation,state,revision) VALUES(?,?,'pending',1)
 				ON CONFLICT(note_id) DO UPDATE SET state='pending',revision=revision+1,error_code=NULL,retry_after=NULL,observed_fingerprint=NULL`, [id, generation]);
 		}
+		/**
+		 * Scan vectors in fixed-size row batches while retaining only the current top results.
+		 * Note ranking keeps one best chunk per note; chunk ranking keeps each eligible chunk.
+		 * @param {number[]} vector Query vector in the store's embedding space.
+		 * @param {object} options Ranking and filtering options.
+		 * @param {number} options.limit Maximum number of returned results.
+		 * @param {string} [options.notebookId] Restricts rows in SQL before scanning.
+		 * @param {Set<string>} [options.noteIds] Restricts scoring to these note IDs.
+		 * @param {number} options.minScore Minimum cosine score for chunk ranking.
+		 * @param {AbortSignal} [options.signal] Cancels the scan between row batches.
+		 * @param {boolean} options.byChunk Whether results represent individual chunks.
+		 * @returns {Promise<Array<object>>} Sorted candidates in the existing store result shape.
+		 */
+		async function rankVector(vector, { limit = 100, notebookId, noteIds, minScore = -1, signal, byChunk = false }) {
+			requireValue(vector.length === space.dimensions && vector.every(Number.isFinite), 'invalid_embedding_response');
+			const norm = Math.hypot(...vector); requireValue(norm > 0 && Number.isFinite(norm), 'invalid_embedding_response');
+			if (notebookId) identifier(notebookId);
+			if (noteIds !== undefined) requireValue(noteIds instanceof Set, 'invalid_configuration');
+			if (byChunk) {
+				requireValue(Number.isSafeInteger(limit) && limit >= 0 && Number.isFinite(minScore), 'invalid_configuration');
+			}
+			throwIfRankingAborted(signal);
+			if (noteIds?.size === 0) return [];
+			let after = 0; const best = new Map();
+			while (true) {
+				throwIfRankingAborted(signal);
+				const rows = await all(`SELECT c.rowid AS row_id,c.*,n.source_fingerprint FROM chunks c JOIN note_state n ON c.note_id=n.note_id
+					WHERE n.state='indexed' AND c.rowid>? ${notebookId ? 'AND n.parent_id=?' : ''} ORDER BY c.rowid LIMIT ${rankBatchSize}`, notebookId ? [after, notebookId] : [after]);
+				throwIfRankingAborted(signal);
+				if (!rows.length) break;
+				// Apply the caller's allowed-ID scope before decoding or scoring stored vectors.
+				const eligibleRows = noteIds === undefined ? rows : rows.filter(row => noteIds.has(row.note_id));
+				for (const row of eligibleRows) {
+					let dot = 0, squared = 0;
+					for (let i = 0; i < vector.length; i++) { const v = row.vector.readFloatLE(i * 4); dot += vector[i] * v; squared += v * v; }
+					const score = dot / (norm * Math.sqrt(squared)); if (!Number.isFinite(score)) throw new ServiceError('invalid_stored_vector');
+					if (byChunk && score < minScore) continue;
+					const candidate = {
+						id: row.note_id, score, hash: row.source_fingerprint, excerpt: row.excerpt,
+						chunk: { ordinal: row.ordinal, start: row.start_offset, end: row.end_offset, offsetUnit: 'utf8-byte' },
+					};
+					if (byChunk) candidate.contentHash = row.content_hash;
+					const key = byChunk ? row.row_id : row.note_id;
+					const prior = best.get(key);
+					if (!prior || score > prior.score) best.set(key, candidate);
+				}
+				after = rows.at(-1).row_id;
+				if (best.size > limit) {
+					const kept = [...best.entries()].sort(([, a], [, b]) => compareRankedCandidates(a, b, byChunk)).slice(0, limit);
+					best.clear(); for (const [key, candidate] of kept) best.set(key, candidate);
+				}
+			}
+			return [...best.values()].sort((a, b) => compareRankedCandidates(a, b, byChunk)).slice(0, limit);
+		}
 		return Object.freeze({
 			accountId, generation, spaceFingerprint: fingerprint,
 			info: () => queued(async () => ({ ...(await one('SELECT * FROM sync_state')), counts: await all('SELECT state,count(*) AS count FROM note_state GROUP BY state'), usage: await one('SELECT * FROM usage'), runtime: await one('SELECT * FROM runtime_state') })),
@@ -116,34 +192,18 @@ export async function openSemanticStore({ filename, accountId, key, sqliteModule
 			pause: (until, code) => queued(() => run('UPDATE runtime_state SET retry_after=?,last_error=?', [until, code])),
 			usage: (tokens, bytes) => queued(() => run('UPDATE usage SET input_tokens=input_tokens+?,prepared_bytes=prepared_bytes+?,requests=requests+1', [tokens ?? 0, bytes])),
 			// Exact, bounded-memory scan. Stored vectors never leave this process.
-			rank: (vector, limit = 100, notebookId) => queued(async () => {
-				requireValue(vector.length === space.dimensions && vector.every(Number.isFinite), 'invalid_embedding_response');
-				const norm = Math.hypot(...vector); requireValue(norm > 0 && Number.isFinite(norm), 'invalid_embedding_response');
-				if (notebookId) identifier(notebookId);
-				let after = 0; const best = new Map();
-				while (true) {
-					const rows = await all(`SELECT c.rowid AS row_id,c.*,n.source_fingerprint FROM chunks c JOIN note_state n ON c.note_id=n.note_id
-						WHERE n.state='indexed' AND c.rowid>? ${notebookId ? 'AND n.parent_id=?' : ''} ORDER BY c.rowid LIMIT 200`, notebookId ? [after, notebookId] : [after]);
-					if (!rows.length) break;
-					for (const row of rows) {
-						let dot = 0, squared = 0;
-						for (let i = 0; i < vector.length; i++) { const v = row.vector.readFloatLE(i * 4); dot += vector[i] * v; squared += v * v; }
-						const score = dot / (norm * Math.sqrt(squared)); if (!Number.isFinite(score)) throw new ServiceError('invalid_stored_vector');
-						if (!best.has(row.note_id) || score > best.get(row.note_id).score) best.set(row.note_id, { id: row.note_id, score, hash: row.source_fingerprint, excerpt: row.excerpt, chunk: { ordinal: row.ordinal, start: row.start_offset, end: row.end_offset, offsetUnit: 'utf8-byte' } });
-					}
-					after = rows.at(-1).row_id;
-					if (best.size > limit) {
-						const kept = [...best.values()].sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)).slice(0, limit);
-						best.clear(); for (const row of kept) best.set(row.id, row);
-					}
-				}
-				return [...best.values()].sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)).slice(0, limit);
-			}),
+			/** Keep one best chunk for each matching note. The fourth argument optionally cancels the scan. */
+			rank: (vector, limit = 100, notebookId, signal) => queued(() => rankVector(vector, { limit, notebookId, signal })),
+			/**
+			 * Return top individual chunks with optional notebook, note-ID, score, and cancellation filters.
+			 * Each candidate preserves the rank fields and adds contentHash from the persisted chunk.
+			 */
+			rankChunks: (vector, { limit = 100, notebookId, noteIds, minScore = -1, signal } = {}) => queued(() => rankVector(vector, { limit, notebookId, noteIds, minScore, signal, byChunk: true })),
 			async close() { if (closed) return; closed = true; await tail; try { await new Promise((resolve, reject) => db.close(error => error ? reject(error) : resolve())); } finally { release(); } },
 		});
 	} catch (error) {
 		key = undefined;
 		if (db) await new Promise(resolve => db.close(() => resolve())); release();
-		throw error instanceof ServiceError ? error : new ServiceError('semantic_store_unavailable');
+		throw error instanceof ServiceError ? error : new ServiceError('semantic_store_unavailable', false, undefined, { cause: error });
 	}
 }
