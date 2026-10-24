@@ -2,8 +2,14 @@ import { ServiceError } from './errors.mjs';
 
 /** Errors already reported at an inner operation boundary. */
 const loggedErrors = new WeakSet();
-/** Public infrastructure failures that warrant diagnostics without request metadata. */
-const diagnosticCodes = new Set(['backend_unavailable', 'backend_request_failed', 'backend_authorization_failed', 'invalid_backend_response', 'write_outcome_unknown', 'operation_failed', 'internal_error', 'note_file_download_failed']);
+/** Public backend and semantic infrastructure failures that warrant diagnostics even without request metadata. */
+const diagnosticCodes = new Set([
+	'backend_unavailable', 'backend_request_failed', 'backend_authorization_failed', 'invalid_backend_response',
+	'write_outcome_unknown', 'operation_failed', 'internal_error', 'note_file_download_failed',
+	'semantic_startup_unavailable',
+	'semantic_store_unavailable', 'semantic_store_error', 'invalid_embedding_response',
+	'embedding_space_mismatch', 'invalid_stored_vector',
+]);
 /** Fixed runtime messages that contain no request or response data. */
 const runtimeMessages = new Set(['fetch failed', 'terminated', 'The operation was aborted.', 'This operation was aborted', 'The operation was aborted due to timeout', 'The operation was aborted']);
 

@@ -3,6 +3,7 @@ import { createAccountRegistry, bindEmbeddingProvider } from '../../index.mjs';
 import { createJoplinClient } from '../joplin.mjs';
 import { loadMcpConfig, readFile } from '../mcp/config.mjs';
 import { ServiceError, requireValue } from '../errors.mjs';
+import { logOperationError } from '../diagnostics.mjs';
 import { openSemanticStore } from './store.mjs';
 import { createEmbeddingTransport } from './http.mjs';
 import { createSemanticEngine } from './engine.mjs';
@@ -40,6 +41,11 @@ export async function openMcpRuntime(filename, { background = true, transport = 
 		} catch (error) { await store.close(); throw error; }
 		close = () => engine.close(); if (background) engine.start();
 	} catch (error) {
+		// Startup failures are reported here once; the unavailable engine keeps core search usable.
+		const diagnosticError = new ServiceError(
+			'semantic_startup_unavailable', false, 'semantic_startup_unavailable', { cause: error },
+		);
+		logOperationError(diagnosticError, { operation: 'semantic_startup' });
 		const reason = error instanceof ServiceError ? error.code : 'semantic_startup_unavailable';
 		const state = () => ({ state: 'unavailable', reason });
 		const core = loaded.service;
@@ -53,6 +59,8 @@ export async function openMcpRuntime(filename, { background = true, transport = 
 				}
 				return { accountId: account.id, requestedMode: 'semantic', executedMode: null, semantic: state(), items: [], hasMore: false };
 			},
+			/** Dedicated chunk retrieval cannot return results while startup is unavailable. */
+			async searchChunks() { throw new ServiceError(reason); },
 		};
 	}
 	const registry = createAccountRegistry([account], { makeSemanticBackend: () => engine });
