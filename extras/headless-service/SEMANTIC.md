@@ -10,6 +10,8 @@ Start with the existing encrypted core and its private API. Copy `scripts/semant
 
 The sample describes one account. For multiple accounts, retain a distinct core profile, API token, semantic database path and semantic key for each account. Keep each account's index in its own derived database.
 
+The checked-in example uses a five-minute reconciliation interval. The prepared native deployment overrides that to 30 minutes after the previous reconciliation completes. Both use five-second local event polling; this reads the core's event API and does not run Joplin synchronization every five seconds. The configured core's remote polling remains 20 seconds and its periodic full sync remains 120 seconds.
+
 Generate **a separate 32-byte random semantic DB key** as 64 hexadecimal characters plus an optional newline, and deliver it as an owner-only file (`0600`) through your existing secret-delivery mechanism. Keep this key/recovery copy separate from index backups; file permissions alone do not protect a copied key beside its DB. Do not reuse, regenerate or reset the existing Joplin E2EE identity or core database key. The MCP process needs its semantic DB key and the core API token, not the core's database or E2EE key.
 
 Set the archive's `LD_LIBRARY_PATH` as described in its `README-run.txt`. Use `semantic.sqliteModule`, or the existing `JOPLIN_HEADLESS_SQLITE_MODULE`, to identify the complete compatible SQLCipher-enabled sqlite3 Node package. There is no plaintext/native-binding fallback and no `yarn install` step.
@@ -64,13 +66,25 @@ Hybrid uses reciprocal-rank fusion (`1/(60+rank)`) over semantic candidates and 
 
 Current semantic/hybrid output is a top-k window, **page 1 only**, at most 100 candidates per branch and 100 returned notes. `hasMore: false` prevents an unsupported page-2 loop; `candidateWindow` and `truncated` describe the result bound. Stale candidates removed during validation can reduce returned count; rerun after indexing catches up. This is not exhaustive filtered search over all matching lexical notes. Use keyword search's normal pagination when that is needed.
 
+The separate MCP tool `semantic_search_notes` returns `results` with chunk rows and `total`, the number of returned matching chunks, rather than one note row per note. It accepts an ordinary nonblank free-text `query`, optional `notebook_id` or `tag_id` (not both), and `relevance` (`strict`, `normal` by default, or `loose`). It does not parse Joplin search filters. A scope is applied before ranked selection; tags restrict note membership but tag text is not embedded. Results contain the source `note_id`, title, notebook ID, chunk index, the full reconstructed matching `chunk_text` including any title context, and its cosine `score` rounded to three decimals. A note may appear more than once when multiple chunks match. Use `read_note` with a result's `note_id` to inspect the full current note.
+
+The presets use these starting floors and result caps for the configured Granite 384-dimensional space:
+
+| Relevance | Cosine floor | Maximum chunks | Relevant pairs returned in the synthetic check | Non-relevant pairs returned |
+| --- | ---: | ---: | ---: | ---: |
+| `strict` | 0.88 | 5 | 15 of 17 | 0 |
+| `normal` | 0.85 | 10 | 17 of 17 | 5 |
+| `loose` | 0.80 | 20 | 17 of 17 | 13 |
+
+The 2026-10-24 check used 20 synthetic chunks and 10 English, Chinese and Malay queries, with 17 relevant and 183 non-relevant query/chunk pairs. Result caps did not bind. These floors are model-specific starting settings from a small synthetic sample, not universal thresholds or probability/confidence values; the score is cosine similarity. No personal corpus was indexed for this check.
+
 Status distinguishes unavailable, indexing, ready and degraded, and includes pending/indexed/failed counts, last reconciliation, known successful usage and retry time. Index-ready is not proof of global synchronization or perpetual provider availability. Provider failures on an individual query are reflected in that result. Usage reports known successful response tokens, prepared bytes and successful calls; it excludes tokens the provider may charge for failed/ambiguous requests. No corpus cost/free-tier sufficiency has been measured here.
 
 ## Tests and real-provider acceptance
 
 The native tests use the real encrypted Joplin core and real SQLCipher storage, but a deterministic HTTP embedding fixture. They validate wiring/consistency/encryption, not live model quality. Existing core/MCP tests remain regressions.
 
-Targeted live validation passed on base `2ba0ff820` with disposable Phase 5 fleet accounts `acct-a` and `acct-b`, using OVMS `granite-embedding-311m-multilingual-r2` at fixed 384 dimensions. The public probe returned 384-dimensional vectors for 8 requests, with synthetic top-1 results at 4/4. Indexing reached ready with 36 notes and 0 failures for `acct-a`, and 2 notes and 0 failures for `acct-b`. A known synthetic web note ranked first in semantic and hybrid search for both accounts; keyword ranked each target second, and cross-account targets were absent. Both old BGE derived databases were removed while the fleet was stopped; core profiles and keys were untouched. These results cover the tested synthetic data and account separation only, not broader model quality, production-corpus relevance or endpoint durability.
+Historical disposable-account validation (2026-09-27) passed on base `2ba0ff820` with Phase 5 fleet accounts `acct-a` and `acct-b`, using OVMS `granite-embedding-311m-multilingual-r2` at fixed 384 dimensions. The public probe returned 384-dimensional vectors for 8 requests, with synthetic top-1 results at 4/4. Indexing reached ready with 36 notes and 0 failures for `acct-a`, and 2 notes and 0 failures for `acct-b`. A known synthetic web note ranked first in semantic and hybrid search for both accounts; keyword ranked each target second, and cross-account targets were absent. Both old BGE derived databases were removed while the fleet was stopped; core profiles and keys were untouched. This tested disposable accounts and synthetic targets before the current dedicated chunk-search integration; it does not establish personal-corpus quality, current native deployment state or endpoint durability.
 
 First use public text only:
 
