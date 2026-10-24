@@ -10,7 +10,7 @@ Start with the existing encrypted core and its private API. Copy `scripts/semant
 
 The sample describes one account. For multiple accounts, retain a distinct core profile, API token, semantic database path and semantic key for each account. Keep each account's index in its own derived database.
 
-The checked-in example uses a five-minute reconciliation interval. The prepared native deployment overrides that to 30 minutes after the previous reconciliation completes. Both use five-second local event polling; this reads the core's event API and does not run Joplin synchronization every five seconds. The configured core's remote polling remains 20 seconds and its periodic full sync remains 120 seconds.
+The checked-in example uses a five-minute reconciliation interval. The active native deployment overrides that to 30 minutes after the previous reconciliation completes. Both use five-second local event polling; this reads the core's event API and does not run Joplin synchronization every five seconds. The configured core's remote polling remains 20 seconds and its periodic full sync remains 120 seconds.
 
 Generate **a separate 32-byte random semantic DB key** as 64 hexadecimal characters plus an optional newline, and deliver it as an owner-only file (`0600`) through your existing secret-delivery mechanism. Keep this key/recovery copy separate from index backups; file permissions alone do not protect a copied key beside its DB. Do not reuse, regenerate or reset the existing Joplin E2EE identity or core database key. The MCP process needs its semantic DB key and the core API token, not the core's database or E2EE key.
 
