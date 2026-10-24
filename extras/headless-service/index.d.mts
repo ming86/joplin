@@ -632,6 +632,8 @@ export interface JoplinBackend {
     updateTag(id: string, input: { title: string }, signal?: AbortSignal): Promise<Tag>;
     /** Return safe tag metadata currently attached to a note. */
     getNoteTags?(noteId: string, signal?: AbortSignal): Promise<Tag[]>;
+    /** Return all current note IDs carrying a tag, following every backend page. */
+    getTagNoteIds?(tagId: string, signal?: AbortSignal): Promise<string[]>;
     /** Return every safe tag reported by the backend. */
     listAllTags?(signal?: AbortSignal): Promise<Tag[]>;
     /** Move a note to Trash through the backend. */
@@ -830,7 +832,52 @@ export interface SearchResult {
     total?: number;
     candidateWindow?: number; truncated?: boolean; notebookId?: string;
 }
-export interface SemanticBackend { readonly accountId: string; status(): SemanticStatus; search(input: SearchInput, signal?: AbortSignal): Promise<SearchResult>; }
+/** Relevance preset accepted by the dedicated ranked-chunk search. */
+export type SemanticSearchRelevance = 'strict' | 'normal' | 'loose';
+/** Account-service input for searching semantic chunks with at most one scope. */
+export interface SemanticChunkSearchInput {
+    /** Free-text meaning query; Joplin query syntax is not parsed. */
+    query: string;
+    /** Restrict results to this notebook ID. */
+    notebookId?: string;
+    /** Restrict results to notes carrying this tag ID. */
+    tagId?: string;
+    /** Similarity cutoff and result-count preset; defaults to `normal`. */
+    relevance?: SemanticSearchRelevance;
+}
+/** One current readable source chunk ranked by semantic similarity. */
+export interface SemanticChunkSearchItem {
+    /** Joplin ID of the source note. */
+    noteId: string;
+    /** Current source note title. */
+    title: string;
+    /** Current source notebook ID, or undefined when the note has no parent notebook. */
+    notebookId: string | undefined;
+    /** Zero-based ordinal of the matching chunk within the note. */
+    chunkIndex: number;
+    /** Full reconstructed text of the matching chunk. */
+    chunkText: string;
+    /** Similarity score returned by the configured embedding space. */
+    score: number;
+}
+/** Ranked matching chunks returned by the semantic engine. */
+export interface SemanticChunkSearchResult {
+    /** Matching chunks in descending relevance order. */
+    items: SemanticChunkSearchItem[];
+    /** Number of chunks included in `items`. */
+    total: number;
+}
+/** Account-local semantic backend used for status and note/chunk retrieval. */
+export interface SemanticBackend {
+    /** Local account binding ID that owns this backend. */
+    readonly accountId: string;
+    /** Read current semantic indexing state. */
+    status(): SemanticStatus;
+    /** Search readable notes and return note-level search rows. */
+    search(input: SearchInput, signal?: AbortSignal): Promise<SearchResult>;
+    /** Search readable notes and return ranked matching chunks. */
+    searchChunks(input: SemanticChunkSearchInput, signal?: AbortSignal): Promise<SemanticChunkSearchResult>;
+}
 
 export type AccountNote = Note & { accountId: string };
 /** Account note enriched with safe notebook and tag labels. */
@@ -970,6 +1017,8 @@ export interface AccountService {
     updateAttachment(resourceId: string, input: UpdateAttachmentInput, signal?: AbortSignal): Promise<AccountAttachment>;
     changes(cursor?: string, signal?: AbortSignal): Promise<Page<Change> & { accountId: string; cursor: string }>;
     search(input: SearchInput, signal?: AbortSignal): Promise<SearchResult>;
+    /** Search semantic chunks for this account without returning the local binding ID. */
+    semanticSearchNotes(input: SemanticChunkSearchInput, signal?: AbortSignal): Promise<SemanticChunkSearchResult>;
     embed(texts: string[], purpose: EmbeddingPurpose, signal?: AbortSignal): Promise<EmbeddingResponse & { accountId: string }>;
 }
 export interface AccountRegistry { forPrincipal(verifiedSubject: string, accountId: string): AccountService; }

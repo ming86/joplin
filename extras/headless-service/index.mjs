@@ -354,6 +354,27 @@ export function createAccountRegistry(configurations, factories = {}) {
 						...(total === undefined ? {} : { total }),
 					};
 				},
+				/** Return ranked matching chunks without exposing the local account binding ID. */
+				async semanticSearchNotes(input, signal) {
+					permit('read');
+					inputRecord(input, 'invalid_semantic_search_input');
+					requireValue(Object.keys(input).every(key => ['query', 'notebookId', 'tagId', 'relevance'].includes(key)), 'invalid_semantic_search_input');
+					const { query, notebookId, tagId, relevance = 'normal' } = input;
+					requireValue(typeof query === 'string' && query.trim().length > 0, 'invalid_query');
+					requireValue(notebookId === undefined || typeof notebookId === 'string', 'invalid_semantic_search_input');
+					requireValue(tagId === undefined || typeof tagId === 'string', 'invalid_semantic_search_input');
+					requireValue(notebookId === undefined || tagId === undefined, 'semantic_scope_conflict');
+					requireValue(['strict', 'normal', 'loose'].includes(relevance), 'invalid_relevance');
+					const engine = semantic();
+					if (typeof engine?.searchChunks !== 'function') throw new ServiceError('semantic_unavailable');
+					if (signal?.aborted) throw new ServiceError('request_cancelled');
+					return engine.searchChunks({
+						query,
+						...(notebookId === undefined ? {} : { notebookId }),
+						...(tagId === undefined ? {} : { tagId }),
+						relevance,
+					}, signal);
+				},
 				async changes(cursor, signal) { permit('read'); return { ...await backend().changes(cursor, signal), accountId }; },
 				async embed(texts, purpose, signal) {
 					permit('read');

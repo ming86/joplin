@@ -1,6 +1,14 @@
 import { ServiceError, requireValue, identifier, pagination } from '../errors.mjs';
 import { noteFingerprint } from '../embeddings.mjs';
+import { logOperationError } from '../diagnostics.mjs';
 import { chunkSettings, chunkNote, isIndexable, fuseRanks } from './chunks.mjs';
+
+/**
+ * Model-dependent cosine floors calibrated for Granite 384-dimensional embeddings
+ * on a small public synthetic case set (2026-10-24); scores are not probabilities.
+ * Result caps match Desktop.
+ */
+const chunkRelevance = Object.freeze({ strict: { limit: 5, minScore: 0.88 }, normal: { limit: 10, minScore: 0.85 }, loose: { limit: 20, minScore: 0.80 } });
 
 export function createSemanticEngine({ accountId, backend, provider, store, chunks, pollMs = 5000, rescanMs = 300000, batchSize = 16, now = Date.now }) {
 	requireValue(accountId === store.accountId && provider.space, 'semantic_account_mismatch');
@@ -95,6 +103,7 @@ export function createSemanticEngine({ accountId, backend, provider, store, chun
 					await processNote(job, signal); failures = 0; await store.pause(0, null);
 				} catch (error) {
 					aborted(signal);
+					logOperationError(error, { operation: 'semantic_index_note' });
 					const code = error instanceof ServiceError ? error.code : 'semantic_indexing_failed';
 					failures = Math.min(failures + 1, 8);
 					const retryAt = now() + Math.max(Math.min(error.retryAfterMs ?? 0, 86400000), Math.min(300000, 1000 * 2 ** failures));
@@ -105,7 +114,8 @@ export function createSemanticEngine({ accountId, backend, provider, store, chun
 			await refresh();
 		} catch (error) {
 			if (signal?.aborted) return;
-			await refresh(error instanceof ServiceError ? error.code : 'semantic_indexing_failed').catch(() => { status = { ...status, state: 'unavailable', reason: 'semantic_store_unavailable' }; });
+			logOperationError(error, { operation: 'semantic_index_cycle' });
+			await refresh(error instanceof ServiceError ? error.code : 'semantic_indexing_failed').catch(error => { logOperationError(error, { operation: 'semantic_index_status' }); status = { ...status, state: 'unavailable', reason: 'semantic_store_unavailable' }; });
 			throw error;
 		}
 	}
@@ -139,7 +149,7 @@ export function createSemanticEngine({ accountId, backend, provider, store, chun
 				const result = await provider.embed([query], 'query', signal);
 				requireValue(result.spaceFingerprint === store.spaceFingerprint, 'embedding_space_mismatch');
 				await store.usage(result.inputTokens, Buffer.byteLength(provider.space.queryPrefix + query));
-				for (const candidate of await store.rank(result.vectors[0], 100, notebookId)) {
+				for (const candidate of await store.rank(result.vectors[0], 100, notebookId, signal)) {
 					aborted(signal); const note = await current(candidate.id, signal);
 					if (!isIndexable(note)) { await store.remove(candidate.id); continue; }
 					if (fingerprint(note) !== candidate.hash || (notebookId && note.parent_id !== notebookId)) { await store.observe(note, fingerprint(note)); continue; }
@@ -147,6 +157,7 @@ export function createSemanticEngine({ accountId, backend, provider, store, chun
 				}
 			} catch (error) {
 				aborted(signal);
+				logOperationError(error, { operation: 'semantic_note_search' });
 				failure = error instanceof ServiceError ? error.code : 'semantic_unavailable';
 			}
 			const all = mode === 'hybrid' && !failure ? fuseRanks(lexical, semantic, 100) : mode === 'hybrid' ? lexical.map(n => ({ ...n, provenance: 'keyword' })) : semantic;
@@ -155,6 +166,61 @@ export function createSemanticEngine({ accountId, backend, provider, store, chun
 				items: all.slice(0, limit).map(n => ({ ...n, accountId })), hasMore: false,
 				candidateWindow: 100, truncated: all.length > limit, ...(notebookId ? { notebookId } : {}),
 			};
+		},
+
+		/** Returns current matching chunks, preserving multiple matches from each note. */
+		async searchChunks({ query, notebookId, tagId, relevance = 'normal' }, signal) {
+			requireValue(typeof query === 'string' && query.trim().length > 0, 'invalid_query');
+			requireValue(Object.hasOwn(chunkRelevance, relevance), 'invalid_relevance');
+			requireValue(notebookId === undefined || tagId === undefined, 'semantic_scope_conflict');
+			if (notebookId !== undefined) identifier(notebookId);
+			if (tagId !== undefined) identifier(tagId);
+			const policy = chunkRelevance[relevance];
+			try {
+				aborted(signal); await refresh();
+				if (status.providerRetryAt && status.providerRetryAt > now()) throw new ServiceError(status.reason ?? 'embedding_provider_unavailable');
+				// Resolve scopes before ranking so unrelated chunks cannot consume the window.
+				const noteIds = tagId === undefined ? undefined : new Set(await backend.getTagNoteIds(tagId, signal));
+				aborted(signal);
+				const result = await provider.embed([query], 'query', signal);
+				aborted(signal);
+				requireValue(result.spaceFingerprint === store.spaceFingerprint, 'embedding_space_mismatch');
+				await store.usage(result.inputTokens, Buffer.byteLength(provider.space.queryPrefix + query));
+				const candidates = await store.rankChunks(result.vectors[0], { limit: 100, notebookId, noteIds, minScore: policy.minScore, signal });
+				// A request uses one coherent current source snapshot and chunk reconstruction per note.
+				const snapshots = new Map(); const items = [];
+				for (const candidate of candidates) {
+					aborted(signal);
+					if (!snapshots.has(candidate.id)) {
+						const note = await current(candidate.id, signal); aborted(signal);
+						let snapshot = null;
+						if (!isIndexable(note)) await store.remove(candidate.id);
+						else {
+							const hash = fingerprint(note);
+							if (hash !== candidate.hash || (notebookId !== undefined && note.parent_id !== notebookId)) await store.observe(note, hash);
+							else if (tagId !== undefined && !(await backend.getNoteTags(note.id, signal)).some(tag => tag.id === tagId)) await store.observe(note, hash);
+							else snapshot = { note, hash, chunks: chunkNote(note, settings) };
+						}
+						snapshots.set(candidate.id, snapshot);
+					}
+					const snapshot = snapshots.get(candidate.id);
+					if (!snapshot || snapshot.hash !== candidate.hash) continue;
+					const chunk = snapshot.chunks[candidate.chunk.ordinal];
+					if (!chunk || candidate.chunk.offsetUnit !== 'utf8-byte' || chunk.start !== candidate.chunk.start || chunk.end !== candidate.chunk.end || chunk.hash !== candidate.contentHash) {
+						await store.observe(snapshot.note, snapshot.hash); continue;
+					}
+					const note = snapshot.note;
+					items.push({ noteId: note.id, title: note.title, notebookId: note.parent_id, chunkIndex: chunk.ordinal, chunkText: chunk.text, score: candidate.score });
+					if (items.length === policy.limit) break;
+				}
+				aborted(signal);
+				return { items, total: items.length };
+			} catch (error) {
+				aborted(signal);
+				const failure = error instanceof ServiceError ? error : new ServiceError('semantic_unavailable', false, 'semantic_unavailable', { cause: error });
+				logOperationError(failure, { operation: 'semantic_chunk_search' });
+				throw failure;
+			}
 		},
 		async close() { if (stopping) return; stopping = true; clearTimeout(timer); controller.abort(); await inFlight?.catch(() => {}); await store.close(); },
 	};

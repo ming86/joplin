@@ -87,6 +87,15 @@ export function createOutputSchemaTestSession({ allowWrites = true } = {}) {
 				items: [{ ...note, body: 'Body 🔧', ...hybridFields }], hasMore: false, total: 1,
 			};
 		},
+		async semanticSearchNotes() {
+			return {
+				items: [{
+					noteId, title: note.title, notebookId,
+					chunkIndex: 2, chunkText: 'The complete matching source chunk.', score: 0.87654,
+				}],
+				total: 1,
+			};
+		},
 		async grepNotes() {
 			return {
 				accountId: 'root',
@@ -254,7 +263,7 @@ test('every enabled catalog tool publishes an output schema without changing inp
 	}
 });
 
-test('tool output samples preserve aliases, nullable history, semantic errors, and attachment resource bytes', async () => {
+test('tool output samples preserve aliases, nullable history, semantic chunks, and attachment resource bytes', async () => {
 	const session = createOutputSchemaTestSession();
 	try {
 		const { tools, results, errorSamples } = await callOutputSchemaSamples(session);
@@ -367,9 +376,25 @@ test('tool output samples preserve aliases, nullable history, semantic errors, a
 		assert.equal(Object.hasOwn(conflict.original, 'note'), false);
 		assert.equal(schemas.get('read_conflict').properties.original.oneOf.some(side => side.properties.status.const === 'locked'), true);
 
-		const unavailable = results.get('semantic_search_notes');
-		assert.equal(unavailable.isError, true);
-		assert.equal(unavailable.structuredContent.error.code, 'semantic_search_not_implemented');
+		const semanticChunks = results.get('semantic_search_notes');
+		assert.equal(semanticChunks.isError, false);
+		assert.deepEqual(semanticChunks.structuredContent, {
+			results: [{
+				note_id: noteId, title: note.title, notebook_id: notebookId,
+				chunk_index: 2, chunk_text: 'The complete matching source chunk.', score: 0.877,
+			}],
+			total: 1,
+		});
+		assert.deepEqual(Object.keys(schemas.get('semantic_search_notes').properties), ['results', 'total']);
+		const semanticChunkSchema = schemas.get('semantic_search_notes').properties.results.items;
+		assert.deepEqual(Object.keys(semanticChunkSchema.properties), [
+			'note_id', 'title', 'notebook_id', 'chunk_index', 'chunk_text', 'score',
+		]);
+		assert.deepEqual(semanticChunkSchema.required, [
+			'note_id', 'title', 'notebook_id', 'chunk_index', 'chunk_text', 'score',
+		]);
+		assert.equal(Object.hasOwn(schemas.get('semantic_search_notes').properties, 'accountId'), false);
+		assert.equal(Object.hasOwn(schemas.get('semantic_search_notes').properties, 'accountEmail'), false);
 		assert.equal(errorSamples.get('read_note_unavailable').isError, true);
 		assert.equal(errorSamples.get('read_note_unavailable').structuredContent.error.code, 'note_unavailable');
 		assert.equal(errorSamples.get('read_note_invalid_arguments').isError, true);

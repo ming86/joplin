@@ -155,38 +155,42 @@ test('published non-file write-tool anyOf branches contain their complete closed
 		assert.deepEqual(createAttachment._meta, { 'openai/fileParams': ['content_file'] });
 	} finally { s.close(); }
 });
-test('semantic search publishes its full schema and reports not implemented with or without an active index', async () => {
+test('semantic search publishes ranked chunks, maps account inputs, and reports unavailable or invalid requests', async () => {
 	const schemaOf = tools => tools.find(tool => tool.name === 'semantic_search_notes')?.inputSchema;
 	const assertSchema = schema => {
 		assert.ok(schema);
 		assert.deepEqual(Object.keys(schema.properties), ['query', 'notebook_id', 'tag_id', 'relevance']);
 		assert.deepEqual(schema.required, ['query']);
+		assert.equal(schema.properties.query.minLength, 1);
 		assert.deepEqual(schema.properties.relevance.enum, ['strict', 'normal', 'loose']);
 		assert.equal(schema.properties.relevance.default, 'normal');
 	};
-	async function assertUnavailable(s) {
-		await ready(s);
-		const tools = (await s.handle(request(2, 'tools/list'))).result.tools;
-		const schema = schemaOf(tools);
-		assertSchema(schema);
-		const result = await s.handle(call(3, 'semantic_search_notes', { query: 'dog sitters', tag_id: noteId, relevance: 'loose' }));
-		assert.equal(result.result.isError, true);
-		assert.equal(result.result.structuredContent.error.code, 'semantic_search_not_implemented');
-		assert.equal(result.result.structuredContent.error.outcomeUnknown, false);
-	}
 
 	const withoutIndex = session();
 	try {
-		await assertUnavailable(withoutIndex);
+		await ready(withoutIndex);
+		const tools = (await withoutIndex.handle(request(2, 'tools/list'))).result.tools;
+		assertSchema(schemaOf(tools));
+		const unavailable = await withoutIndex.handle(call(3, 'semantic_search_notes', { query: 'dog sitters' }));
+		assert.equal(unavailable.result.isError, true);
+		assert.equal(unavailable.result.structuredContent.error.code, 'semantic_unavailable');
+		assert.equal(unavailable.result.structuredContent.error.outcomeUnknown, false);
 	} finally { withoutIndex.close(); }
 
 	const config = account();
-	let semanticSearchCalls = 0;
+	const searchInputs = [];
+	const searchSignals = [];
+	let searchChunks = async () => ({ items: [
+		{
+			noteId, title: 'Dog care', notebookId: folderId,
+			chunkIndex: 3, chunkText: 'Full matching chunk text, without an excerpt cap.', score: 0.87654,
+		},
+	], total: 1 });
 	const withIndex = session({}, backend(), config, {
 		makeSemanticBackend: () => ({
 			accountId: config.id,
 			status: () => ({ state: 'ready' }),
-			async search() { semanticSearchCalls++; return { items: [] }; },
+			async searchChunks(input, signal) { searchInputs.push(input); searchSignals.push(signal); return searchChunks(); },
 		}),
 	});
 	try {
@@ -194,10 +198,35 @@ test('semantic search publishes its full schema and reports not implemented with
 		assert.equal((await withIndex.handle(call(2, 'get_status'))).result.structuredContent.semantic.state, 'ready');
 		const tools = (await withIndex.handle(request(3, 'tools/list'))).result.tools;
 		assertSchema(schemaOf(tools));
-		const result = await withIndex.handle(call(4, 'semantic_search_notes', { query: 'dog sitters' }));
-		assert.equal(result.result.isError, true);
-		assert.equal(result.result.structuredContent.error.code, 'semantic_search_not_implemented');
-		assert.equal(semanticSearchCalls, 0);
+		const result = await withIndex.handle(call(4, 'semantic_search_notes', { query: 'dog sitters', tag_id: noteId, relevance: 'loose' }));
+		assert.equal(result.result.isError, false);
+		assert.deepEqual(searchInputs[0], { query: 'dog sitters', tagId: noteId, relevance: 'loose' });
+		assert.equal(searchSignals[0] instanceof AbortSignal, true);
+		assert.deepEqual(result.result.structuredContent, {
+			results: [{
+				note_id: noteId, title: 'Dog care', notebook_id: folderId,
+				chunk_index: 3, chunk_text: 'Full matching chunk text, without an excerpt cap.', score: 0.877,
+			}],
+			total: 1,
+		});
+		assert.equal(Object.hasOwn(result.result.structuredContent, 'accountId'), false);
+		assert.equal(Object.hasOwn(result.result.structuredContent, 'accountEmail'), false);
+
+		const beforeInvalid = searchInputs.length;
+		for (const [id, args, code] of [
+			[5, { query: '   ' }, 'invalid_query'],
+			[6, { query: 'dog', notebook_id: folderId, tag_id: noteId }, 'semantic_scope_conflict'],
+		]) {
+			const invalid = await withIndex.handle(call(id, 'semantic_search_notes', args));
+			assert.equal(invalid.result.isError, true);
+			assert.equal(invalid.result.structuredContent.error.code, code);
+		}
+		assert.equal(searchInputs.length, beforeInvalid, 'invalid inputs do not reach the semantic backend');
+
+		searchChunks = async () => { throw new ServiceError('embedding_provider_unavailable'); };
+		const providerUnavailable = await withIndex.handle(call(7, 'semantic_search_notes', { query: 'dog' }));
+		assert.equal(providerUnavailable.result.isError, true);
+		assert.equal(providerUnavailable.result.structuredContent.error.code, 'embedding_provider_unavailable');
 	} finally { withIndex.close(); }
 });
 test('tool schemas reject account switching, arbitrary properties and invalid pagination before backend use', async () => {

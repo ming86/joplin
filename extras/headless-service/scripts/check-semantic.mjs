@@ -25,7 +25,7 @@ try {
 	for(const [i,c] of cases.cases.entries()) {
 		const start=Date.now();const r=await client.call('search_notes',{query:c.query,mode:'semantic',limit:10,...(c.notebookId?{notebookId:c.notebookId}:{})});
 		requireValue(!r.isError && r.structuredContent.executedMode==='semantic','semantic_search_failed');
-		const rank=r.structuredContent.items.findIndex(n=>c.expectedNoteIds.includes(n.id))+1;
+		const rank=r.structuredContent.results.findIndex(n=>c.expectedNoteIds.includes(n.id))+1;
 		results.push({case:i+1,rank:rank||null,latencyMs:Date.now()-start});
 	}
 	console.log(JSON.stringify({embeddingSpaceId:state.embeddingSpaceId,indexedNotes:state.indexedNotes,usage:state.usage,results,top10Hits:results.filter(r=>r.rank).length,total:results.length}));

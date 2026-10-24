@@ -290,20 +290,39 @@ export function createTools(service, { allowWrites = false, noteFileResources, r
 	});
 	add('semantic_search_notes', [
 		'Semantic search across notes using the headless semantic index. Use it when the user asks by meaning rather than exact words—for example, “the note about pet sitters for my dog” instead of “pet sitter”.',
-		'When available, it returns ranked matching chunks with source note ids, matching text and similarity scores; use read_note for full context.',
-		'This dedicated tool is currently unavailable.',
+		'Returns ranked matching chunks with source note ids, full chunk text and similarity scores. Use read_note with a returned note_id for the complete note and its context.',
+		'Use notebook_id or tag_id to scope the search; they are mutually exclusive. Relevance defaults to normal: strict returns fewer, closer matches, while loose returns more candidates.',
+		'If semantic search or its embedding provider is unavailable, the call returns a semantic_unavailable or provider error.',
 	].join('\n'), object({
-		query: { type: 'string', description: 'Free-text query expressing what to find.' },
-		notebook_id: { type: 'string', description: 'Optional: limit search to a single notebook.' },
-		tag_id: { type: 'string', description: 'Optional: limit search to notes with this tag.' },
+		query: { type: 'string', minLength: 1, description: 'Nonblank free-text query expressing what to find; Joplin search filters are not parsed.' },
+		notebook_id: { type: 'string', description: 'Optional notebook ID to search. Mutually exclusive with tag_id; use list_notebooks to find IDs.' },
+		tag_id: { type: 'string', description: 'Optional tag ID to search. Mutually exclusive with notebook_id; use list_tags to find IDs.' },
 		relevance: {
 			type: 'string',
 			enum: ['strict', 'normal', 'loose'],
-			description: 'How strict to be about similarity. "strict" returns fewer high-confidence chunks; "loose" returns more candidates.',
+			description: 'Similarity preset. strict returns fewer close matches, normal is the default, and loose returns more candidates.',
 			default: 'normal',
 		},
-	}, ['query']), () => {
-		throw new ServiceError('semantic_search_not_implemented');
+	}, ['query']), async (args, signal) => {
+		if (!args.query.trim()) throw new ServiceError('invalid_query');
+		if (args.notebook_id !== undefined && args.tag_id !== undefined) throw new ServiceError('semantic_scope_conflict');
+		const result = await service.semanticSearchNotes({
+			query: args.query,
+			...(args.notebook_id === undefined ? {} : { notebookId: args.notebook_id }),
+			...(args.tag_id === undefined ? {} : { tagId: args.tag_id }),
+			relevance: args.relevance ?? 'normal',
+		}, signal);
+		return {
+			results: result.items.map(item => ({
+				note_id: item.noteId,
+				title: item.title ?? null,
+				notebook_id: item.notebookId ?? null,
+				chunk_index: item.chunkIndex,
+				chunk_text: item.chunkText,
+				score: Number(item.score.toFixed(3)),
+			})),
+			total: result.total,
+		};
 	});
 
 	const readSchema = object({
