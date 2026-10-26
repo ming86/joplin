@@ -82,8 +82,8 @@ function stackFrames(stack: unknown): string[] {
 
 /** Emit one structured diagnostic for a forwarding failure without including request data. */
 function logForwardingFailure(input: {
-	operation: 'rate_limit' | 'forward_mcp';
-	layer: 'rate_limiter' | 'vpc_service_binding' | 'upstream_http';
+	operation: 'forward_mcp';
+	layer: 'vpc_service_binding' | 'upstream_http';
 	startedAt: number;
 	status?: number;
 	error?: unknown;
@@ -124,25 +124,10 @@ function forwardedResponse(upstream: Response): Response {
 }
 
 /** Forward authenticated MCP POSTs to this account's private Joplin sidecar. */
-export async function mcpForwarder(request: Request, env: Pick<Env, 'MCP_RATE_LIMITER' | 'JOPLIN_MCP' | 'JOPLIN_MCP_BEARER_TOKEN'>): Promise<Response> {
+export async function mcpForwarder(request: Request, env: Pick<Env, 'JOPLIN_MCP' | 'JOPLIN_MCP_BEARER_TOKEN'>): Promise<Response> {
 	const incomingUrl = new URL(request.url);
 	if (incomingUrl.pathname !== '/mcp') return errorResponse(404, 'not_found');
 	if (request.method !== 'POST') return errorResponse(405, 'method_not_allowed', { Allow: 'POST' });
-
-	const rateLimitStartedAt = Date.now();
-	let rateLimit: { success: boolean };
-	try {
-		rateLimit = await env.MCP_RATE_LIMITER.limit({ key: 'joplin-mcp' });
-	} catch (error) {
-		logForwardingFailure({
-			operation: 'rate_limit',
-			layer: 'rate_limiter',
-			startedAt: rateLimitStartedAt,
-			error,
-		});
-		return errorResponse(503, 'rate_limiter_unavailable');
-	}
-	if (!rateLimit.success) return errorResponse(429, 'rate_limited', { 'Retry-After': '60' });
 
 	const headers = new Headers();
 	for (const name of REQUEST_HEADERS) {

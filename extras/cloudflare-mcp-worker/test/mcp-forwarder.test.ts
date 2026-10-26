@@ -2,22 +2,15 @@ import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 import { mcpForwarder } from '../src/mcp-forwarder.js';
 
-type RateLimitBinding = {
-	limit: (input: { key: string }) => Promise<{ success: boolean }>;
-};
-
 type ForwarderEnv = {
 	JOPLIN_MCP: Fetcher;
 	JOPLIN_MCP_BEARER_TOKEN: string;
-	MCP_RATE_LIMITER: RateLimitBinding;
 };
 
 /** Substitute the private service binding without changing global OAuth HTTP fetches. */
 let sidecarFetch: Fetcher['fetch'] = async () => {
 	throw new Error('Unexpected sidecar request');
 };
-const limiterInput: Array<{ key: string }> = [];
-let rateLimitSuccess = true;
 
 function makeEnv(overrides: Partial<ForwarderEnv> = {}): ForwarderEnv {
 	return {
@@ -26,12 +19,6 @@ function makeEnv(overrides: Partial<ForwarderEnv> = {}): ForwarderEnv {
 			connect: () => { throw new Error('Unexpected TCP connection'); },
 		},
 		JOPLIN_MCP_BEARER_TOKEN: 'sidecar-secret',
-		MCP_RATE_LIMITER: {
-			limit: async input => {
-				limiterInput.push(input);
-				return { success: rateLimitSuccess };
-			},
-		},
 		...overrides,
 	};
 }
@@ -72,13 +59,12 @@ async function captureErrorLogs<T>(run: () => Promise<T>): Promise<{ result: T; 
 
 afterEach(() => {
 	sidecarFetch = async () => { throw new Error('Unexpected sidecar request'); };
-	limiterInput.length = 0;
-	rateLimitSuccess = true;
 });
 
-test('forwards only the fixed MCP request and sidecar response metadata', async () => {
+test('forwards authenticated MCP requests without using the registration rate limiter', async () => {
 	let fetchTarget: URL | undefined;
 	let fetchInit: RequestInit | undefined;
+	let limiterCalls = 0;
 	const request = makeRequest('/mcp?route=/admin', {
 		headers: {
 			Authorization: 'Bearer another-oauth-token',
@@ -111,7 +97,16 @@ test('forwards only the fixed MCP request and sidecar response metadata', async 
 		});
 	};
 
-	const response = await mcpForwarder(request, makeEnv());
+	const env = {
+		...makeEnv(),
+		MCP_RATE_LIMITER: {
+			limit: async () => {
+				limiterCalls += 1;
+				return { success: false };
+			},
+		},
+	};
+	const response = await mcpForwarder(request, env);
 
 	assert.equal(fetchTarget?.href, 'http://localhost:41191/mcp');
 	assert.equal(fetchInit?.method, 'POST');
@@ -128,7 +123,7 @@ test('forwards only the fixed MCP request and sidecar response metadata', async 
 	assert.equal(forwardedHeaders.get('origin'), 'https://client.example.test');
 	assert.equal(forwardedHeaders.has('cookie'), false);
 	assert.equal(forwardedHeaders.has('x-forwarded-for'), false);
-	assert.deepEqual(limiterInput, [{ key: 'joplin-mcp' }]);
+	assert.equal(limiterCalls, 0);
 	assert.equal(response.status, 200);
 	assert.equal(await response.text(), '{"jsonrpc":"2.0","id":1,"result":{}}');
 	assert.equal(response.headers.get('content-type'), 'application/json');
@@ -154,62 +149,6 @@ test('rejects other paths and methods without contacting the sidecar', async () 
 	assert.equal(methodResponse.status, 405);
 	assert.equal(methodResponse.headers.get('allow'), 'POST');
 	assert.equal(calls, 0);
-	assert.deepEqual(limiterInput, []);
-});
-
-test('returns 429 when the shared account rate limit is exhausted', async () => {
-	rateLimitSuccess = false;
-	let calls = 0;
-	sidecarFetch = async () => {
-		calls += 1;
-		return new Response('unexpected');
-	};
-
-	const response = await mcpForwarder(makeRequest(), makeEnv());
-
-	assert.equal(response.status, 429);
-	assert.equal(response.headers.get('retry-after'), '60');
-	assert.equal(await response.text(), '{"error":"rate_limited"}');
-	assert.equal(calls, 0);
-	assert.deepEqual(limiterInput, [{ key: 'joplin-mcp' }]);
-});
-
-test('logs rate limiter exceptions and keeps the fixed 503 response', async () => {
-	let calls = 0;
-	const limiterError = Object.assign(new Error('rate limiter failed PRIVATE_RATE_LIMIT_DETAIL'), { code: 'RATE_LIMIT_BACKEND_DOWN' });
-	const env = makeEnv({
-		MCP_RATE_LIMITER: {
-			limit: async () => { throw limiterError; },
-		},
-		JOPLIN_MCP: {
-			fetch: async () => {
-				calls += 1;
-				return new Response('unexpected');
-			},
-			connect: () => { throw new Error('Unexpected TCP connection'); },
-		},
-	});
-	const { result: response, logs } = await captureErrorLogs(() => mcpForwarder(makeRequest(), env));
-
-	assert.equal(response.status, 503);
-	assert.equal(await response.text(), '{"error":"rate_limiter_unavailable"}');
-	assert.equal(calls, 0);
-	assert.equal(logs.length, 1);
-	const log = JSON.parse(logs[0]!) as {
-		event: string;
-		operation: string;
-		layer: string;
-		elapsed_ms: number;
-		error: { name: string; code: string; message?: string };
-	};
-	assert.equal(log.event, 'mcp_forwarding_failure');
-	assert.equal(log.operation, 'rate_limit');
-	assert.equal(log.layer, 'rate_limiter');
-	assert.equal(typeof log.elapsed_ms, 'number');
-	assert.equal(log.error.name, 'Error');
-	assert.equal(log.error.code, 'RATE_LIMIT_BACKEND_DOWN');
-	assert.equal(log.error.message, undefined);
-	assert.doesNotMatch(JSON.stringify(log), /PRIVATE_RATE_LIMIT_DETAIL/);
 });
 
 test('logs safe sidecar cause metadata without error headlines and does not retry or change the 502 response', async () => {
