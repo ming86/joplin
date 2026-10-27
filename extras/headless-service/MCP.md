@@ -2,6 +2,8 @@
 
 The MCP adapter exposes account-bound tools and short-lived file resources over stdio and stateless HTTP. It imports the account interface rather than Joplin internals and needs no third-party MCP package.
 
+The server identifies itself as **Joplin MCP** (`joplin-headless`, version `0.2.0`) and advertises the bundled 256×256 PNG icon through legacy initialization and modern result metadata.
+
 This section describes the stdio transport. Stdio remains available; the stateless HTTP transport is documented below.
 
 ## Run

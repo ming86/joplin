@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { createTools, toolResult } from './tools.mjs';
 import { ServiceError } from '../errors.mjs';
 import { logOperationError } from '../diagnostics.mjs';
@@ -17,8 +18,19 @@ const clientCapabilitiesKey = 'io.modelcontextprotocol/clientCapabilities';
 const clientInfoKey = 'io.modelcontextprotocol/clientInfo';
 /** Metadata key identifying the server that produced a complete result. */
 const serverInfoKey = 'io.modelcontextprotocol/serverInfo';
+/** Bundled PNG keeps the server icon available to clients without a hosted image URL. */
+const serverIcon = Object.freeze({
+	src: `data:image/png;base64,${readFileSync(new URL('./joplin.png', import.meta.url)).toString('base64')}`,
+	mimeType: 'image/png',
+	sizes: Object.freeze(['256x256']),
+});
 /** Stable implementation identity reported by both protocol eras. */
-const serverInfo = Object.freeze({ name: 'joplin-headless', version: '0.2.0' });
+const serverInfo = Object.freeze({
+	name: 'joplin-headless',
+	version: '0.2.0',
+	title: 'Joplin MCP',
+	icons: Object.freeze([serverIcon]),
+});
 /** Whether a value is a JSON object rather than an array or null. */
 const record = value => value && typeof value === 'object' && !Array.isArray(value);
 /** Accept bounded string ids and safe integer ids. */

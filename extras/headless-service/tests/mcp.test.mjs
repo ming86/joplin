@@ -25,6 +25,17 @@ test('MCP negotiates both pinned versions; unknown version proposes supported ve
 		const s = session(); const result = await s.handle(initialize(version));
 		assert.equal(result.result.protocolVersion, version === '2099-01-01' ? '2025-11-25' : version);
 		assert.deepEqual(result.result.capabilities, { tools: {}, resources: {} });
+		assert.equal(result.result.serverInfo.name, 'joplin-headless');
+		assert.equal(result.result.serverInfo.version, '0.2.0');
+		assert.equal(result.result.serverInfo.title, 'Joplin MCP');
+		assert.equal(result.result.serverInfo.icons[0].mimeType, 'image/png');
+		assert.deepEqual(result.result.serverInfo.icons[0].sizes, ['256x256']);
+		const iconDataUrl = result.result.serverInfo.icons[0].src;
+		assert.ok(iconDataUrl.startsWith('data:image/png;base64,'));
+		assert.deepEqual(
+			Buffer.from(iconDataUrl.slice('data:image/png;base64,'.length), 'base64'),
+			fs.readFileSync(new URL('../src/mcp/joplin.png', import.meta.url)),
+		);
 	}
 });
 test('requires valid initialization and ready notification; rejects second initialization', async () => {

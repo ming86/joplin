@@ -12,7 +12,6 @@ import { fileURLToPath } from 'node:url';
 const executable = fileURLToPath(new URL('../mcp-http.mjs', import.meta.url));
 const noteId = 'a'.repeat(32);
 const modernProtocolVersion = '2026-07-28';
-const serverInfo = { name: 'joplin-headless', version: '0.2.0' };
 const note = {
 	id: noteId,
 	parent_id: '',
@@ -27,6 +26,16 @@ const note = {
 	deleted_time: 0,
 	is_locked: 0,
 };
+
+/** Check the server identity carried by a modern complete result. */
+function assertServerInfo(info) {
+	assert.equal(info?.name, 'joplin-headless');
+	assert.equal(info?.version, '0.2.0');
+	assert.equal(info?.title, 'Joplin MCP');
+	assert.equal(info?.icons?.[0]?.mimeType, 'image/png');
+	assert.deepEqual(info?.icons?.[0]?.sizes, ['256x256']);
+	assert.ok(info?.icons?.[0]?.src.startsWith('data:image/png;base64,'));
+}
 
 /** Return an unused fixed loopback port for the child process configuration. */
 async function availablePort() {
@@ -181,14 +190,14 @@ test('HTTP MCP launcher serves authenticated stateless requests and stops cleanl
 	assert.deepEqual(discovered.body.result.capabilities, { tools: {}, resources: {} });
 	assert.equal(discovered.body.result.ttlMs, 0);
 	assert.equal(discovered.body.result.cacheScope, 'private');
-	assert.deepEqual(discovered.body.result._meta?.['io.modelcontextprotocol/serverInfo'], serverInfo);
+	assertServerInfo(discovered.body.result._meta?.['io.modelcontextprotocol/serverInfo']);
 
 	const modernRead = await post(baseUrl, bearerToken, {
 		jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'read_note', arguments: { id: noteId } },
 	}, modernProtocolVersion);
 	assert.equal(modernRead.response.status, 200);
 	assert.equal(modernRead.body.result.resultType, 'complete');
-	assert.deepEqual(modernRead.body.result._meta?.['io.modelcontextprotocol/serverInfo'], serverInfo);
+	assertServerInfo(modernRead.body.result._meta?.['io.modelcontextprotocol/serverInfo']);
 	assert.equal(modernRead.body.result.structuredContent.body, note.body);
 
 	const exited = once(child, 'exit');

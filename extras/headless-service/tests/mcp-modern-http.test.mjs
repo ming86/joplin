@@ -61,10 +61,12 @@ function assertComplete(response) {
 	assert.equal(response.status, 200);
 	assert.equal(response.json.result.resultType, 'complete');
 	const info = response.json.result._meta[serverInfoKey];
-	assert.equal(typeof info.name, 'string');
-	assert.ok(info.name.length > 0);
-	assert.equal(typeof info.version, 'string');
-	assert.ok(info.version.length > 0);
+	assert.equal(info.name, 'joplin-headless');
+	assert.equal(info.version, '0.2.0');
+	assert.equal(info.title, 'Joplin MCP');
+	assert.equal(info.icons[0].mimeType, 'image/png');
+	assert.deepEqual(info.icons[0].sizes, ['256x256']);
+	assert.ok(info.icons[0].src.startsWith('data:image/png;base64,'));
 }
 
 /** Check an HTTP/JSON-RPC error pair and preserve the incoming request id. */
@@ -186,6 +188,9 @@ test('modern HTTP keeps a small edit to a large note response compact', async t 
 	assertComplete(response);
 	assert.equal(response.json.result.isError, false);
 	assert.deepEqual(Object.keys(response.json.result.structuredContent).sort(), ['changed', 'id', 'previous_revision_id', 'revision_id', 'updated_time']);
-	assert.ok(Buffer.byteLength(response.text) < 10_000, 'the reply does not echo the large updated note body');
+	// The modern server identity, including its embedded icon, is returned in _meta; measure the tool reply without that metadata.
+	const responseWithoutServerMetadata = { ...response.json, result: { ...response.json.result } };
+	delete responseWithoutServerMetadata.result._meta;
+	assert.ok(Buffer.byteLength(JSON.stringify(responseWithoutServerMetadata)) < 10_000, 'the tool reply does not echo the large updated note body');
 	assert.equal(writes, 1);
 });

@@ -29,10 +29,12 @@ function createSession({ allowWrites = false, config = account(), customBackend 
 
 function assertServerInfo(result) {
 	const info = result._meta?.[serverInfoKey];
-	assert.equal(typeof info?.name, 'string');
-	assert.ok(info.name.length > 0);
-	assert.equal(typeof info.version, 'string');
-	assert.ok(info.version.length > 0);
+	assert.equal(info?.name, 'joplin-headless');
+	assert.equal(info?.version, '0.2.0');
+	assert.equal(info?.title, 'Joplin MCP');
+	assert.equal(info?.icons?.[0]?.mimeType, 'image/png');
+	assert.deepEqual(info?.icons?.[0]?.sizes, ['256x256']);
+	assert.ok(info?.icons?.[0]?.src.startsWith('data:image/png;base64,'));
 }
 
 function assertCacheHints(result) {

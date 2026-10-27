@@ -6,7 +6,6 @@ import { createMcpSession, modernProtocolVersion, protocolVersions } from '../sr
 import { serveStdio } from '../src/mcp/stdio.mjs';
 import { account, backend, noteId } from './fixtures.mjs';
 
-const serverInfo = { name: 'joplin-headless', version: '0.2.0' };
 const modernMeta = {
 	'io.modelcontextprotocol/protocolVersion': modernProtocolVersion,
 	'io.modelcontextprotocol/clientCapabilities': {},
@@ -23,6 +22,16 @@ function createSession(customBackend = backend(), allowWrites = false) {
 	const config = account();
 	const service = createAccountRegistry([config], { makeBackend: () => customBackend }).forPrincipal(config.id, config.id);
 	return createMcpSession(service, { allowWrites });
+}
+
+/** Check the server identity carried by a modern complete result. */
+function assertServerInfo(info) {
+	assert.equal(info?.name, 'joplin-headless');
+	assert.equal(info?.version, '0.2.0');
+	assert.equal(info?.title, 'Joplin MCP');
+	assert.equal(info?.icons?.[0]?.mimeType, 'image/png');
+	assert.deepEqual(info?.icons?.[0]?.sizes, ['256x256']);
+	assert.ok(info?.icons?.[0]?.src.startsWith('data:image/png;base64,'));
 }
 
 function createWire(session) {
@@ -80,18 +89,18 @@ test('stdio serves modern discovery, tool listing and tool calls without initial
 	assert.deepEqual(discovery.capabilities, { tools: {}, resources: {} });
 	assert.equal(discovery.ttlMs, 0);
 	assert.equal(discovery.cacheScope, 'private');
-	assert.deepEqual(discovery._meta?.['io.modelcontextprotocol/serverInfo'], serverInfo);
+	assertServerInfo(discovery._meta?.['io.modelcontextprotocol/serverInfo']);
 
 	const listing = (await wire.request(request(2, 'tools/list'))).result;
 	assert.equal(listing.resultType, 'complete');
 	assert.equal(listing.ttlMs, 0);
 	assert.equal(listing.cacheScope, 'private');
-	assert.deepEqual(listing._meta?.['io.modelcontextprotocol/serverInfo'], serverInfo);
+	assertServerInfo(listing._meta?.['io.modelcontextprotocol/serverInfo']);
 	assert.ok(listing.tools.some(tool => tool.name === 'get_status'));
 
 	const call = (await wire.request(request(3, 'tools/call', { name: 'get_status', arguments: {} }))).result;
 	assert.equal(call.resultType, 'complete');
-	assert.deepEqual(call._meta?.['io.modelcontextprotocol/serverInfo'], serverInfo);
+	assertServerInfo(call._meta?.['io.modelcontextprotocol/serverInfo']);
 	assert.ok(Array.isArray(call.content));
 	assert.equal(call.isError, false);
 	assert.equal(call.structuredContent.accountId, 'alice');
