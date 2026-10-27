@@ -3,6 +3,7 @@ import HeadlessNoteService, { HeadlessNoteUpdate } from '@joplin/lib/services/He
 import HeadlessRevisionHistory, {
 	CompareNoteRevisionsRequest,
 	ListNoteRevisionsRequest,
+	ListRevisionsRequest,
 	ReadNoteRevisionRequest,
 } from '@joplin/lib/services/HeadlessRevisionHistory';
 
@@ -35,6 +36,29 @@ async function withKnownServiceErrors<T>(operation: ()=> Promise<T>): Promise<T 
 	}
 }
 
+/** Validate combined-list transport values once before the native query uses them. */
+function validateListRevisions(input: ListRevisionsRequest): void {
+	/** Reject malformed requests through the stable revision action envelope. */
+	const invalid = (message: string): never => { throw new JoplinError(message, 'revision_invalid_request'); };
+	if (!input || typeof input !== 'object' || Array.isArray(input)) invalid('A revision query object is required.');
+	const fields = ['note_ids', 'notebook_ids', 'include_descendants', 'since', 'until', 'page', 'limit'];
+	if (Object.keys(input).some(key => !fields.includes(key))) invalid('Unsupported revision query property.');
+	for (const field of ['note_ids', 'notebook_ids'] as const) {
+		const ids = input[field];
+		if (ids !== undefined && (!Array.isArray(ids) || ids.some(id => typeof id !== 'string' || !/^[a-f0-9]{32}$/.test(id)))) invalid(`${field} must contain valid note or notebook IDs.`);
+	}
+	if (input.include_descendants !== undefined && typeof input.include_descendants !== 'boolean') invalid('include_descendants must be a boolean.');
+	for (const field of ['since', 'until'] as const) {
+		if (input[field] !== undefined && !Number.isSafeInteger(input[field])) invalid(`${field} must be a safe integer timestamp.`);
+	}
+	const page = input.page === undefined ? 1 : input.page;
+	const limit = input.limit === undefined ? 20 : input.limit;
+	if (!Number.isSafeInteger(page) || page < 1) invalid('page must be a positive safe integer.');
+	if (!Number.isSafeInteger(limit) || limit < 1) invalid('limit must be a positive safe integer.');
+	const offset = (page - 1) * limit;
+	if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(offset + limit + 1)) invalid('The requested page is too large.');
+}
+
 /** The fixed revision and conditional note actions exposed by the headless service. */
 export function createHeadlessRevisionActions() {
 	return Object.assign(Object.create(null), {
@@ -44,6 +68,11 @@ export function createHeadlessRevisionActions() {
 		updateNote: (input: HeadlessNoteUpdate) => withKnownServiceErrors(() => HeadlessNoteService.updateNote(input)),
 		/** List retained native revisions for one note. */
 		listNoteRevisions: (input: ListNoteRevisionsRequest) => withKnownServiceErrors(() => HeadlessRevisionHistory.listNoteRevisions(input)),
+		/** List combined retained summaries using explicit notes or current notebook membership. */
+		listRevisions: (input: ListRevisionsRequest) => withKnownServiceErrors(async () => {
+			validateListRevisions(input);
+			return HeadlessRevisionHistory.listRevisions(input);
+		}),
 		/** Read one reconstructed native revision. */
 		readNoteRevision: (input: ReadNoteRevisionRequest) => withKnownServiceErrors(() => HeadlessRevisionHistory.readNoteRevision(input)),
 		/** Compare two retained revisions, or a retained revision with the current note. */

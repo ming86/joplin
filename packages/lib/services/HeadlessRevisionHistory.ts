@@ -3,11 +3,52 @@ import fastDeepEqual = require('fast-deep-equal');
 import { ModelType } from '../BaseModel';
 import JoplinError from '../JoplinError';
 import Note from '../models/Note';
+import Folder from '../models/Folder';
 import Revision from '../models/Revision';
 import { MarkupLanguage } from '../../renderer';
 import { RevisionEntity } from './database/types';
 import HeadlessNoteService from './HeadlessNoteService';
 import isNoteLockEnabled from './noteLock/isNoteLockEnabled';
+
+/** Select retained native history by explicit notes or current notebook membership. */
+export interface ListRevisionsRequest {
+	/** Note IDs, including deleted notes; omitted selectors together select all history. */
+	note_ids?: string[];
+	/** Visible current notebooks whose readable live notes contribute history. */
+	notebook_ids?: string[];
+	/** Include visible descendant notebooks; defaults to true. */
+	include_descendants?: boolean;
+	/** Inclusive native revision ordering timestamp in Unix milliseconds. */
+	since?: number;
+	/** Exclusive native revision ordering timestamp in Unix milliseconds. */
+	until?: number;
+	/** One-based page number; defaults to 1. */
+	page?: number;
+	/** Positive page size; defaults to 20. */
+	limit?: number;
+}
+
+/** A retained summary with nullable metadata from the eligible current note. */
+export interface RevisionListItem extends NoteRevisionListItem {
+	/** Stable source note ID, even when the live note no longer exists. */
+	note_id: string;
+	/** Current title, or null when the current note is unavailable. */
+	current_title: string|null;
+	/** Current notebook ID, or null when the current note is unavailable. */
+	current_notebook_id: string|null;
+}
+
+/** A live page of combined history ordered by native timestamp and revision ID. */
+export interface ListRevisionsResult {
+	/** Matching retained summaries, newest first. */
+	items: RevisionListItem[];
+	/** Effective one-based page number. */
+	page: number;
+	/** Effective page size. */
+	limit: number;
+	/** Whether another matching visible summary follows this page. */
+	hasMore: boolean;
+}
 
 /** A page request for one note's retained native revisions. */
 export interface ListNoteRevisionsRequest {
@@ -23,7 +64,7 @@ export interface ListNoteRevisionsRequest {
 export interface NoteRevisionListItem {
 	/** Stable native revision ID. */
 	revision_id: string;
-	/** Native capture ordering time, not necessarily the original edit time. */
+	/** Native item_updated_time ordering value, derived from edits or immediate captures; not collection or sync time. */
 	captured_time: number;
 	/** Stable ID of the parent revision, or null for the first revision. */
 	parent_revision_id: string|null;
@@ -215,6 +256,57 @@ type StoredRevision = RevisionEntity & { id: string; item_updated_time: number }
 
 /** Native read-only revision history queries for headless note actions. */
 export default class HeadlessRevisionHistory {
+	/** Query summaries directly without capturing notes or reconstructing historical content. Input is validated by the headless action. */
+	public static async listRevisions(request: ListRevisionsRequest): Promise<ListRevisionsResult> {
+		const page = request.page ?? 1;
+		const limit = request.limit ?? 20;
+		return Note.revisionService().withRevisionLock(async () => {
+			const where = ['r.item_type = ?'];
+			const params: (string|number)[] = [ModelType.Note];
+			if (isNoteLockEnabled()) where.push('r.is_locked = 0');
+			if (request.since !== undefined) {
+				where.push('r.item_updated_time >= ?');
+				params.push(request.since);
+			}
+			if (request.until !== undefined) {
+				where.push('r.item_updated_time < ?');
+				params.push(request.until);
+			}
+
+			// Notebook scopes use only current readable membership; explicit notes need no live row.
+			if (request.note_ids !== undefined || request.notebook_ids !== undefined) {
+				const scopes: string[] = [];
+				if (request.note_ids?.length) scopes.push(`r.item_id IN (${Revision.escapeIdsForSql([...new Set(request.note_ids)])})`);
+				if (request.notebook_ids?.length) {
+					const folders = await Folder.db().selectAll<{ id: string; parent_id: string }>('SELECT id, parent_id FROM folders WHERE encryption_applied = 0 AND deleted_time = 0');
+					const selected = new Set(request.notebook_ids);
+					if ([...selected].some(id => !folders.some(folder => folder.id === id))) {
+						throw new JoplinError('The notebook is unavailable.', 'notebook_unavailable');
+					}
+					if (request.include_descendants ?? true) {
+						let previousSize = 0;
+						while (previousSize !== selected.size) {
+							previousSize = selected.size;
+							for (const folder of folders) if (selected.has(folder.parent_id)) selected.add(folder.id);
+						}
+					}
+					scopes.push(`n.parent_id IN (${Folder.escapeIdsForSql([...selected])})`);
+				}
+				where.push(scopes.length ? `(${scopes.join(' OR ')})` : '0');
+			}
+
+			// The left join masks current metadata without excluding deleted-note history.
+			const rows = await Revision.db().selectAll<RevisionListItem>(`
+				SELECT r.item_id AS note_id, r.id AS revision_id, NULLIF(r.parent_id, '') AS parent_revision_id,
+					r.item_updated_time AS captured_time, n.title AS current_title, NULLIF(n.parent_id, '') AS current_notebook_id
+				FROM revisions r LEFT JOIN notes n ON n.id = r.item_id
+					AND n.encryption_applied = 0 AND n.deleted_time = 0 AND n.is_locked = 0
+				WHERE ${where.join(' AND ')}
+				ORDER BY r.item_updated_time DESC, r.id DESC LIMIT ? OFFSET ?`, [...params, limit + 1, (page - 1) * limit]);
+			return { items: rows.slice(0, limit), page, limit, hasMore: rows.length > limit };
+		});
+	}
+
 	/** Lists retained note revisions, newest first, without requiring the source note to still exist. */
 	public static async listNoteRevisions(request: ListNoteRevisionsRequest): Promise<ListNoteRevisionsResult> {
 		if (!request) invalidRequest('A request is required.');
