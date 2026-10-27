@@ -3,6 +3,7 @@ import JoplinError from '../JoplinError';
 import Folder from '../models/Folder';
 import Note from '../models/Note';
 import Revision, { RevisionContent, RevisionReconstruction } from '../models/Revision';
+import applyBodyPatch from './HeadlessNotePatch';
 import { NoteEntity, RevisionEntity, SqlQuery } from './database/types';
 
 /** Supported edits applied against a caller's native revision of the current note. */
@@ -11,6 +12,8 @@ export interface HeadlessNoteChanges {
 	title?: string;
 	/** Replace the body verbatim in the note's existing markup format. */
 	body?: string;
+	/** Apply exact contextual line hunks to the body read at the supplied native revision. */
+	body_patch?: string;
 	/** Append literal text when body is not supplied. */
 	append?: string;
 	/** Prepend literal text when body is not supplied. */
@@ -134,10 +137,14 @@ function matchesBase(note: NoteEntity, base: RevisionContent): boolean {
 /** Check the supported edit object before any capture can persist history. */
 function validateChanges(changes: HeadlessNoteChanges) {
 	if (!changes || typeof changes !== 'object' || Array.isArray(changes)) throw new JoplinError('An edit object is required.', 'invalid_note_input');
-	const supported = ['title', 'body', 'append', 'prepend', 'replace_text', 'notebook_id', 'is_todo', 'todo_due', 'todo_completed', 'source_url'];
+	const supported = ['title', 'body', 'body_patch', 'append', 'prepend', 'replace_text', 'notebook_id', 'is_todo', 'todo_due', 'todo_completed', 'source_url'];
 	if (Object.keys(changes).some(key => !supported.includes(key))) throw new JoplinError('Unsupported note property.', 'unsupported_note_property');
-	for (const field of ['title', 'body', 'append', 'prepend', 'notebook_id', 'source_url'] as const) {
+	for (const field of ['title', 'body', 'body_patch', 'append', 'prepend', 'notebook_id', 'source_url'] as const) {
 		if (changes[field] !== undefined && typeof changes[field] !== 'string') throw new JoplinError('Note text fields must be strings.', 'invalid_note_input');
+	}
+	const hasOtherBodyEdit = changes.body !== undefined || changes.prepend !== undefined || changes.append !== undefined || changes.replace_text !== undefined;
+	if (changes.body_patch !== undefined && hasOtherBodyEdit) {
+		throw new JoplinError('A contextual body patch cannot be combined with another body edit mode.', 'note_patch_body_conflict');
 	}
 	if (changes.is_todo !== undefined && typeof changes.is_todo !== 'boolean') throw new JoplinError('To-do type must be a boolean.', 'invalid_note_input');
 	if (changes.todo_due !== undefined && (typeof changes.todo_due !== 'number' || !Number.isInteger(changes.todo_due))) {
@@ -161,11 +168,14 @@ function rethrowSaveError(error: Error & { code?: string }): never {
 	throw error;
 }
 
-/** Apply literal body editing, notebook, to-do and source URL changes to the checked snapshot. */
+/** Apply one body edit mode plus notebook, to-do and source URL changes to the checked snapshot. */
 async function editPatch(note: NoteEntity, changes: HeadlessNoteChanges): Promise<NoteEntity> {
 	const patch: NoteEntity = {};
 	if (changes.title !== undefined) patch.title = changes.title;
-	if (changes.body !== undefined) {
+	if (changes.body_patch !== undefined) {
+		const body = applyBodyPatch(note.body || '', changes.body_patch);
+		if (body !== note.body) patch.body = body;
+	} else if (changes.body !== undefined) {
 		patch.body = changes.body;
 	} else {
 		let body = note.body || '';
