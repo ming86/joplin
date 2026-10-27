@@ -71,6 +71,11 @@ const revisionErrorMessages = new Map([
 	['replace_text_empty_find', 'replace_text.find must not be empty.'],
 	['replace_text_not_found', 'The text to replace was not found.'],
 	['replace_text_ambiguous', 'The text to replace must occur exactly once.'],
+	['note_patch_invalid', 'The body_patch syntax is invalid. Correct the hunk markers and include source and edit lines in every hunk.'],
+	['note_patch_not_found', 'A body_patch source sequence was not found. Read the current source and correct the patch.'],
+	['note_patch_ambiguous', 'A body_patch source sequence is not unique. Add unchanged context to identify one occurrence.'],
+	['note_patch_order', 'body_patch hunks overlap or are out of source order. Combine hunks that share context or reorder them.'],
+	['note_patch_body_conflict', 'body_patch cannot be combined with body_file, body, prepend, append or replace_text. Choose one body-edit mode.'],
 	['validation_error', 'The request did not pass validation.'],
 ]);
 /** Fixed safe detail for device-local conflict inspection errors. */
@@ -479,7 +484,7 @@ export function createTools(service, { allowWrites = false, noteFileResources, r
 			id: { ...id, description: 'The note id to update.' },
 			base_revision_id: { ...id, description: 'The revision_id from read_note or grep_notes for the exact note state this update is based on. If the note changed and the update conflicts, reread it, reconcile the requested change, then submit the new revision_id.' },
 			title: { ...title, description: 'New note title.' },
-			body: { ...body, description: 'Full replacement body in the note\'s existing Markdown or HTML format. Use body for inline replacements; use body_file for large or full-file rewrites. Prefer partial edits for small changes. If provided, body takes precedence over append, prepend and replace_text.' },
+			body: { ...body, description: 'Full replacement body in the note\'s existing Markdown or HTML format. Use body for small complete replacements and body_file for large or full-file rewrites. If provided, body takes precedence over append, prepend and replace_text. Cannot combine with body_patch.' },
 			body_file: {
 				...object({
 					download_url: { type: 'string', minLength: 1, description: 'Public HTTPS download URL supplied for the edited UTF-8 file.' },
@@ -487,7 +492,16 @@ export function createTools(service, { allowWrites = false, noteFileResources, r
 					mime_type: { type: 'string', description: 'Optional file MIME type.' },
 					file_name: { type: 'string', description: 'Optional file name.' },
 				}, ['download_url', 'file_id']),
-				description: 'Edited UTF-8 file containing the complete replacement body in the existing Markdown or HTML format. Use for large or full-file rewrites. Requires base_revision_id and cannot combine with body, append, prepend or replace_text. The acknowledgment returns body_length, body_size_bytes, body_sha256 and body_total_line_count from the saved native body. The line count treats CRLF, LF and lone CR as line breaks, includes a final empty line after a trailing break, and counts an empty body as one line. Compare body_size_bytes with the edited local file byte count and body_sha256 with its SHA-256.',
+				description: 'Edited UTF-8 file containing the complete replacement body in the existing Markdown or HTML format. Use for large or full-file rewrites. Requires base_revision_id and cannot combine with body_patch, body, append, prepend or replace_text. The acknowledgment returns body_length, body_size_bytes, body_sha256 and body_total_line_count from the saved native body. The line count treats CRLF, LF and lone CR as line breaks, includes a final empty line after a trailing break, and counts an empty body as one line. Compare body_size_bytes with the edited local file byte count and body_sha256 with its SHA-256.',
+			},
+			body_patch: {
+				type: 'string',
+				description: `Apply exact contextual line hunks to the original body. Start each hunk with a bare @@ line; prefix unchanged source lines with a space, removed lines with -, and added lines with +. Example:
+@@
+ ## Travel plans
+-We arrive Monday.
++We arrive Tuesday.
+Each hunk needs source and edit lines; its source sequence must match exactly once in the original body, and hunks must be source-ordered and nonoverlapping. Combine hunks that would share context. Requires the current base_revision_id. Cannot combine with body_file, body, prepend, append or replace_text; metadata fields may accompany it. An empty line is a prefix by itself, and adding or removing a final empty line controls the final newline. A matched no-op keeps the saved body unchanged.`,
 			},
 			append: { ...body, description: 'Raw text to append to the existing body when body is omitted.' },
 			prepend: { ...body, description: 'Raw text to insert at the start of the existing body when body is omitted.' },
@@ -507,7 +521,11 @@ export function createTools(service, { allowWrites = false, noteFileResources, r
 		// Require an update field alongside the two identifiers without repeating the file schema in union branches.
 		updateSchema.minProperties = 3;
 		// Preserve the host hint: it supplies a downloadable file reference; this server cannot read client-local paths.
-		add('update_note', 'Update only the supplied note fields; omitted fields remain unchanged. Pass base_revision_id from read_note or grep_notes to identify the exact note state this change is based on. On note_conflict, reread and reconcile the change before retrying. For large or full-file rewrites, pass the edited complete UTF-8 file as body_file; it cannot combine with body, append, prepend or replace_text. File-update acknowledgments include body_length, body_size_bytes, body_sha256 and body_total_line_count from the saved body. The line count treats CRLF, LF and lone CR as line breaks, includes a final empty line after a trailing break, and counts an empty body as one line. Compare body_size_bytes with the edited local file byte count and body_sha256 with its SHA-256. Other updates retain compact revision metadata without body content. Body operations edit Markdown or HTML directly and preserve the note\'s existing format. Use body for inline replacements. Prefer partial edits for small changes. When body is omitted, prepend, append and replace_text are applied in that order; the text to find must occur exactly once.', updateSchema, async ({ id: noteId, ...changes }, signal) => {
+		add('update_note', 'Update supplied note fields using base_revision_id from read_note or grep_notes. On note_conflict, reread the current note, reconcile the edit and retry with its revision. Use replace_text for one exact snippet that occurs once, body_patch for localized contextual line edits, body_file for large or full-file rewrites, and body for a small complete replacement. body_patch uses bare @@ hunk markers and space, - and + line prefixes; each source sequence must occur exactly once in the original body, and hunks must be source-ordered and nonoverlapping. Combine hunks that share context. A patch can accompany metadata but cannot combine with body_file, body, prepend, append or replace_text. Empty prefixed lines represent empty body lines; adding or removing a final empty line controls the final newline. A matched no-op leaves the body unchanged. File-update acknowledgments include body_length, body_size_bytes, body_sha256 and body_total_line_count from the saved body. The line count treats CRLF, LF and lone CR as line breaks, includes a final empty line after a trailing break, and counts an empty body as one line. Compare body_size_bytes with the edited local file byte count and body_sha256 with its SHA-256. Other updates retain compact revision metadata without body content. Body operations preserve the note\'s existing Markdown or HTML format. When body is omitted, the existing prepend, append and replace_text operations run in that order; replace_text requires exactly one occurrence.', updateSchema, async ({ id: noteId, ...changes }, signal) => {
+			const patchUpdate = Object.hasOwn(changes, 'body_patch');
+			if (patchUpdate && ['body_file', 'body', 'prepend', 'append', 'replace_text'].some(key => Object.hasOwn(changes, key))) {
+				throw new ServiceError('note_patch_body_conflict');
+			}
 			const fileUpdate = Object.hasOwn(changes, 'body_file');
 			if (fileUpdate) {
 				if (['body', 'append', 'prepend', 'replace_text'].some(key => Object.hasOwn(changes, key))) throw new ServiceError('note_file_body_conflict');

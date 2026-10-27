@@ -19,10 +19,10 @@ function readable(note, id) {
 /** Validate public MCP changes while leaving their semantics to the atomic core operation. */
 function noteChanges(input) {
 	requireValue(record(input), 'invalid_note_input');
-	const allowed = ['title', 'body', 'append', 'prepend', 'replace_text', 'notebook_id', 'is_todo', 'todo_due', 'todo_completed', 'source_url'];
+	const allowed = ['title', 'body', 'body_patch', 'append', 'prepend', 'replace_text', 'notebook_id', 'is_todo', 'todo_due', 'todo_completed', 'source_url'];
 	requireValue(Object.keys(input).every(key => allowed.includes(key)), 'unsupported_note_property');
 	requireValue(Object.keys(input).length > 0, 'empty_note_update');
-	for (const key of ['title', 'body', 'append', 'prepend']) {
+	for (const key of ['title', 'body', 'body_patch', 'append', 'prepend']) {
 		if (Object.hasOwn(input, key)) requireValue(typeof input[key] === 'string', 'invalid_note_input');
 	}
 	if (Object.hasOwn(input, 'notebook_id')) identifier(input.notebook_id);

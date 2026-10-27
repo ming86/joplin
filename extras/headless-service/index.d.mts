@@ -484,6 +484,8 @@ export interface NotePatch {
 export interface RevisionNoteUpdate extends NoteUpdate {
     /** Current native revision id returned by readNoteWithRevision. */
     base_revision_id: string;
+    /** Apply exact contextual line hunks to the body; exclusive with body, body_file, prepend, append, and replace_text. */
+    body_patch?: string;
 }
 /** Notebook update; include a title and/or parent id. Empty parent id selects the root. */
 export interface NotebookUpdate {

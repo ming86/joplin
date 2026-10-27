@@ -24,6 +24,11 @@ const knownCoreErrors = new Map([
 	['replace_text_empty_find', 'replace_text.find must not be empty.'],
 	['replace_text_not_found', 'The text to replace was not found.'],
 	['replace_text_ambiguous', 'The text to replace must occur exactly once.'],
+	['note_patch_invalid', 'The body patch is invalid.'],
+	['note_patch_not_found', 'The body patch source was not found. Read the current note and correct the patch.'],
+	['note_patch_ambiguous', 'The body patch source appears more than once. Add unchanged context to identify it.'],
+	['note_patch_order', 'The body patch hunks overlap or are out of source order. Combine or reorder them.'],
+	['note_patch_body_conflict', 'A body patch cannot be combined with another body edit. Choose one body edit mode.'],
 	['validation_error', 'The request did not pass validation.'],
 ]);
 
@@ -183,13 +188,13 @@ export function createRevisionClient(request) {
 		async updateNoteWithRevision(id, input, signal) {
 			identifier(id);
 			requireValue(record(input), 'invalid_note_input');
-			const allowed = ['base_revision_id', 'title', 'body', 'append', 'prepend', 'replace_text', 'notebook_id', 'is_todo', 'todo_due', 'todo_completed', 'source_url'];
+			const allowed = ['base_revision_id', 'title', 'body', 'body_patch', 'append', 'prepend', 'replace_text', 'notebook_id', 'is_todo', 'todo_due', 'todo_completed', 'source_url'];
 			requireValue(Object.keys(input).every(key => allowed.includes(key)), 'unsupported_note_property');
 			requireValue(Object.hasOwn(input, 'base_revision_id'), 'base_revision_required');
 			revisionId(input.base_revision_id);
 			const changes = Object.fromEntries(Object.entries(input).filter(([key]) => key !== 'base_revision_id'));
 			requireValue(Object.keys(changes).length > 0, 'empty_note_update');
-			for (const key of ['title', 'body', 'append', 'prepend']) {
+			for (const key of ['title', 'body', 'body_patch', 'append', 'prepend']) {
 				if (Object.hasOwn(changes, key)) requireValue(typeof changes[key] === 'string', 'invalid_note_input');
 			}
 			if (Object.hasOwn(changes, 'notebook_id')) identifier(changes.notebook_id);
