@@ -2,7 +2,7 @@
 
 The Phase 2A read-only selected-host check passed on Codex CLI 0.155.1 with directly observed exit 0. Its exact supplied report is under `evidence/2026-09-20-codex/`. No fixes were needed. That does not claim write-mode host testing or full MCP conformance.
 
-This increment adds a separate encrypted derived index, an OpenAI-compatible HTTP embedding transport, incremental indexing and semantic/hybrid search. Joplin's core, dependency lockfile, original FTS and E2EE are unchanged. It introduces no disk/volume encryption, blanket attachment policy, cloud ingress, LLM chat, reranker or vector server.
+This increment adds a separate encrypted derived index, an OpenAI-compatible HTTP embedding transport, incremental indexing and semantic/hybrid search. The index is separate from Joplin's core store and leaves the original FTS and E2EE behavior unchanged. It introduces no disk/volume encryption, blanket attachment policy, cloud ingress, LLM chat, reranker or vector server.
 
 ## Operational setup
 
@@ -10,7 +10,7 @@ Start with the existing encrypted core and its private API. Copy `scripts/semant
 
 The sample describes one account. For multiple accounts, retain a distinct core profile, API token, semantic database path and semantic key for each account. Keep each account's index in its own derived database.
 
-The checked-in example uses a five-minute reconciliation interval. The active native deployment overrides that to 30 minutes after the previous reconciliation completes. Both use five-second local event polling; this reads the core's event API and does not run Joplin synchronization every five seconds. The configured core's remote polling remains 20 seconds and its periodic full sync remains 120 seconds.
+The semantic worker reads Joplin's local event feed every five seconds and processes persisted note changes and retries. This reads the core's event API; it does not run Joplin synchronization every five seconds. The configured core's remote polling remains 20 seconds and its periodic full sync remains 120 seconds.
 
 Generate **a separate 32-byte random semantic DB key** as 64 hexadecimal characters plus an optional newline, and deliver it as an owner-only file (`0600`) through your existing secret-delivery mechanism. Keep this key/recovery copy separate from index backups; file permissions alone do not protect a copied key beside its DB. Do not reuse, regenerate or reset the existing Joplin E2EE identity or core database key. The MCP process needs its semantic DB key and the core API token, not the core's database or E2EE key.
 
@@ -52,7 +52,9 @@ Initial scope is current readable Markdown title/body. Trashed/deleted, encrypte
 
 The chunker splits the entire body at UTF-8 boundaries, with byte-based overlap and a repeated title prefix. Defaults: at most 2,400 bytes per prepared chunk before model prefix, overlap 240 bytes, at most 2,048 chunks per note. Title context uses at most one quarter of the chunk budget. It never silently truncates the body: over-limit notes report an error. Offsets identify UTF-8 body byte positions. This byte bound is **not** a verified token count for an arbitrary model. Configure conservative input/chunk limits and check the provider's tokenizer and long-input/truncation behavior; the common API does not supply a universal truncation-control field.
 
-Enumeration is ID-ordered and metadata-only with the actual Data API; bodies are fetched individually. Each rescan compares source fingerprints. The cursor is captured before an initial scan; event IDs and cursor changes commit together. Work is coalesced, processed up to 20 notes per cycle, and retried from persisted state. Periodic reconciliation and result validation cover missed/coalesced events and bounded event retention. A failed/incomplete scan is not a successful empty collection. Offset pages missed during concurrent changes are not used as sole deletion evidence; stored IDs are rechecked individually. A source cursor moving backward triggers reconciliation. A resumed interrupted scan starts at page 1 safely; completed embeddings are reused by fingerprint.
+Enumeration is ID-ordered and metadata-only with the actual Data API; bodies are fetched individually. Each full scan compares source fingerprints. The cursor is captured before an initial scan, and event IDs and cursor changes commit together. Work is coalesced, processed up to 20 notes per cycle, and retried from persisted state. The initial scan starts at page 1. An interrupted or incomplete full scan is retried from page 1 until complete. If the current feed head is behind the saved event cursor, the worker runs a full scan. Routine event processing does not schedule periodic full scans.
+
+`lastReconciledAt` records completion of the latest initial, manual, or reset full scan; routine event processing does not advance it. The persisted scan checkpoint describes full-scan state, not a periodic refresh. Joplin owns the event feed and may prune events older than 90 days after other consumers' cursors permit cleanup, so it is not an indefinite event log.
 
 An embedding result is published only after re-reading the source and checking its fingerprint and pending revision. If the source changed or a newer invalidation arrived, the old result is discarded. This is not an atomic distributed transaction with Joplin; later changes are handled by invalidation and search-time validation.
 
@@ -78,7 +80,7 @@ The presets use these starting floors and result caps for the configured Granite
 
 The 2026-10-24 check used 20 synthetic chunks and 10 English, Chinese and Malay queries, with 17 relevant and 183 non-relevant query/chunk pairs. Result caps did not bind. These floors are model-specific starting settings from a small synthetic sample, not universal thresholds or probability/confidence values; the score is cosine similarity. No personal corpus was indexed for this check.
 
-Status distinguishes unavailable, indexing, ready and degraded, and includes pending/indexed/failed counts, last reconciliation, known successful usage and retry time. Index-ready is not proof of global synchronization or perpetual provider availability. Provider failures on an individual query are reflected in that result. Usage reports known successful response tokens, prepared bytes and successful calls; it excludes tokens the provider may charge for failed/ambiguous requests. No corpus cost/free-tier sufficiency has been measured here.
+Status distinguishes unavailable, indexing, ready and degraded, and includes pending/indexed/failed counts, `lastReconciledAt` for the latest initial, manual, or reset full scan, known successful usage and retry time. Index-ready is not proof of global synchronization or perpetual provider availability. Provider failures on an individual query are reflected in that result. Usage reports known successful response tokens, prepared bytes and successful calls; it excludes tokens the provider may charge for failed/ambiguous requests. No corpus cost/free-tier sufficiency has been measured here.
 
 ## Tests and real-provider acceptance
 
@@ -106,7 +108,7 @@ node extras/headless-service/scripts/check-semantic.mjs /private/mcp-semantic.js
 
 This **starts the indexer and transmits eligible configured-account notes to the chosen endpoint**. Stop any previous semantic owner first. It does not create/update/delete notes or reset E2EE. It waits for ready, executes real semantic searches through the reference MCP client, checks expected notes in the top 10, prints ranks/timings without note text/IDs, and closes the MCP owner. Save the output and exit code. The deadline is configurable up to one hour; for larger backlogs, let the MCP indexer complete first.
 
-Alternatively `node extras/headless-service/semantic-index.mjs /private/mcp-semantic.json` executes one bounded indexing cycle without stdio hosting. Exit 0 means ready, 2 means more indexing/degraded work, 1 is setup/runtime failure, and 130 means interrupted. Repeat only as the persisted retry timing permits, or use the normal MCP background owner. It shares the same exclusive store ownership.
+Alternatively `node extras/headless-service/semantic-index.mjs /private/mcp-semantic.json` executes one bounded indexing cycle without stdio hosting. Exit 0 means ready, 2 means more indexing/degraded work, 1 is setup/runtime failure, and 130 means interrupted. The offline engine API also supports `runOnce({ rescan: true })` for an exceptional full repair. Do not run either operation alongside an MCP semantic owner using the same database.
 
 Phase 2A's already-passed read-only protocol check need not be repeated wholesale. The targeted two-account run exercised real semantic/hybrid search and indexing, but did not measure retrieval on production notes, long-input behavior, sustained latency/lag or endpoint durability.
 
