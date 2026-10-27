@@ -65,7 +65,7 @@ test('fleet: absent account key does not prevent the other account; restoring th
 
 test('fleet: read-only account has no clipping route or write tools; unavailable semantic store stays account-bound',async t=>{
  const f=await fixture(t,{readOnlyBob:true,semantic:true}),fleet=await f.start();const[a,b]=f.accounts;await Promise.all([running(fleet,'alice'),running(fleet,'bob')]);
-	const bl=await login(b);const c=await mcp(t,b);assert.equal((await c.request('tools/list')).tools.length,17);
+ const bl=await login(b);const c=await mcp(t,b);assert.equal((await c.request('tools/list')).tools.length,18);
  const r=await web(b,'/api/write',{cookie:bl.cookie,body:{kind:'create',operationId:'e'.repeat(32),notebookId:folderId,title:'no',body:'no'}});assert.equal(r.status,403);
  const al=await login(a);const search=await web(a,'/api/search',{cookie:al.cookie,body:{query:'alice',mode:'hybrid'}});assert.equal(search.body.executedMode,'keyword');assert.equal(search.body.semantic.state,'unavailable');assert.ok(search.body.items.every(n=>n.accountId==='alice'));
  const unavailable=await web(b,'/api/search',{cookie:bl.cookie,body:{query:'alice',mode:'semantic'}});assert.equal(unavailable.body.executedMode,null);assert.equal(unavailable.body.accountId,'bob');

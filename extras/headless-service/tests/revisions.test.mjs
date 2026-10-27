@@ -112,6 +112,78 @@ test('revision client rejects missing or invalid complete-body line counts', asy
 	}
 });
 
+test('combined revision client forwards both selectors, preserves empty arrays, and accepts uncapped pages', async () => {
+	const calls = [];
+	const item = {
+		note_id: noteId,
+		revision_id: rev1,
+		parent_revision_id: null,
+		captured_time: -1,
+		current_title: null,
+		current_notebook_id: notebookId,
+	};
+	const client = createRevisionClient(async (...args) => {
+		calls.push(args);
+		const request = args[3];
+		return { items: [item], page: request.page, limit: request.limit, hasMore: false };
+	});
+	const signal = new AbortController().signal;
+	const input = {
+		note_ids: [noteId],
+		notebook_ids: [notebookId],
+		include_descendants: false,
+		since: -10,
+		until: 0,
+		page: 2,
+		limit: 150,
+	};
+	assert.deepEqual(await client.listRevisions(input, signal), {
+		items: [item], page: 2, limit: 150, hasMore: false,
+	});
+	assert.deepEqual(calls[0][3], { action: 'listRevisions', ...input });
+	assert.equal(calls[0][0], 'services/headless');
+	assert.equal(calls[0][2], 'POST');
+	assert.equal(calls[0][4], signal);
+	assert.deepEqual(calls[0][5], { writeOperation: false });
+
+	await client.listRevisions({ note_ids: [], notebook_ids: [] });
+	assert.deepEqual(calls[1][3], {
+		action: 'listRevisions', note_ids: [], notebook_ids: [], page: 1, limit: 20,
+	});
+	await client.listRevisions();
+	assert.deepEqual(calls[2][3], { action: 'listRevisions', page: 1, limit: 20 });
+	const invalidCalls = [];
+	const nativeValidation = createRevisionClient(async (...args) => {
+		invalidCalls.push(args[3]);
+		return { error: { code: 'revision_invalid_request', applied: false } };
+	});
+	await assert.rejects(nativeValidation.listRevisions({ limit: null }), { code: 'revision_invalid_request' });
+	assert.deepEqual(invalidCalls[0], { action: 'listRevisions', limit: null, page: 1 });
+});
+
+test('combined revision client validates malformed native rows', async () => {
+	const malformed = createRevisionClient(async () => ({
+		items: [{
+			note_id: noteId,
+			revision_id: rev1,
+			parent_revision_id: null,
+			captured_time: 1.5,
+			current_title: 'Title',
+			current_notebook_id: null,
+		}],
+		page: 1,
+		limit: 20,
+		hasMore: false,
+	}));
+	await assert.rejects(malformed.listRevisions(), error => {
+		assert.equal(error.code, 'invalid_backend_response');
+		assert.equal(error.diagnostics.path, 'services/headless');
+		assert.equal(error.diagnostics.operation, 'listRevisions');
+		assert.equal(error.diagnostics.stage, 'validation');
+		return true;
+	});
+});
+
 test('revision read validators attach action context to malformed backend values', async () => {
 	const malformedCases = [
 		['listNoteRevisions', () => createRevisionClient(async () => ({ items: [{}], hasMore: false })).listNoteRevisions({ note_id: noteId })],
@@ -254,14 +326,55 @@ test('revision service leaves permission and native history failures visible', a
 	await assert.rejects(service.readNoteWithRevision(noteId), { code: 'operation_not_permitted' });
 });
 
+test('combined revision service uses read permission, preserves empty selectors, and adds account identity only at the root', async () => {
+	const calls = [];
+	const signals = [];
+	const permitted = [];
+	const row = {
+		note_id: noteId,
+		revision_id: rev1,
+		parent_revision_id: null,
+		captured_time: 5,
+		current_title: 'Current title',
+		current_notebook_id: notebookId,
+	};
+	const service = createRevisionService({
+		backend: () => ({
+			async listRevisions(input, signal) {
+				calls.push(input);
+				signals.push(signal);
+				return { items: [row], page: input.page, limit: input.limit, hasMore: true };
+			},
+		}),
+		permit(permission) { permitted.push(permission); },
+		accountId: 'alice',
+		readableNotebookTitle: async () => null,
+	});
+	const signal = new AbortController().signal;
+	const result = await service.listRevisions({ note_ids: [], notebook_ids: [], page: 3, limit: 125 }, signal);
+	assert.deepEqual(calls, [{ note_ids: [], notebook_ids: [], page: 3, limit: 125 }]);
+	assert.equal(signals[0], signal);
+	assert.deepEqual(permitted, ['read']);
+	assert.deepEqual(result, { accountId: 'alice', items: [row], page: 3, limit: 125, hasMore: true });
+	assert.equal(Object.hasOwn(result.items[0], 'accountId'), false);
+	await assert.rejects(service.listRevisions({ limit: null }), { code: 'invalid_pagination' });
+	await assert.rejects(service.listRevisions({ page: Number.MAX_SAFE_INTEGER, limit: 2 }), { code: 'invalid_pagination' });
+	assert.equal(calls.length, 1, 'invalid public input is rejected before calling the native client');
+
+	await service.listRevisions();
+	assert.deepEqual(calls[1], { page: 1, limit: 20 });
+	assert.equal(signals[1], undefined);
+});
+
 test('read_note_revision MCP chunks historical text on UTF-16 boundaries and returns full bodies by default', async () => {
 	const tools = new Map();
 	registerRevisionTools((name, description, inputSchema, run, annotations) => tools.set(name, { description, inputSchema, run, annotations }), {
+		async listRevisions() { return { items: [], page: 1, limit: 20, hasMore: false }; },
 		async listNoteRevisions() { return { items: [], hasMore: false }; },
 		async readNoteRevision() { return { note_id: noteId, revision_id: rev1, captured_time: 3, title: 'Old', body: 'x😀yz', metadata: { is_todo: 1 } }; },
 		async compareNoteRevisions() { return {}; },
 	});
-	assert.deepEqual([...tools.keys()], ['list_note_revisions', 'read_note_revision', 'compare_note_revisions']);
+	assert.deepEqual([...tools.keys()], ['list_revisions', 'list_note_revisions', 'read_note_revision', 'compare_note_revisions']);
 	const run = tools.get('read_note_revision').run;
 	const chunk = await run({ note_id: noteId, revision_id: rev1, offset: 2, max_chars: 1 });
 	assert.equal(chunk.body, '😀');

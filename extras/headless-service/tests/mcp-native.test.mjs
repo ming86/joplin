@@ -9,7 +9,9 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { StdioTestClient } from '../scripts/lib/stdio-client.mjs';
 
+/** Built native CLI under test; rebuild app-cli after action changes, since tsc alone can leave build/headless stale. */
 const cli = process.env.JOPLIN_MCP_TEST_CLI;
+/** Installed SQLite implementation; use its absolute module path when it is outside the CLI's dependencies. */
 const sqliteModule = process.env.JOPLIN_HEADLESS_SQLITE_MODULE;
 
 test('MCP over stdio -> actual encrypted Joplin API, FTS, E2EE filesystem sync and normal-mode client', {
@@ -76,7 +78,7 @@ test('MCP over stdio -> actual encrypted Joplin API, FTS, E2EE filesystem sync a
 	fs.writeFileSync(configFile, JSON.stringify(conf));
 	const mcp = new StdioTestClient(configFile); t.after(() => mcp.close());
 	await mcp.initialize();
-	assert.equal((await mcp.request('tools/list')).tools.length, 31);
+	assert.equal((await mcp.request('tools/list')).tools.length, 32);
 	const marker = `mcpacceptance${randomBytes(6).toString('hex')}`;
 	let result = await mcp.call('create_note', { parentId: notebook.id, title: 'MCP temporary note', body: `${marker} initial 笔记` });
 	assert.equal(result.isError, false, JSON.stringify(result));
@@ -104,17 +106,42 @@ test('MCP over stdio -> actual encrypted Joplin API, FTS, E2EE filesystem sync a
 	const currentRevisionId = history.structuredContent.items[0].revision_id;
 	const historicalRevisionId = history.structuredContent.items.at(-1).revision_id;
 	assert.equal(currentRevisionId, result.structuredContent.revision_id);
-	const historical = await mcp.call('read_note_revision', { note_id: noteId, revision_id: historicalRevisionId });
+	const accountHistory = await mcp.call('list_revisions', {
+		note_ids: [noteId],
+		notebook_ids: [notebook.id],
+		limit: 101,
+	});
+	assert.equal(accountHistory.isError, false, JSON.stringify(accountHistory));
+	assert.ok(Object.hasOwn(accountHistory.structuredContent, 'accountEmail'));
+	assert.equal(Object.hasOwn(accountHistory.structuredContent, 'accountId'), false);
+	assert.equal(accountHistory.structuredContent.limit, 101);
+	assert.equal(accountHistory.structuredContent.hasMore, false);
+	assert.deepEqual(
+		accountHistory.structuredContent.items.map(item => item.revision_id),
+		history.structuredContent.items.map(item => item.revision_id),
+	);
+	const accountCurrentRevisionId = accountHistory.structuredContent.items[0].revision_id;
+	const accountHistoricalRevisionId = accountHistory.structuredContent.items.at(-1).revision_id;
+	assert.equal(accountCurrentRevisionId, currentRevisionId);
+	assert.equal(accountHistoricalRevisionId, historicalRevisionId);
+	assert.ok(accountHistory.structuredContent.items.every(item => !Object.hasOwn(item, 'body')));
+	assert.ok(accountHistory.structuredContent.items.every(item => item.note_id === noteId));
+	assert.ok(accountHistory.structuredContent.items.every(item => item.current_notebook_id === notebook.id));
+	assert.ok(accountHistory.structuredContent.items.every(item => item.current_title === 'MCP temporary note'));
+	assert.deepEqual(Object.keys(accountHistory.structuredContent.items[0]).sort(), [
+		'captured_time', 'current_notebook_id', 'current_title', 'note_id', 'parent_revision_id', 'revision_id',
+	]);
+	const historical = await mcp.call('read_note_revision', { note_id: noteId, revision_id: accountHistoricalRevisionId });
 	assert.equal(historical.isError, false);
 	assert.equal(historical.structuredContent.body, `${marker} initial 笔记`);
 	const comparison = await mcp.call('compare_note_revisions', {
 		note_id: noteId,
-		from_revision_id: historicalRevisionId,
-		to_revision_id: currentRevisionId,
+		from_revision_id: accountHistoricalRevisionId,
+		to_revision_id: accountCurrentRevisionId,
 	});
 	assert.equal(comparison.isError, false);
-	assert.equal(comparison.structuredContent.from_revision_id, historicalRevisionId);
-	assert.equal(comparison.structuredContent.to_revision_id, currentRevisionId);
+	assert.equal(comparison.structuredContent.from_revision_id, accountHistoricalRevisionId);
+	assert.equal(comparison.structuredContent.to_revision_id, accountCurrentRevisionId);
 	assert.match(comparison.structuredContent.body_diff, /revised/);
 	const staleWrite = await mcp.call('update_note', {
 		id: noteId,
@@ -245,7 +272,7 @@ test('MCP over stdio -> actual encrypted Joplin API, FTS, E2EE filesystem sync a
 	await mcp.close();
 	conf.allowWrites = false; fs.writeFileSync(configFile, JSON.stringify(conf));
 	const reader = new StdioTestClient(configFile); t.after(() => reader.close()); await reader.initialize();
-	assert.equal((await reader.request('tools/list')).tools.length, 18);
+	assert.equal((await reader.request('tools/list')).tools.length, 19);
 	await assert.rejects(reader.call('create_note', { parentId: notebook.id, title: 'blocked', body: '' }), { rpcCode: -32602 });
 	assert.equal((await reader.call('get_note', { id: noteId, accountId: 'other' })).isError, true);
 	await reader.close(); await stop(daemon); assert.equal(daemon.exitCode, 0);

@@ -36,6 +36,7 @@ const sampleArguments = {
 	delete_note: { id: noteId },
 	create_notebook: { title: 'Nested', parent_id: notebookId },
 	manage_tags: { note_id: noteId, add: ['idea'] },
+	list_revisions: {},
 	list_note_revisions: { note_id: noteId },
 	read_note_revision: { note_id: noteId, revision_id: revisionId },
 	compare_note_revisions: { note_id: noteId, from_revision_id: revisionId },
@@ -120,6 +121,15 @@ export function createOutputSchemaTestSession({ allowWrites = true } = {}) {
 		async manageTags() { return { note_id: noteId, added: ['idea'], removed: [], tags: ['idea'] }; },
 		async listNoteRevisions() {
 			return { accountId, items: [{ revision_id: revisionId, captured_time: 10, parent_revision_id: null, accountId }], hasMore: false };
+		},
+		async listRevisions({ page = 1, limit = 20 } = {}) {
+			return {
+				accountId, page, limit, hasMore: false,
+				items: [{
+					note_id: noteId, revision_id: revisionId, parent_revision_id: null,
+					captured_time: 10, current_title: note.title, current_notebook_id: notebookId,
+				}],
+			};
 		},
 		async readNoteRevision() {
 			return { note_id: noteId, revision_id: revisionId, captured_time: 10, title: 'Earlier', body: 'Old body', metadata: { is_todo: 1, labels: ['work', null] }, accountId };
@@ -213,8 +223,8 @@ test('every enabled catalog tool publishes an output schema without changing inp
 	try {
 		const readonly = await callOutputSchemaSamples(readonlySession);
 		const writable = await callOutputSchemaSamples(writableSession);
-		assert.equal(readonly.tools.length, 18);
-		assert.equal(writable.tools.length, 31);
+		assert.equal(readonly.tools.length, 19);
+		assert.equal(writable.tools.length, 32);
 		const writableByName = new Map(writable.tools.map(tool => [tool.name, tool]));
 		for (const tool of writable.tools) {
 			assert.ok(tool.outputSchema, `${tool.name} has an output schema`);
@@ -233,8 +243,8 @@ test('every enabled catalog tool publishes an output schema without changing inp
 			assert.deepEqual(counterpart.annotations, tool.annotations, `${tool.name} annotations are unchanged`);
 			assert.deepEqual(counterpart.outputSchema, tool.outputSchema, `${tool.name} output is protocol-era independent`);
 		}
-		assert.equal(readonly.results.size, 18);
-		assert.equal(writable.results.size, 31);
+		assert.equal(readonly.results.size, 19);
+		assert.equal(writable.results.size, 32);
 		for (const name of ['grep_notes', 'list_trash', 'list_attachment_notes']) assert.ok(readonly.results.has(name), `${name} is sampled in read-only mode`);
 		for (const name of ['restore_note', 'restore_notebook']) assert.ok(!readonly.results.has(name), `${name} is omitted in read-only mode`);
 		const listNotebooks = writableByName.get('list_notebooks');
@@ -363,6 +373,17 @@ test('tool output samples preserve aliases, nullable history, semantic chunks, a
 		assert.equal(revisionList.items[0].parent_revision_id, null);
 		const revisionSchema = schemas.get('list_note_revisions').properties.items.items.properties.parent_revision_id;
 		assert.deepEqual(revisionSchema.anyOf.map(item => item.type).sort(), ['null', 'string']);
+		const combinedRevisions = results.get('list_revisions').structuredContent;
+		assert.deepEqual(Object.keys(combinedRevisions).sort(), ['accountEmail', 'hasMore', 'items', 'limit', 'page']);
+		assert.deepEqual(Object.keys(combinedRevisions.items[0]).sort(), [
+			'captured_time', 'current_notebook_id', 'current_title', 'note_id', 'parent_revision_id', 'revision_id',
+		]);
+		assert.equal(combinedRevisions.accountEmail, 'alice@example.test');
+		const combinedRevisionSchema = schemas.get('list_revisions');
+		assert.deepEqual(combinedRevisionSchema.required, ['accountEmail', 'items', 'page', 'limit', 'hasMore']);
+		assert.equal(combinedRevisionSchema.properties.items.items.additionalProperties, false);
+		assert.equal(Object.hasOwn(combinedRevisionSchema.properties.items.items.properties, 'accountId'), false);
+		assert.match(combinedRevisionSchema.properties.items.items.properties.captured_time.description, /not collection, synchronization, or first-observed time/);
 		const comparison = results.get('compare_note_revisions').structuredContent;
 		assert.equal(comparison.to_current, true);
 		assert.equal(comparison.metadata_changes[0].from.present, true);

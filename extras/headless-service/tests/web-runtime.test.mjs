@@ -55,7 +55,7 @@ test('launched web entry shares account with stdio MCP; metadata reads, preview,
 		res.writeHead(404); res.end('{}');
 	});
 	conf = await config(t, baseUrl); const client = new StdioTestClient(conf.filename, entry); t.after(() => client.close());
-	await client.initialize(); assert.equal((await client.request('tools/list')).tools.length, 30);
+	await client.initialize(); assert.equal((await client.request('tools/list')).tools.length, 31);
 	const login = await fetch(conf.origin + '/api/login', { method: 'POST', headers: { Origin: conf.origin, 'X-Joplin-Web': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ token: conf.webToken }) });
 	assert.equal(login.status, 200); const cookie = login.headers.get('set-cookie').split(';')[0]; await login.json();
 	const headers = { Origin: conf.origin, 'X-Joplin-Web': '1', 'Content-Type': 'application/json', Cookie: cookie };

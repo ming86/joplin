@@ -324,8 +324,8 @@ test('MCP write catalog carries mutation annotations and rejects unsafe note sta
 		const names = new Set(tools.map(tool => tool.name));
 		for (const name of ['get_status', 'list_notebooks', 'list_notes', 'search_notes', 'semantic_search_notes', 'grep_notes', 'read_note', 'get_note', 'list_tags', 'list_trash', 'list_attachment_notes']) assert.ok(names.has(name), name);
 		for (const name of ['create_note', 'update_note', 'delete_note', 'create_notebook', 'manage_tags', 'update_notebook', 'delete_notebook', 'create_tag', 'rename_tag', 'create_attachment', 'update_attachment', 'restore_note', 'restore_notebook']) assert.ok(!names.has(name), name);
-		for (const name of ['list_note_revisions', 'read_note_revision', 'compare_note_revisions', 'list_conflicts', 'read_conflict', 'list_note_attachments', 'read_attachment']) assert.ok(names.has(name), name);
-		assert.equal(tools.length, 18);
+		for (const name of ['list_revisions', 'list_note_revisions', 'read_note_revision', 'compare_note_revisions', 'list_conflicts', 'read_conflict', 'list_note_attachments', 'read_attachment']) assert.ok(names.has(name), name);
+		assert.equal(tools.length, 19);
 	} finally { readonly.close(); }
 
 	const writable = createSession();
@@ -333,7 +333,7 @@ test('MCP write catalog carries mutation annotations and rejects unsafe note sta
 	try {
 		const tools = (await writable.handle(request(2, 'tools/list'))).result.tools;
 		const byName = new Map(tools.map(tool => [tool.name, tool]));
-		assert.equal(tools.length, 31);
+		assert.equal(tools.length, 32);
 		for (const name of ['grep_notes', 'list_trash', 'list_attachment_notes', 'restore_note', 'restore_notebook']) assert.ok(byName.has(name), name);
 		assert.deepEqual(byName.get('update_note').inputSchema.required, ['id', 'base_revision_id']);
 		assert.equal(byName.get('update_note').annotations.destructiveHint, true);
@@ -412,7 +412,7 @@ test('the MCP catalog requires a note revision and preserves embedded attachment
 	await ready(session);
 	try {
 		const tools = (await session.handle(request(2, 'tools/list'))).result.tools;
-		assert.equal(tools.length, 31);
+		assert.equal(tools.length, 32);
 		const readSchema = tools.find(tool => tool.name === 'read_note').inputSchema;
 		const updateTool = tools.find(tool => tool.name === 'update_note');
 		const updateSchema = updateTool.inputSchema;

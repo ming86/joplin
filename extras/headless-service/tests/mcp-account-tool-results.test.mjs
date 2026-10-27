@@ -19,6 +19,22 @@ function fixture(overrides = {}, options = {}) {
 		async listNotes() { return { accountId, items: [{ ...note }], page: 1, hasMore: false }; },
 		async search() { return { accountId, items: [{ ...note }] }; },
 		async listNoteRevisions() { return { accountId, items: [{ accountId, id: revisionId }], hasMore: false }; },
+		async listRevisions() {
+			return {
+				accountId,
+				items: [{
+					note_id: noteId,
+					revision_id: revisionId,
+					parent_revision_id: null,
+					captured_time: 10,
+					current_title: note.title,
+					current_notebook_id: null,
+				}],
+				page: 1,
+				limit: 20,
+				hasMore: false,
+			};
+		},
 		async readNoteRevision() { return { ...note, metadata: { accountId: 'native-field' } }; },
 		async compareNoteRevisions() { return { accountId, metadata_changes: { accountId: 'native-field' } }; },
 		async readAttachment() { return { accountId, id: noteId, filename: 'sample.bin', mime: 'application/octet-stream', contentBase64: 'AP8=' }; },
@@ -61,6 +77,10 @@ test('note, search, list and revision tools serialize projected account identiti
 	const revisions = assertMatchingContent(await tools.call('list_note_revisions', { note_id: noteId }));
 	assertEmail(revisions);
 	assertEmail(revisions.items[0]);
+	const accountRevisions = assertMatchingContent(await tools.call('list_revisions', { note_ids: [noteId] }));
+	assertEmail(accountRevisions);
+	assert.equal(accountRevisions.items[0].current_title, note.title);
+	assert.equal(Object.hasOwn(accountRevisions.items[0], 'accountEmail'), false);
 	const revision = assertMatchingContent(await tools.call('read_note_revision', { note_id: noteId, revision_id: revisionId }));
 	assertEmail(revision);
 	assert.deepEqual(revision.metadata, { accountId: 'native-field' });

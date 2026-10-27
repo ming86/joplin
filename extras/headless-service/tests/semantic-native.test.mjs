@@ -87,7 +87,7 @@ test('actual SQLCipher Joplin core -> HTTP fixture embeddings -> encrypted seman
 	assert.equal(result.isError,false);assert.deepEqual(result.structuredContent.results.map(item=>item.note_id),[scopedNote.id]);
 	await raw(`/notes/${scopedNote.id}`,'DELETE');await raw(`/notes/${decoyId}`,'DELETE');await raw(`/notes/${longNote.id}`,'DELETE');
 	await until(async()=>{const semantic=(await client.call('get_status')).structuredContent.semantic;return semantic.state==='ready'&&semantic.indexedNotes<=2;},'scope fixtures were not removed from the index');
-	assert.equal((await client.request('tools/list')).tools.length,18);
+	assert.equal((await client.request('tools/list')).tools.length,19);
 	t.diagnostic('PASS native core, common HTTP batch response reordering, encrypted semantic DB, full chunk text and notebook/tag-scoped MCP chunk search');
 	fail=true;await raw(`/notes/${note.id}`,'PUT',{title:'Dogs',body:'Canine replacement fixture'});
 	await until(async()=> (await client.call('get_status')).structuredContent.semantic.state==='degraded','provider failure not reported');

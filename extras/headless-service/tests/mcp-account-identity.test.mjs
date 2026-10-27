@@ -11,7 +11,7 @@ const accountId = 'local-binding';
 test('presents account email at every attributed root without modifying the service result', async () => {
 	let calls = 0;
 	const present = createAccountResultPresenter({ status: async () => { calls++; return { accountEmail }; } });
-	for (const name of ['list_notes', 'search_notes', 'read_note', 'get_note', 'list_note_revisions', 'read_note_revision',
+	for (const name of ['list_notes', 'search_notes', 'read_note', 'get_note', 'list_revisions', 'list_note_revisions', 'read_note_revision',
 		'compare_note_revisions', 'list_conflicts', 'read_conflict', 'update_notebook', 'delete_notebook',
 		'create_tag', 'rename_tag', 'read_attachment', 'create_attachment', 'update_attachment',
 		'list_trash', 'restore_note', 'restore_notebook', 'list_attachment_notes']) {
@@ -139,7 +139,7 @@ test('logs failed auxiliary status lookup while preserving the successful result
 
 test('output schemas describe nullable emails only where results carry account identity', () => {
 	const success = name => getToolOutputSchema(name).anyOf[0];
-	for (const name of ['read_note', 'get_note', 'search_notes', 'list_note_revisions', 'read_note_revision',
+	for (const name of ['read_note', 'get_note', 'search_notes', 'list_revisions', 'list_note_revisions', 'read_note_revision',
 		'compare_note_revisions', 'list_conflicts', 'read_conflict', 'update_notebook', 'delete_notebook',
 		'create_tag', 'rename_tag', 'read_attachment', 'create_attachment', 'update_attachment',
 		'list_trash', 'restore_note', 'restore_notebook', 'list_attachment_notes']) {
