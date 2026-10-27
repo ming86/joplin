@@ -9,6 +9,8 @@ const noteId = 'a'.repeat(32);
 const notebookId = 'b'.repeat(32);
 const rev1 = 'c'.repeat(32);
 const rev2 = 'd'.repeat(32);
+/** Valid contextual update used to verify transport without parsing it in the sidecar. */
+const bodyPatch = ['@@', ' Body', '-old', '+new', ''].join('\n');
 const note = {
 	id: noteId,
 	parent_id: notebookId,
@@ -48,7 +50,7 @@ test('revision client sends only fixed flat headless actions and validates nativ
 	assert.equal(current.source_url, 'https://example.test/source');
 	assert.equal((await client.updateNoteWithRevision(noteId, {
 		base_revision_id: rev1,
-		append: '!',
+		body_patch: bodyPatch,
 		is_todo: true,
 		todo_due: -1,
 		source_url: '',
@@ -74,7 +76,7 @@ test('revision client sends only fixed flat headless actions and validates nativ
 
 	assert.deepEqual(calls.map(call => call[3]), [
 		{ action: 'readNote', id: noteId },
-		{ action: 'updateNote', id: noteId, base_revision_id: rev1, changes: { append: '!', is_todo: true, todo_due: -1, source_url: '' } },
+		{ action: 'updateNote', id: noteId, base_revision_id: rev1, changes: { body_patch: bodyPatch, is_todo: true, todo_due: -1, source_url: '' } },
 		{ action: 'listNoteRevisions', note_id: noteId, page: 2, limit: 3 },
 		{ action: 'readNoteRevision', note_id: noteId, revision_id: rev1 },
 		{ action: 'compareNoteRevisions', note_id: noteId, from_revision_id: rev1 },
@@ -233,6 +235,23 @@ test('revision client requires a base revision and preserves safe native failure
 		return true;
 	});
 
+	for (const code of [
+		'note_patch_invalid', 'note_patch_not_found', 'note_patch_ambiguous',
+		'note_patch_order', 'note_patch_body_conflict',
+	]) {
+		const knownFailure = createRevisionClient(async () => ({ error: {
+			code, message: 'private native detail', applied: false,
+		} }));
+		await assert.rejects(knownFailure.updateNoteWithRevision(noteId, {
+			base_revision_id: rev1, body_patch: bodyPatch,
+		}), error => {
+			assert.equal(error.code, code);
+			assert.equal(error.outcomeUnknown, false);
+			assert.ok(!error.message.includes('private native detail'));
+			return true;
+		});
+	}
+
 	const malformedWrite = createRevisionClient(async () => ({ id: noteId, title: 'bad response' }));
 	await assert.rejects(malformedWrite.updateNoteWithRevision(noteId, { base_revision_id: rev1, body: 'new' }), error => {
 		assert.equal(error.code, 'write_outcome_unknown');
@@ -259,6 +278,7 @@ test('revision client requires a base revision and preserves safe native failure
 	for (const changes of [
 		{ todo_due: 1.5 },
 		{ is_todo: 1 },
+		{ body_patch: 1 },
 		{ source: 'caller-origin' },
 		{ source_application: 'caller-app' },
 	]) {
@@ -296,7 +316,7 @@ test('revision service enriches the captured live note and forwards exact update
 	assert.equal(live.notebook_title, 'Research');
 	assert.deepEqual(live.tags, ['Work']);
 
-	const changes = { append: '!', notebook_id: 'f'.repeat(32), is_todo: true, todo_due: -1, todo_completed: false, source_url: '' };
+	const changes = { body_patch: bodyPatch, notebook_id: 'f'.repeat(32), is_todo: true, todo_due: -1, todo_completed: false, source_url: '' };
 	const updated = await service.updateNoteWithRevision(noteId, { base_revision_id: rev1, ...changes });
 	assert.equal(backendCreations, 2);
 	assert.equal(updated.revision_id, rev2);
@@ -314,6 +334,7 @@ test('revision service enriches the captured live note and forwards exact update
 	await assert.rejects(service.updateNoteWithRevision(noteId, { body: 'missing base' }), { code: 'base_revision_required' });
 	await assert.rejects(service.updateNoteWithRevision(noteId, { base_revision_id: rev1, parent_id: notebookId }), { code: 'unsupported_note_property' });
 	await assert.rejects(service.updateNoteWithRevision(noteId, { base_revision_id: rev1, todo_due: 1.5 }), { code: 'invalid_note_input' });
+	await assert.rejects(service.updateNoteWithRevision(noteId, { base_revision_id: rev1, body_patch: 1 }), { code: 'invalid_note_input' });
 });
 
 test('revision service leaves permission and native history failures visible', async () => {

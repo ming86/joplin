@@ -54,6 +54,88 @@ describe('services/HeadlessNoteService', () => {
 		expect((await readNote(note.id)).revision_id).toBe(edited.revision_id);
 	});
 
+	it('applies source-ordered body hunks with metadata in one native history edit', async () => {
+		const note = await Note.save({
+			title: 'Context patch',
+			body: 'Prelude\n## Travel\nWe arrive Monday.\n## Budget\nTotal: 100\nFooter',
+			source_url: 'https://before.example',
+		});
+		const initial = await readNote(note.id);
+		const edited = await updateNote({
+			id: note.id,
+			base_revision_id: initial.revision_id,
+			changes: {
+				body_patch: '@@\n ## Travel\n-We arrive Monday.\n+We arrive Tuesday.\n@@\n ## Budget\n-Total: 100\n+Total: 120\n',
+				source_url: 'https://after.example',
+			},
+		});
+
+		expect(edited).toMatchObject({
+			body: 'Prelude\n## Travel\nWe arrive Tuesday.\n## Budget\nTotal: 120\nFooter',
+			source_url: 'https://after.example',
+			previous_revision_id: initial.revision_id,
+			changed: true,
+		});
+		const revisions = await Revision.allByType(BaseModel.TYPE_NOTE, note.id);
+		expect(revisions).toHaveLength(2);
+		expect(await Revision.mergeDiffsStrict(revisions[0])).toMatchObject({
+			body: 'Prelude\n## Travel\nWe arrive Monday.\n## Budget\nTotal: 100\nFooter',
+			metadata: { source_url: 'https://before.example' },
+		});
+		expect(await Revision.mergeDiffsStrict(revisions[1])).toMatchObject({
+			body: edited.body,
+			metadata: { source_url: 'https://after.example' },
+		});
+	});
+
+	it('leaves body, metadata, timestamps and history unchanged when a later hunk fails', async () => {
+		const note = await Note.save({ title: 'Atomic patch', body: 'one\nmiddle\ntwo', source_url: 'https://before.example' });
+		const read = await readNote(note.id);
+		const before = await Note.load(note.id);
+		const revisionCount = await Revision.countRevisions(BaseModel.TYPE_NOTE, note.id);
+		await expect(updateNote({
+			id: note.id,
+			base_revision_id: read.revision_id,
+			changes: {
+				body_patch: '@@\n-one\n+ONE\n@@\n-absent\n+replacement\n',
+				source_url: 'https://after.example',
+			},
+		})).rejects.toMatchObject({ code: 'note_patch_not_found' });
+		expect(await Note.load(note.id)).toEqual(before);
+		expect(await Revision.countRevisions(BaseModel.TYPE_NOTE, note.id)).toBe(revisionCount);
+	});
+
+	it('keeps an identical body patch as a no-op without changing timestamps or history', async () => {
+		const note = await Note.save({ title: 'No-op patch', body: 'same\r\nline' });
+		const read = await readNote(note.id);
+		const before = await Note.load(note.id);
+		const result = await updateNote({
+			id: note.id,
+			base_revision_id: read.revision_id,
+			changes: { body_patch: '@@\n-same\n+same\n' },
+		});
+		expect(result).toMatchObject({ changed: false, revision_id: read.revision_id, previous_revision_id: read.revision_id });
+		expect(await Note.load(note.id)).toEqual(before);
+		expect(await Revision.countRevisions(BaseModel.TYPE_NOTE, note.id)).toBe(1);
+	});
+
+	it.each([
+		['body', { body: 'complete' }],
+		['prepend', { prepend: 'prefix' }],
+		['append', { append: 'suffix' }],
+		['replace_text', { replace_text: { find: 'old', replace: 'new' } }],
+	])('rejects a body patch combined with %s before changing the note', async (_mode, bodyChange) => {
+		const note = await Note.save({ title: 'Conflicting modes', body: 'old' });
+		const read = await readNote(note.id);
+		const before = await Note.load(note.id);
+		await expect(updateNote({
+			id: note.id,
+			base_revision_id: read.revision_id,
+			changes: { body_patch: '@@\n-old\n+new\n', ...bodyChange },
+		})).rejects.toMatchObject({ code: 'note_patch_body_conflict' });
+		expect(await Note.load(note.id)).toEqual(before);
+	});
+
 	it('rejects a stale or foreign native base without changing notes or retained history', async () => {
 		const note = await Note.save({ title: 'First', body: 'First body' });
 		const first = await readNote(note.id);
@@ -62,7 +144,7 @@ describe('services/HeadlessNoteService', () => {
 		const otherRead = await readNote(other.id);
 		const revisionCount = await Revision.count();
 		for (const base of [first.revision_id, otherRead.revision_id]) {
-			await expect(updateNote({ id: note.id, base_revision_id: base, changes: { body: 'Overwrite' } })).rejects.toMatchObject({ code: 'note_conflict' });
+			await expect(updateNote({ id: note.id, base_revision_id: base, changes: { body_patch: '@@\n-First body\n+Overwrite\n' } })).rejects.toMatchObject({ code: 'note_conflict' });
 		}
 		expect((await Note.load(note.id)).body).toBe('Second body');
 		expect(await Revision.count()).toBe(revisionCount);
@@ -105,7 +187,7 @@ describe('services/HeadlessNoteService', () => {
 			}
 			return save(item, options);
 		});
-		await expect(updateNote({ id: note.id, base_revision_id: read.revision_id, changes: { body: 'MCP edit' } })).rejects.toMatchObject({ code: 'note_conflict' });
+		await expect(updateNote({ id: note.id, base_revision_id: read.revision_id, changes: { body_patch: '@@\n-Original\n+MCP edit\n' } })).rejects.toMatchObject({ code: 'note_conflict' });
 		expect((await Note.load(note.id)).body).toBe('External edit');
 		expect(await Revision.countRevisions(BaseModel.TYPE_NOTE, note.id)).toBe(1);
 		expect(revisionService().changedSinceCollection(note.id)).toBe(true);

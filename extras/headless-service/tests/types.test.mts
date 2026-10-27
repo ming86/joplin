@@ -1,7 +1,14 @@
-import { createAccountRegistry, bindEmbeddingProvider, type AccountConfiguration, type NoteRevisionComparison } from '../index.mjs';
+import { createAccountRegistry, bindEmbeddingProvider, type AccountConfiguration, type NoteRevisionComparison, type NoteUpdate, type RevisionNoteUpdate } from '../index.mjs';
 const configs: AccountConfiguration[] = [];
 const registry = createAccountRegistry(configs);
 const service = registry.forPrincipal('verified-subject', 'account');
+const revisionUpdate: RevisionNoteUpdate = { base_revision_id: 'a'.repeat(32), body_patch: 'patch' };
+const ordinaryUpdate: NoteUpdate = { body: 'content' };
+void revisionUpdate;
+void ordinaryUpdate;
+// @ts-expect-error Contextual body patches require the native revision precondition.
+const unrevisionedPatch: NoteUpdate = { body_patch: 'patch' };
+void unrevisionedPatch;
 void service.search({ query: 'test', mode: 'hybrid', limit: 10 });
 // @ts-expect-error Unknown modes are not silently keyword search.
 void service.search({ query: 'test', mode: 'vector-ish' });

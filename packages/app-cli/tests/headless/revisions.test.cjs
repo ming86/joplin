@@ -8,11 +8,11 @@ class JoplinError extends Error {
 	constructor(message, code) { super(message); this.code = code; }
 }
 
-/** Load the transport boundary with an observable combined-history service. */
-function actionsFor(listRevisions) {
+/** Load the transport boundary with observable note-update and combined-history services. */
+function actionsFor(listRevisions, updateNote = async () => {}) {
 	return load('packages/app-cli/app/headless/revisions.ts', {
 		'@joplin/lib/JoplinError': JoplinError,
-		'@joplin/lib/services/HeadlessNoteService': {},
+		'@joplin/lib/services/HeadlessNoteService': { readNote: async () => ({}), updateNote },
 		'@joplin/lib/services/HeadlessRevisionHistory': { listRevisions },
 	}).createHeadlessRevisionActions();
 }
@@ -40,4 +40,21 @@ test('combined native history action rejects malformed input before querying and
 		error: { code: 'notebook_unavailable', message: 'The notebook is unavailable.', applied: false },
 	});
 	assert.equal(calls, 1);
+});
+
+test('contextual patch failures use the expected non-applied action envelope', async () => {
+	const codes = [
+		'note_patch_invalid',
+		'note_patch_not_found',
+		'note_patch_ambiguous',
+		'note_patch_order',
+		'note_patch_body_conflict',
+	];
+	for (const code of codes) {
+		const message = `Expected ${code}`;
+		const actions = actionsFor(async () => ({}), async () => { throw new JoplinError(message, code); });
+		assert.deepEqual(await actions.updateNote({}), {
+			error: { code, message, applied: false },
+		});
+	}
 });

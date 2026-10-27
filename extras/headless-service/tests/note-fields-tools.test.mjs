@@ -6,6 +6,7 @@ const noteId = 'a'.repeat(32);
 const revisionId = 'b'.repeat(32);
 const bodyFile = { download_url: 'https://files.example.test/edited.md', file_id: 'edited-note' };
 const fileBody = '# Edited from file\n';
+const bodyPatch = '@@\n ## Travel plans\n-We arrive Monday.\n+We arrive Tuesday.\n';
 
 /** Build writable note tools with spies for service arguments and the uploaded UTF-8 body. */
 function fixture() {
@@ -51,6 +52,11 @@ test('note field schemas expose writable due and source URL values with clear se
 	assert.match(update.inputSchema.properties.source_url.description, /Omit to preserve/);
 	assert.match(update.inputSchema.properties.is_todo.description, /resets its existing due date and completion state/i);
 	assert.match(update.inputSchema.properties.is_todo.description, /explicitly supplied todo_due and todo_completed values are applied after that reset/i);
+	assert.equal(update.inputSchema.properties.body_patch.type, 'string');
+	assert.match(update.inputSchema.properties.body_patch.description, /bare @@ line.*space.*removed.*added/s);
+	assert.match(update.inputSchema.properties.body_patch.description, /exactly once in the original body.*source-ordered and nonoverlapping/);
+	assert.match(update.inputSchema.properties.body_patch.description, /Combine hunks that would share context/);
+	assert.match(update.inputSchema.properties.body_patch.description, /final newline.*matched no-op/);
 	assert.equal(update.inputSchema.minProperties, 3, 'metadata changes count as standalone updates');
 	assert.equal(Object.hasOwn(update.inputSchema, 'anyOf'), false, 'file properties stay only at the root schema');
 	assert.deepEqual(create._meta, { 'openai/fileParams': ['body_file'] });
@@ -103,6 +109,24 @@ test('update_note accepts standalone metadata edits and forwards them with body_
 		{ id: noteId, input: { base_revision_id: revisionId, todo_due: 1700000000123, source_url: 'https://example.test/article', body: fileBody } },
 	]);
 	assert.deepEqual(Object.keys(standalone.structuredContent).sort(), ['changed', 'id', 'previous_revision_id', 'revision_id', 'updated_time']);
-	assert.deepEqual(Object.keys(fileUpdate.structuredContent).sort(), ['body_length', 'body_sha256', 'body_size_bytes', 'changed', 'id', 'previous_revision_id', 'revision_id', 'updated_time']);
+	assert.deepEqual(Object.keys(fileUpdate.structuredContent).sort(), ['body_length', 'body_sha256', 'body_size_bytes', 'body_total_line_count', 'changed', 'id', 'previous_revision_id', 'revision_id', 'updated_time']);
 	assert.equal(Object.hasOwn(fileUpdate.structuredContent, 'body'), false);
+});
+
+test('update_note forwards body_patch with metadata and keeps its acknowledgment compact', async () => {
+	const { tools, updated } = fixture();
+	const title = 'Revised travel plan';
+	const sourceUrl = 'https://example.test/itinerary';
+	const result = await tools.call('update_note', {
+		id: noteId, base_revision_id: revisionId, body_patch: bodyPatch, title, source_url: sourceUrl,
+	});
+
+	assert.equal(result.isError, false);
+	assert.deepEqual(updated, [{
+		id: noteId,
+		input: { base_revision_id: revisionId, body_patch: bodyPatch, title, source_url: sourceUrl },
+	}]);
+	assert.deepEqual(Object.keys(result.structuredContent).sort(), ['changed', 'id', 'previous_revision_id', 'revision_id', 'updated_time']);
+	assert.equal(result.content[0].text.includes(bodyPatch), false);
+	assert.equal(result.content[0].text.includes('We arrive Tuesday.'), false);
 });

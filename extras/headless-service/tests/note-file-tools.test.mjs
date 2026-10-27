@@ -8,6 +8,7 @@ import { ServiceError } from '../src/errors.mjs';
 const noteId = 'a'.repeat(32);
 const revisionId = 'b'.repeat(32);
 const nextRevisionId = 'c'.repeat(32);
+const bodyPatch = '@@\n ## Travel plans\n-We arrive Monday.\n+We arrive Tuesday.\n';
 const note = {
 	id: noteId, accountId: 'alice', title: 'Exact note', parent_id: 'd'.repeat(32),
 	body: 'Initial 🔧\r\n', markup_language: 1, is_todo: 1, todo_completed: 0,
@@ -314,7 +315,7 @@ test('non-file update acknowledgments retain their original compact fields', asy
 	});
 });
 
-test('body_file conflicts never download or save, while inline body precedence is retained', async t => {
+test('body-mode conflicts never download or save, while inline body precedence is retained', async t => {
 	let downloads = 0;
 	const saves = [];
 	const { tools } = fixture(t, {
@@ -325,10 +326,41 @@ test('body_file conflicts never download or save, while inline body precedence i
 		assert.equal(result.isError, true);
 		assert.equal(result.structuredContent.error.code, 'note_file_body_conflict');
 	}
+	for (const conflict of [
+		{ body_file: bodyFile },
+		{ body: 'replacement' },
+		{ append: '' },
+		{ prepend: '' },
+		{ replace_text: { find: 'a', replace: 'b' } },
+	]) {
+		const result = await tools.call('update_note', { id: noteId, base_revision_id: revisionId, body_patch: bodyPatch, ...conflict });
+		assert.equal(result.isError, true);
+		assert.equal(result.structuredContent.error.code, 'note_patch_body_conflict');
+		assert.equal(result.structuredContent.error.message, 'body_patch cannot be combined with body_file, body, prepend, append or replace_text. Choose one body-edit mode.');
+	}
 	assert.equal(downloads, 0);
 	assert.equal(saves.length, 0);
 	await tools.call('update_note', { id: noteId, base_revision_id: revisionId, body: 'rewrite', append: 'ignored by native backend' });
 	assert.deepEqual(saves, [{ base_revision_id: revisionId, body: 'rewrite', append: 'ignored by native backend' }]);
+});
+
+test('body patch failures return fixed safe messages', async t => {
+	const expectedMessages = new Map([
+		['note_patch_invalid', 'The body_patch syntax is invalid. Correct the hunk markers and include source and edit lines in every hunk.'],
+		['note_patch_not_found', 'A body_patch source sequence was not found. Read the current source and correct the patch.'],
+		['note_patch_ambiguous', 'A body_patch source sequence is not unique. Add unchanged context to identify one occurrence.'],
+		['note_patch_order', 'body_patch hunks overlap or are out of source order. Combine hunks that share context or reorder them.'],
+		['note_patch_body_conflict', 'body_patch cannot be combined with body_file, body, prepend, append or replace_text. Choose one body-edit mode.'],
+	]);
+	for (const [code, message] of expectedMessages) {
+		const { tools } = fixture(t, {
+			async updateNoteWithRevision() { throw new ServiceError(code, false, `private backend detail: ${code}`); },
+		});
+		const result = await tools.call('update_note', { id: noteId, base_revision_id: revisionId, body_patch: bodyPatch });
+		assert.equal(result.isError, true);
+		assert.deepEqual(result.structuredContent.error, { code, message, outcomeUnknown: false });
+		assert.equal(result.content[0].text.includes('private backend detail'), false);
+	}
 });
 
 test('file updates require a native base revision and propagate stale revision failures without fallback', async t => {

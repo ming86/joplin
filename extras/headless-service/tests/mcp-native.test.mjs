@@ -153,6 +153,98 @@ test('MCP over stdio -> actual encrypted Joplin API, FTS, E2EE filesystem sync a
 	assert.equal(staleWrite.structuredContent.error.outcomeUnknown, false);
 	assert.equal((await mcp.call('read_note', { id: noteId })).structuredContent.body, `${marker} revised 😀`);
 
+	// Exercise contextual patching through the real encrypted core using only fixture-local note text.
+	const patchMarker = `mcppatch${randomBytes(6).toString('hex')}`;
+	const patchBody = `${patchMarker} header\n## Alpha\nfirst: old\nkeep alpha\n\n## Beta\nsecond: old\nkeep beta\n${patchMarker} footer`;
+	const patchNote = await mcp.call('create_note', {
+		parentId: notebook.id,
+		title: 'MCP context patch fixture',
+		body: patchBody,
+	});
+	assert.equal(patchNote.isError, false, JSON.stringify(patchNote));
+	const patchNoteId = patchNote.structuredContent.id;
+	const patchDiscovery = await mcp.call('grep_notes', {
+		pattern: patchMarker,
+		note_ids: [patchNoteId],
+	});
+	assert.equal(patchDiscovery.isError, false, JSON.stringify(patchDiscovery));
+	assert.equal(patchDiscovery.structuredContent.items.length, 2);
+	const baseRevisionId = patchDiscovery.structuredContent.items[0].revision_id;
+	assert.ok(patchDiscovery.structuredContent.items.every(item => item.revision_id === baseRevisionId));
+	const patchBase = await mcp.call('read_note', { id: patchNoteId });
+	assert.equal(patchBase.isError, false);
+	assert.equal(patchBase.structuredContent.revision_id, baseRevisionId);
+	assert.equal(patchBase.structuredContent.body, patchBody);
+
+	const bodyPatch = `@@\n ${patchMarker} header\n ## Alpha\n-first: old\n+first: new\n+first: added\n keep alpha\n@@\n ## Beta\n-second: old\n+second: new\n keep beta\n ${patchMarker} footer\n`;
+	const patched = await mcp.call('update_note', {
+		id: patchNoteId,
+		base_revision_id: baseRevisionId,
+		body_patch: bodyPatch,
+		title: 'MCP context patch fixture updated',
+	});
+	assert.equal(patched.isError, false, JSON.stringify(patched));
+	assert.deepEqual(Object.keys(patched.structuredContent).sort(), ['changed', 'id', 'previous_revision_id', 'revision_id', 'updated_time']);
+	assert.equal(patched.structuredContent.changed, true);
+	assert.equal(patched.structuredContent.previous_revision_id, baseRevisionId);
+	assert.equal(Object.hasOwn(patched.structuredContent, 'body'), false);
+	assert.equal(Object.hasOwn(patched.structuredContent, 'body_patch'), false);
+	assert.ok(!JSON.stringify(patched).includes(bodyPatch));
+	const patchedBody = `${patchMarker} header\n## Alpha\nfirst: new\nfirst: added\nkeep alpha\n\n## Beta\nsecond: new\nkeep beta\n${patchMarker} footer`;
+	const patchRead = await mcp.call('read_note', { id: patchNoteId });
+	assert.equal(patchRead.isError, false);
+	assert.equal(patchRead.structuredContent.body, patchedBody);
+	assert.equal(patchRead.structuredContent.body_total_line_count, 10);
+	assert.equal(patchRead.structuredContent.title, 'MCP context patch fixture updated');
+	assert.equal(patchRead.structuredContent.revision_id, patched.structuredContent.revision_id);
+
+	const patchHistory = await mcp.call('list_note_revisions', { note_id: patchNoteId });
+	assert.equal(patchHistory.isError, false);
+	assert.ok(patchHistory.structuredContent.items.some(item => item.revision_id === baseRevisionId));
+	assert.ok(patchHistory.structuredContent.items.some(item => item.revision_id === patched.structuredContent.revision_id));
+	const patchHistorical = await mcp.call('read_note_revision', { note_id: patchNoteId, revision_id: baseRevisionId });
+	assert.equal(patchHistorical.isError, false);
+	assert.equal(patchHistorical.structuredContent.body, patchBody);
+	const patchComparison = await mcp.call('compare_note_revisions', {
+		note_id: patchNoteId,
+		from_revision_id: baseRevisionId,
+		to_revision_id: patched.structuredContent.revision_id,
+	});
+	assert.equal(patchComparison.isError, false);
+	assert.match(patchComparison.structuredContent.body_diff, /first: old/);
+	assert.match(patchComparison.structuredContent.body_diff, /first: added/);
+	assert.match(patchComparison.structuredContent.body_diff, /second: new/);
+
+	const stalePatch = await mcp.call('update_note', {
+		id: patchNoteId,
+		base_revision_id: baseRevisionId,
+		body_patch: '@@\n-first: old\n+first: stale\n',
+	});
+	assert.equal(stalePatch.isError, true);
+	assert.equal(stalePatch.structuredContent.error.code, 'note_conflict');
+	assert.equal(stalePatch.structuredContent.error.outcomeUnknown, false);
+	const beforeFailedPatch = await mcp.call('read_note', { id: patchNoteId });
+	const revisionCountBeforeFailedPatch = patchHistory.structuredContent.items.length;
+	const failedPatch = await mcp.call('update_note', {
+		id: patchNoteId,
+		base_revision_id: beforeFailedPatch.structuredContent.revision_id,
+		body_patch: `@@\n ## Alpha\n-first: new\n+first: should not be applied\n first: added\n keep alpha\n@@\n ## Beta\n-second: absent\n+second: should not be applied\n keep beta\n`,
+		title: 'MCP failed patch must not change title',
+	});
+	assert.equal(failedPatch.isError, true);
+	assert.equal(failedPatch.structuredContent.error.code, 'note_patch_not_found');
+	assert.equal(failedPatch.structuredContent.error.outcomeUnknown, false);
+	assert.ok(!JSON.stringify(failedPatch).includes('should not be applied'));
+	const afterFailedPatch = await mcp.call('read_note', { id: patchNoteId });
+	assert.equal(afterFailedPatch.structuredContent.body, beforeFailedPatch.structuredContent.body);
+	assert.equal(afterFailedPatch.structuredContent.title, beforeFailedPatch.structuredContent.title);
+	assert.equal(afterFailedPatch.structuredContent.updated_time, beforeFailedPatch.structuredContent.updated_time);
+	assert.equal(afterFailedPatch.structuredContent.revision_id, beforeFailedPatch.structuredContent.revision_id);
+	const historyAfterFailedPatch = await mcp.call('list_note_revisions', { note_id: patchNoteId });
+	assert.equal(historyAfterFailedPatch.isError, false);
+	assert.equal(historyAfterFailedPatch.structuredContent.items.length, revisionCountBeforeFailedPatch);
+	t.diagnostic('PASS native context patch workflow: grep revision, ordered multi-hunk edit, history, stale rejection and failed-hunk nonmutation');
+
 	const destinationNotebook = await mcp.call('create_notebook', { title: 'MCP acceptance destination' });
 	assert.equal(destinationNotebook.isError, false);
 	const movedNotebook = await mcp.call('update_notebook', {

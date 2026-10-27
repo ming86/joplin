@@ -413,8 +413,8 @@ test('the MCP catalog requires a note revision and preserves embedded attachment
 		assert.deepEqual(updateSchema.required, ['id', 'base_revision_id']);
 		assert.ok(updateSchema.properties.base_revision_id);
 		assert.equal(updateSchema.properties.base_revision_id.pattern, '^[a-f0-9]{32}$');
-		assert.match(updateSchema.properties.body.description, /Prefer partial edits for small changes/);
-		assert.match(updateTool.description, /Prefer partial edits for small changes/);
+		assert.match(updateSchema.properties.body.description, /body for small complete replacements and body_file for large or full-file rewrites/);
+		assert.match(updateTool.description, /replace_text for one exact snippet that occurs once, body_patch for localized contextual line edits, body_file for large or full-file rewrites, and body for a small complete replacement/);
 
 		const missingRevision = await invoke(session, 'update_note', { id: noteId, title: 'No base revision' }, 3);
 		assertToolError(missingRevision, 'invalid_tool_arguments');
