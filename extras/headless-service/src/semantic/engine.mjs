@@ -10,9 +10,10 @@ import { chunkSettings, chunkNote, isIndexable, fuseRanks } from './chunks.mjs';
  */
 const chunkRelevance = Object.freeze({ strict: { limit: 5, minScore: 0.88 }, normal: { limit: 10, minScore: 0.85 }, loose: { limit: 20, minScore: 0.80 } });
 
-export function createSemanticEngine({ accountId, backend, provider, store, chunks, pollMs = 5000, rescanMs = 300000, batchSize = 16, now = Date.now }) {
+/** Creates an index worker that scans initially and then follows persisted Joplin events. */
+export function createSemanticEngine({ accountId, backend, provider, store, chunks, pollMs = 5000, batchSize = 16, now = Date.now }) {
 	requireValue(accountId === store.accountId && provider.space, 'semantic_account_mismatch');
-	for (const [n, min, max] of [[pollMs, 100, 60000], [rescanMs, 100, 86400000], [batchSize, 1, 128]]) requireValue(Number.isSafeInteger(n) && n >= min && n <= max);
+	for (const [n, min, max] of [[pollMs, 100, 60000], [batchSize, 1, 128]]) requireValue(Number.isSafeInteger(n) && n >= min && n <= max);
 	const settings = chunkSettings(chunks); const fingerprint = note => noteFingerprint(note, provider.space.preprocessingVersion);
 	const controller = new AbortController(); let timer; let inFlight; let stopping = false;
 	let status = { state: 'indexing', embeddingSpaceId: provider.space.id, generation: store.generation, initialScanComplete: false, pendingNotes: 0, indexedNotes: 0, failedNotes: 0 };
@@ -78,6 +79,7 @@ export function createSemanticEngine({ accountId, backend, provider, store, chun
 		if (fingerprint(latest) !== hash) { await store.observe(latest, fingerprint(latest)); return; }
 		await store.publish(latest, job.revision, hash, values);
 	}
+	/** Drains events and queued work; full scans run for initialization, cursor resets, or explicit repair. */
 	async function cycle(signal, forceRescan) {
 		try {
 			let info = await refresh();
@@ -87,7 +89,8 @@ export function createSemanticEngine({ accountId, backend, provider, store, chun
 				await store.enqueue([], head.cursor); cursor = head.cursor; forceRescan = true;
 			}
 			let checkpoint = {}; try { checkpoint = JSON.parse(info.rescan_checkpoint ?? '{}') ?? {}; } catch { /* rescan */ }
-			if (forceRescan || !checkpoint.completedAt || now() - checkpoint.completedAt >= rescanMs) await reconcile(signal);
+			// A completed scan has no expiry; normal maintenance follows Joplin events.
+			if (forceRescan || !checkpoint.completedAt) await reconcile(signal);
 			// Bounded change draining; the cursor and queued IDs commit together.
 			for (let i = 0; i < 10; i++) {
 				aborted(signal); const changes = await backend.changes(cursor, signal);

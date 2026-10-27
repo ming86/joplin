@@ -21,7 +21,7 @@ export async function openMcpRuntime(filename, { background = true, transport = 
 	const loaded = loadMcpConfig(filename, { transport });
 	const config = loaded.semanticConfig;
 	if (config === undefined || config.enabled === false) return { ...loaded, close: async () => {} };
-	requireValue(config && config.enabled === true && Object.keys(config).every(key => ['enabled', 'sqliteModule', 'keyFile', 'embedding', 'chunks', 'pollMs', 'rescanMs', 'batchSize', 'rebuild'].includes(key)), 'invalid_semantic_configuration');
+	requireValue(config && config.enabled === true && Object.keys(config).every(key => ['enabled', 'sqliteModule', 'keyFile', 'embedding', 'chunks', 'pollMs', 'batchSize', 'rebuild'].includes(key)), 'invalid_semantic_configuration');
 	requireValue(config.embedding && Object.keys(config.embedding).every(key => ['protocol', 'baseUrl', 'model', 'remoteProcessing', 'allowInsecureHttp', 'apiKeyFile', 'space', 'timeoutMs', 'maxBatch'].includes(key)), 'invalid_embedding_configuration');
 	requireValue(config.rebuild === undefined || typeof config.rebuild === 'boolean');
 	const account = loaded.accountConfig;
@@ -36,7 +36,7 @@ export async function openMcpRuntime(filename, { background = true, transport = 
 		requireValue(path.isAbsolute(sqliteModule ?? ''), 'semantic_sqlcipher_module_required');
 		const store = await openSemanticStore({ filename: account.semantic.databasePath, accountId: account.id, key, sqliteModule, model: embedding.model, space: account.embedding.space, chunks, rebuild: config.rebuild });
 		try {
-			engine = createSemanticEngine({ accountId: account.id, backend: createJoplinClient(account.joplin), store, provider, chunks, pollMs: config.pollMs, rescanMs: config.rescanMs, batchSize: config.batchSize });
+			engine = createSemanticEngine({ accountId: account.id, backend: createJoplinClient(account.joplin), store, provider, chunks, pollMs: config.pollMs, batchSize: config.batchSize });
 			await engine.initialize();
 		} catch (error) { await store.close(); throw error; }
 		close = () => engine.close(); if (background) engine.start();

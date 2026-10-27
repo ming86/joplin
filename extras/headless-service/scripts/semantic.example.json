@@ -11,7 +11,6 @@
     "keyFile": "/run/secrets/semantic-database-key",
     "sqliteModule": "/absolute/runtime/native/headless-native/node_modules/sqlite3",
     "pollMs": 5000,
-    "rescanMs": 300000,
     "batchSize": 16,
     "chunks": { "maxBytes": 2400, "overlapBytes": 240 },
     "embedding": {
