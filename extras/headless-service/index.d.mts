@@ -644,6 +644,8 @@ export interface JoplinBackend {
     listTrash(options?: PageOptions, signal?: AbortSignal): Promise<Page<TrashItem>>;
     /** Return every safe notebook reported by the backend. */
     listAllNotebooks?(signal?: AbortSignal): Promise<Notebook[]>;
+    /** Return active note counts grouped by native parent notebook ID. */
+    notebookNoteCounts(signal?: AbortSignal): Promise<Record<string, number>>;
     listNotes(options?: PageOptions & { notebookId?: string }, signal?: AbortSignal): Promise<Page<Note>>;
     listNoteSummaries?(options?: PageOptions & { notebookId?: string }, signal?: AbortSignal): Promise<Page<Note>>;
     getNotebook?(id: string, signal?: AbortSignal): Promise<{ id: string; title: string }>;

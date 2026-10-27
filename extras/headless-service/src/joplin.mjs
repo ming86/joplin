@@ -120,6 +120,15 @@ function headlessStatusResult(data) {
 	};
 }
 
+/** Validate the native notebook-count aggregate without interpreting parent IDs. */
+function notebookNoteCountsResult(data) {
+	requireValue(data && typeof data === 'object' && !Array.isArray(data)
+		&& data.counts && typeof data.counts === 'object' && !Array.isArray(data.counts), 'invalid_backend_response');
+	const entries = Object.entries(data.counts);
+	for (const [, count] of entries) requireValue(Number.isInteger(count) && count >= 0, 'invalid_backend_response');
+	return Object.fromEntries(entries);
+}
+
 /** Maps the supported note patch fields to the private Data API request shape. */
 function noteInput(input, creating) {
 	requireValue(input && typeof input === 'object' && !Array.isArray(input), 'invalid_note_input');
@@ -267,6 +276,13 @@ export function createJoplinClient(config) {
 		/** Reads the core process's in-memory synchronization and decryption summary. */
 		async status(signal) {
 			return request('services/headless', {}, 'POST', { action: 'status' }, signal, { writeOperation: false, validateResult: headlessStatusResult });
+		},
+		/** Read active note counts grouped by native parent notebook ID. */
+		async notebookNoteCounts(signal) {
+			return request('services/headless', {}, 'POST', { action: 'notebookNoteCounts' }, signal, {
+				writeOperation: false,
+				validateResult: notebookNoteCountsResult,
+			});
 		},
 		// Metadata-only browser enumeration. Body retrieval remains an explicit operation.
 		async listNoteSummaries(options = {}, signal) {

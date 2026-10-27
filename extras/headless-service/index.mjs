@@ -139,29 +139,21 @@ export function createAccountRegistry(configurations, factories = {}) {
 					permit('read'); const result = await backend().listNoteSummaries(options, signal);
 					return { ...result, items: result.items.filter(eligible).map(identity) };
 				},
-				/** List every readable notebook with counts from eligible note summaries. */
+				/** List every readable notebook with active note counts from the native aggregate. */
 				async listAllNotebooks(signal) {
 					permit('read');
-					const folders = await backend().listAllNotebooks(signal);
-					const counts = new Map(folders.map(folder => [folder.id, 0]));
-					let page = 1;
-					let hasMore = true;
-					// Count from note metadata so hidden, deleted, and encrypted items never affect output.
-					while (hasMore) {
-						const result = await backend().listNoteSummaries({ page, limit: 100 }, signal);
-						for (const note of result.items) {
-							if (eligible(note) && counts.has(note.parent_id)) counts.set(note.parent_id, counts.get(note.parent_id) + 1);
-						}
-						hasMore = result.hasMore;
-						page++;
-					}
+					const client = backend();
+					const [folders, counts] = await Promise.all([
+						client.listAllNotebooks(signal),
+						client.notebookNoteCounts(signal),
+					]);
 					return {
 						accountId,
 						notebooks: folders.map(folder => ({
 							id: folder.id,
 							title: folder.title,
 							parent_id: folder.parent_id || null,
-							note_count: counts.get(folder.id) ?? 0,
+							note_count: counts[folder.id] ?? 0,
 						})),
 					};
 				},

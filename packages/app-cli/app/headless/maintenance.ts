@@ -1,4 +1,5 @@
 import Folder from '@joplin/lib/models/Folder';
+import Note from '@joplin/lib/models/Note';
 import Tag from '@joplin/lib/models/Tag';
 import type { FolderEntity } from '@joplin/lib/services/database/types';
 
@@ -13,6 +14,14 @@ interface NotebookMaintenanceInput {
 interface TagTitleLookupInput {
 	/** Title passed to Joplin's native tag matching. */
 	title: string;
+}
+
+/** One direct-parent count returned by the native note query. */
+interface NotebookNoteCountRow {
+	/** Parent ID recorded on the note, including IDs with no visible folder. */
+	parent_id: string;
+	/** Number of eligible notes assigned directly to this parent. */
+	total: number;
 }
 
 /** Throw a bounded validation error when a fixed maintenance action input is invalid. */
@@ -72,10 +81,28 @@ async function findTagByTitle(input: TagTitleLookupInput) {
 	return { tag: { id: tag.id, title: tag.title } };
 }
 
-/** Return the fixed native maintenance actions accepted by the headless status service. */
+/** Count eligible notes directly under each recorded parent using one local query. */
+async function notebookNoteCounts() {
+	const rows = await Note.db().selectAll<NotebookNoteCountRow>(`
+		SELECT parent_id, count(*) AS total
+		FROM notes
+		WHERE is_conflict = 0
+			AND (deleted_time IS NULL OR deleted_time = 0)
+			AND encryption_applied = 0
+			AND (is_locked IS NULL OR is_locked = 0)
+		GROUP BY parent_id
+	`);
+
+	const counts: Record<string, number> = {};
+	for (const row of rows) counts[row.parent_id] = row.total;
+	return { counts };
+}
+
+/** Return the fixed native maintenance actions for notebooks, tags, and note counts. */
 export function createHeadlessMaintenanceActions() {
 	return Object.assign(Object.create(null), {
 		maintenanceUpdateNotebook: updateNotebook,
 		findTagByTitle,
+		notebookNoteCounts,
 	});
 }
