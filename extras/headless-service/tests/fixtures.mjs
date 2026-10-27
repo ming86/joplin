@@ -76,6 +76,11 @@ export function backend(id = 'alice') {
 			delete summary.body;
 			return { items: [summary], hasMore: false };
 		},
+		/** Report the fixture note only while it is active and eligible for counts. */
+		async notebookNoteCounts() {
+			if (note.encryption_applied !== 0 || note.deleted_time || note.is_locked || note.is_conflict) return {};
+			return { [note.parent_id]: 1 };
+		},
 		async listNotebooks() { return { items: [{ id: folderId, title: id, parent_id: '' }], hasMore: false }; },
 		async listTrash() {
 			return {

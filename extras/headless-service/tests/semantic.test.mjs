@@ -165,6 +165,59 @@ test('native index updates/deletes/excludes locked notes and avoids re-embedding
 	f.notes.get(noteId).is_locked=0;f.change();await f.engine.runOnce();assert.equal((await f.store.rank([0,1])).length,1);
 	f.notes.delete(noteId);await f.engine.runOnce({rescan:true});assert.equal((await f.store.rank([0,1])).length,0);
 });
+test('native completed index stays idle over time and resumes persisted events after restart',native,async t=>{
+	const f = await fixture(t);
+	const second = 'c'.repeat(32);
+	f.notes.set(second, { ...note, id: second, title: 'other cats', body: 'cats' });
+	const work = { lists: 0, gets: [], observations: [], cursors: [] };
+	const backend = {
+		...f.backend,
+		async listNotes(...args) { work.lists++; return f.backend.listNotes(...args); },
+		async getNote(id, signal) { work.gets.push(id); return f.backend.getNote(id, signal); },
+		async changes(cursor, signal) { work.cursors.push(cursor); return f.backend.changes(cursor, signal); },
+	};
+	const provider = bindEmbeddingProvider(space, async texts => vectorResponse(texts));
+	/** Records corpus observations while preserving the real persisted store. */
+	const trackedStore = store => ({ ...store, observe(note, hash) { work.observations.push(note.id); return store.observe(note, hash); } });
+	let clock = Date.now();
+	let engine = createSemanticEngine({ accountId: 'alice', backend, provider, store: trackedStore(f.store), now: () => clock });
+	t.after(() => engine.close());
+	await engine.runOnce();
+	assert.equal(work.lists, 1);
+	assert.equal(work.observations.length, 2);
+	const checkpoint = (await f.store.info()).rescan_checkpoint;
+
+	// Elapsed time alone must not revisit either note or update the scan timestamp.
+	work.lists = 0; work.gets = []; work.observations = []; work.cursors = [];
+	clock += 31 * 60 * 1000;
+	await engine.runOnce();
+	assert.equal(work.lists, 0);
+	assert.deepEqual(work.gets, []);
+	assert.deepEqual(work.observations, []);
+	assert.equal((await f.store.info()).rescan_checkpoint, checkpoint);
+
+	f.notes.get(noteId).title = 'canine'; f.notes.get(noteId).body = 'dogs'; f.change();
+	await engine.runOnce();
+	assert.equal(work.lists, 0);
+	assert.deepEqual(work.gets, [noteId, noteId]);
+	assert.deepEqual(work.observations, []);
+	assert.equal((await f.store.rank([0,1]))[0].id, noteId);
+	assert.equal((await f.store.info()).event_cursor, '1');
+
+	await engine.close();
+	const reopened = await openSemanticStore(f.args);
+	engine = createSemanticEngine({ accountId: 'alice', backend, provider, store: trackedStore(reopened), now: () => clock });
+	work.gets = []; work.cursors = [];
+	f.notes.get(noteId).title = 'cats again'; f.notes.get(noteId).body = 'feline'; f.change();
+	await engine.runOnce();
+	assert.deepEqual(work.cursors, [undefined, '1']);
+	assert.equal(work.lists, 0);
+	assert.deepEqual(work.gets, [noteId, noteId]);
+	assert.deepEqual(work.observations, []);
+	assert.equal((await reopened.info()).event_cursor, '2');
+	assert.equal((await reopened.info()).rescan_checkpoint, checkpoint);
+	assert.equal((await reopened.rank([1,0])).find(candidate => candidate.id === noteId).score, 1);
+});
 test('native stale in-flight response is discarded and newer content is indexed on next cycle',native,async t=>{
 	const f=await fixture(t);let changed=false;
 	f.setTransport(async texts=>{ if(!changed) {changed=true; f.notes.get(noteId).body='dogs';f.notes.get(noteId).title='canine';}return vectorResponse(texts); });

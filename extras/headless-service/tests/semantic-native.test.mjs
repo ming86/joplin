@@ -54,7 +54,7 @@ test('actual SQLCipher Joplin core -> HTTP fixture embeddings -> encrypted seman
 	const tokenFile=path.join(dir,'token'),keyFile=path.join(dir,'index-key'),databasePath=path.join(dir,'semantic.db');
 	fs.writeFileSync(tokenFile,token,{mode:0o600});fs.writeFileSync(keyFile,randomBytes(32).toString('hex'),{mode:0o600});
 	const configFile=path.join(dir,'mcp.json');
-	fs.writeFileSync(configFile,JSON.stringify({accountId:'acceptance',baseUrl,apiTokenFile:tokenFile,allowWrites:false,semanticDatabasePath:databasePath,semantic:{enabled:true,keyFile,sqliteModule,pollMs:100,rescanMs:10000,chunks:{maxBytes:512,overlapBytes:0},embedding:{protocol:'openai-embeddings',baseUrl:embeddingUrl+'/v1',model:'test-only-topic-router',remoteProcessing:false,space:{id:'synthetic-v1',revision:'fixture-not-a-model',dimensions:3,preprocessingVersion:'title-body-v1'}}}}));
+	fs.writeFileSync(configFile,JSON.stringify({accountId:'acceptance',baseUrl,apiTokenFile:tokenFile,allowWrites:false,semanticDatabasePath:databasePath,semantic:{enabled:true,keyFile,sqliteModule,pollMs:100,chunks:{maxBytes:512,overlapBytes:0},embedding:{protocol:'openai-embeddings',baseUrl:embeddingUrl+'/v1',model:'test-only-topic-router',remoteProcessing:false,space:{id:'synthetic-v1',revision:'fixture-not-a-model',dimensions:3,preprocessingVersion:'title-body-v1'}}}}));
 	let client=new StdioTestClient(configFile);t.after(()=>client.close());await client.initialize();
 	await until(async()=> (await client.call('get_status')).structuredContent.semantic.state==='ready','semantic not ready');
 	assert.ok(documentRequests>0);

@@ -206,6 +206,29 @@ test('headless status uses its fixed authenticated action, allowlists the summar
 	await assert.rejects(service.status(), code('backend_request_failed'));
 });
 
+test('notebook counts use the fixed read-only core action and validate aggregate values', async t => {
+	let responseBody = { counts: { '': 2, orphanParent: 3, [folderId]: 0 }, privateField: 'not exposed' };
+	let fail = false;
+	const url = await server(t, async (req, res) => {
+		const target = new URL(req.url, 'http://local');
+		assert.equal(target.pathname, '/services/headless');
+		assert.equal(target.searchParams.get('token'), 'alice-private-token');
+		assert.equal(req.method, 'POST');
+		assert.deepEqual(await readJson(req), { action: 'notebookNoteCounts' });
+		if (fail) { res.writeHead(503); return res.end('private upstream error'); }
+		res.end(JSON.stringify(responseBody));
+	});
+	const config = account(); config.joplin.baseUrl = url;
+	const client = createJoplinClient(config.joplin);
+	assert.deepEqual(await client.notebookNoteCounts(), { '': 2, orphanParent: 3, [folderId]: 0 });
+	for (const counts of [null, [], { [folderId]: -1 }, { [folderId]: 1.5 }, { [folderId]: '1' }]) {
+		responseBody = { counts };
+		await assert.rejects(client.notebookNoteCounts(), code('invalid_backend_response'));
+	}
+	fail = true;
+	await assert.rejects(client.notebookNoteCounts(), code('backend_request_failed'));
+});
+
 test('path traversal, injected input properties and invalid pagination are rejected before sending', async t => {
 	let count = 0; const url = await server(t, (_req, res) => { count++; res.end('{}'); });
 	const client = createJoplinClient({ baseUrl: url, token: 'secret' });

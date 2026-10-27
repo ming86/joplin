@@ -263,24 +263,17 @@ test('account service keeps configured and sole notebook defaults outside the MC
 	assert.equal(createdInputs[1].is_todo, 0);
 });
 
-test('notebook counts, notebook creation, tag listing, and case-insensitive tag changes use eligible notes', async () => {
+test('notebook listings use aggregate counts alongside notebook creation and tag operations', async () => {
 	const b = backend();
 	const childNotebookId = movedNotebookId;
 	const tags = [{ id: workTagId, title: 'Work' }, { id: oldTagId, title: 'Old' }, { id: cafeTagId, title: 'Café' }];
 	const tagLookups = [];
 	let assigned = [tags[0], tags[1]];
-	const summaries = [
-		{ ...note, parent_id: folderId },
-		{ ...note, id: '1'.repeat(32), parent_id: folderId },
-		{ ...note, id: '2'.repeat(32), parent_id: folderId, encryption_applied: 1 },
-		{ ...note, id: '3'.repeat(32), parent_id: folderId, deleted_time: 9 },
-		{ ...note, id: '4'.repeat(32), parent_id: childNotebookId },
-	];
 	b.listAllNotebooks = async () => [
 		{ id: folderId, title: 'Main', parent_id: null },
 		{ id: childNotebookId, title: 'Child', parent_id: folderId },
 	];
-	b.listNoteSummaries = async () => ({ items: summaries, hasMore: false });
+	b.notebookNoteCounts = async () => ({ [folderId]: 2, [childNotebookId]: 1 });
 	b.listAllTags = async () => tags;
 	b.getNoteTags = async () => assigned;
 	b.findTagByTitle = async title => {
@@ -685,6 +678,8 @@ test('MCP reports structured core validation messages and keeps other 400 respon
 
 test('real Data API notebook and tag scans page through results and omit unavailable entries', async t => {
 	const folderPages = []; const tagPages = [];
+	let notebookCountRequests = 0;
+	let noteSummaryRequests = 0;
 	const secondFolderId = '1'.repeat(32);
 	const encryptedFolderId = '2'.repeat(32);
 	const deletedFolderId = '3'.repeat(32);
@@ -711,6 +706,7 @@ test('real Data API notebook and tag scans page through results and omit unavail
 			return res.end(JSON.stringify({ items, has_more: page === 1 }));
 		}
 		if (req.method === 'GET' && target.pathname === '/notes') {
+			noteSummaryRequests++;
 			const items = [
 				{ ...note, parent_id: folderId },
 				{ ...note, id: '8'.repeat(32), parent_id: folderId, encryption_applied: 1 },
@@ -718,6 +714,11 @@ test('real Data API notebook and tag scans page through results and omit unavail
 				{ ...note, id: 'a'.repeat(32), parent_id: secondFolderId },
 			];
 			return res.end(JSON.stringify({ items, has_more: false }));
+		}
+		if (req.method === 'POST' && target.pathname === '/services/headless') {
+			notebookCountRequests++;
+			assert.deepEqual(await readJson(req), { action: 'notebookNoteCounts' });
+			return res.end(JSON.stringify({ counts: { [folderId]: 1, [secondFolderId]: 1 } }));
 		}
 		if (req.method === 'GET' && target.pathname === '/tags') {
 			const page = Number(target.searchParams.get('page'));
@@ -746,6 +747,8 @@ test('real Data API notebook and tag scans page through results and omit unavail
 		assert.deepEqual(tags, [{ id: safeTagId, title: 'Visible tag' }, { id: secondTagId, title: 'Second tag' }]);
 		assert.deepEqual(folderPages, [1, 2]);
 		assert.deepEqual(tagPages, [1, 2]);
+		assert.equal(notebookCountRequests, 1);
+		assert.equal(noteSummaryRequests, 0, 'notebook counts do not read note-summary pages');
 	} finally { session.close(); }
 });
 
@@ -873,29 +876,26 @@ test('real Data API tag associations accept empty success and continue duplicate
 	} finally { session.close(); }
 });
 
-test('notebook note counts include page 50 when the complete 5000-note page reports more', async () => {
+test('notebook note counts use the aggregate result without scanning 5000 note summaries', async () => {
 	const b = backend();
-	const pages = [];
+	let aggregateCalls = 0;
+	let summaryReads = 0;
 	b.listAllNotebooks = async () => [{ id: folderId, title: 'Large notebook', parent_id: null }];
-	b.listNoteSummaries = async ({ page, limit }) => {
-		pages.push({ page, limit });
-		const items = page <= 50
-			? Array.from({ length: 100 }, (_, index) => ({
-				...note,
-				id: (page * 100 + index).toString(16).padStart(32, '0'),
-				parent_id: folderId,
-			}))
-			: [];
-		return { items, hasMore: page <= 50 };
+	b.notebookNoteCounts = async () => {
+		aggregateCalls++;
+		return { [folderId]: 5000 };
+	};
+	b.listNoteSummaries = async () => {
+		summaryReads++;
+		return { items: [], hasMore: false };
 	};
 	const session = createSession(b, account(), { allowWrites: false });
 	await ready(session);
 	try {
 		const notebooks = (await invoke(session, 'list_notebooks')).structuredContent.notebooks;
 		assert.equal(notebooks[0].note_count, 5000);
-		assert.deepEqual(pages[49], { page: 50, limit: 100 });
-		assert.deepEqual(pages[50], { page: 51, limit: 100 });
-		assert.equal(pages.length, 51, 'the empty final page ends the scan after the full 5000-note page');
+		assert.equal(aggregateCalls, 1);
+		assert.equal(summaryReads, 0, 'the aggregate replaces all 51 note-summary page reads');
 	} finally { session.close(); }
 });
 
