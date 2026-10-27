@@ -87,7 +87,7 @@ const grepErrorMessages = new Map([
 ]);
 const revisionToolNames = new Set([
 	'read_note', 'get_note', 'update_note',
-	'list_note_revisions', 'read_note_revision', 'compare_note_revisions',
+	'list_revisions', 'list_note_revisions', 'read_note_revision', 'compare_note_revisions',
 ]);
 const conflictToolNames = new Set(['list_conflicts', 'read_conflict']);
 const grepToolNames = new Set(['grep_notes']);

@@ -157,6 +157,27 @@ const revisionContext = {
 
 /** Success output JSON Schemas for the native revision and conflict MCP tools. */
 export const revisionConflictOutputSchemas = {
+	list_revisions: object({
+		accountEmail: { type: ['string', 'null'], description: 'Authenticated Joplin account email, or null when unavailable.' },
+		items: {
+			type: 'array',
+			items: object({
+				note_id: { type: 'string', pattern: '^[a-f0-9]{32}$', description: 'Native id of the note whose retained revision is listed.' },
+				revision_id: { type: 'string', pattern: '^[a-f0-9]{32}$', description: 'Native Joplin revision identifier.' },
+				parent_revision_id: { anyOf: [{ type: 'string', pattern: '^[a-f0-9]{32}$' }, { type: 'null' }], description: 'Parent revision identifier, or null for the first revision.' },
+				captured_time: {
+					type: 'integer', minimum: Number.MIN_SAFE_INTEGER, maximum: Number.MAX_SAFE_INTEGER,
+					description: 'Native revision item_updated_time in Unix epoch milliseconds. It may come from the note update time or an immediate capture and may be adjusted to preserve parent order; it is not collection, synchronization, or first-observed time.',
+				},
+				current_title: { type: ['string', 'null'], description: 'Current note title, or null when the live note is absent or unavailable through the readable-note boundary.' },
+				current_notebook_id: { type: ['string', 'null'], description: 'Current notebook id, or null when the live note is absent or unavailable through the readable-note boundary.' },
+			}, undefined, 'Revision summary with current note metadata when the live note is readable.'),
+			description: 'Revision rows ordered by native revision timestamp descending, then native revision id descending.',
+		},
+		page: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER, description: 'One-based page number returned by the service.' },
+		limit: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER, description: 'Requested positive safe-integer page size, including values above 100.' },
+		hasMore: { type: 'boolean', description: 'Whether another matching revision exists after this page.' },
+	}),
 	list_note_revisions: object({
 		accountEmail: { type: ['string', 'null'], description: 'Authenticated Joplin account email, or null when unavailable.' },
 		items: { type: 'array', items: revisionSummary, description: 'Revision rows on this page, newest first.' },

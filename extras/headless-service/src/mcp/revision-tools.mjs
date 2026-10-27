@@ -7,8 +7,12 @@ import { bodyTotalLineCount } from './body-line-count.mjs';
 const id = { type: 'string', pattern: '^[a-f0-9]{32}$' };
 /** MCP schema for the service's supported page-number range. */
 const page = { type: 'integer', minimum: 1, maximum: 1000000 };
-/** MCP schema for one native-history page, matching the core's 100-row maximum. */
+/** Existing single-note history page-size limit. */
 const limit = { type: 'integer', minimum: 1, maximum: 100, default: 20 };
+/** Positive safe-integer pagination fields for combined history pages. */
+const combinedPagination = { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER };
+/** Signed safe-integer Unix-millisecond bounds for native revision timestamps. */
+const revisionTimestamp = { type: 'integer', minimum: Number.MIN_SAFE_INTEGER, maximum: Number.MAX_SAFE_INTEGER };
 /** Build closed tool inputs so callers cannot add unrecognized selectors. */
 const object = (properties, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
 /** MCP annotations for read-only history operations. */
@@ -26,8 +30,30 @@ function bodyMetadata(text) {
 	};
 }
 
-/** Register the three read-only MCP tools for native Joplin note revisions. */
+/** Register read-only MCP tools for native Joplin note revisions. */
 export function registerRevisionTools(add, service, { getFileResources } = {}) {
+	/** Explain selector scope, timestamp meaning, live pagination, and history follow-ups. */
+	const revisionListDescription = 'List native note revisions without reading bodies or capturing a new snapshot. If neither selector is supplied, list all retained revisions visible to this device, including history for deleted notes. Supplied note_ids and notebook_ids form a deduplicated union, and an empty selector contributes no notes; note_ids can select history after deletion. Notebook scope uses currently readable note membership and current descendants by default, so it includes older revisions of notes now in those notebooks but does not reconstruct past notebook membership. since and until filter native item_updated_time; captured_time exposes that timestamp, which may come from a note update or immediate capture and may be adjusted to preserve parent ordering, so it is not collection, synchronization, or first-observed time. Page-based results are a live view, so newer revisions can shift later pages between calls. Use read_note_revision or compare_note_revisions to inspect a returned revision. Read the current note with read_note before using its current revision_id for update_note.';
+	/** Closed input schema for all combined revision selectors and filters. */
+	const listRevisionsSchema = object({
+		note_ids: { type: 'array', items: { ...id, description: 'A native note id whose retained history should be included, even if its live note was deleted.' }, description: 'Optional note ids. If supplied with notebook_ids, their revisions are included in the union.' },
+		notebook_ids: { type: 'array', items: { ...id, description: 'A native notebook id.' }, description: 'Optional current notebook scope. Selects currently readable notes in these notebooks and, by default, their current descendants.' },
+		include_descendants: { type: 'boolean', default: true, description: 'Whether notebook_ids also include notes in current descendant notebooks. Defaults to true.' },
+		since: { ...revisionTimestamp, description: 'Inclusive lower bound for the native revision item_updated_time, in Unix epoch milliseconds.' },
+		until: { ...revisionTimestamp, description: 'Exclusive upper bound for the native revision item_updated_time, in Unix epoch milliseconds.' },
+		page: { ...combinedPagination, default: 1, description: 'One-based page number as a positive safe integer. Defaults to 1; the service validates pagination arithmetic.' },
+		limit: { ...combinedPagination, default: 20, description: 'Maximum rows on this page as a positive safe integer. Defaults to 20; values above 100 are accepted.' },
+	});
+	add('list_revisions', revisionListDescription, listRevisionsSchema, (args, signal) => service.listRevisions({
+		...(args.note_ids === undefined ? {} : { note_ids: args.note_ids }),
+		...(args.notebook_ids === undefined ? {} : { notebook_ids: args.notebook_ids }),
+		include_descendants: args.include_descendants ?? true,
+		...(args.since === undefined ? {} : { since: args.since }),
+		...(args.until === undefined ? {} : { until: args.until }),
+		page: args.page ?? 1,
+		limit: args.limit ?? 20,
+	}, signal), readAnnotations);
+
 	add('list_note_revisions',
 		'List the native revision history for a note, newest first. History remains available after the live note is deleted.',
 		object({

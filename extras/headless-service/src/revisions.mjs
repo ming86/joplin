@@ -39,6 +39,37 @@ function noteChanges(input) {
 	return structuredClone(input);
 }
 
+/** Validate combined revision selectors and pagination at the account service boundary. */
+function listRevisionsInput(input) {
+	requireValue(record(input) && Object.keys(input).every(key => [
+		'note_ids', 'notebook_ids', 'include_descendants', 'since', 'until', 'page', 'limit',
+	].includes(key)), 'invalid_revision_input');
+	const result = {};
+	for (const key of ['note_ids', 'notebook_ids']) {
+		if (input[key] === undefined) continue;
+		requireValue(Array.isArray(input[key]), 'invalid_revision_input');
+		result[key] = input[key].map(identifier);
+	}
+	if (input.include_descendants !== undefined) {
+		requireValue(typeof input.include_descendants === 'boolean', 'invalid_revision_input');
+		result.include_descendants = input.include_descendants;
+	}
+	for (const key of ['since', 'until']) {
+		if (input[key] === undefined) continue;
+		requireValue(Number.isSafeInteger(input[key]), 'invalid_revision_input');
+		result[key] = input[key];
+	}
+	const page = input.page === undefined ? 1 : input.page;
+	const limit = input.limit === undefined ? 20 : input.limit;
+	requireValue(Number.isSafeInteger(page) && page >= 1 && Number.isSafeInteger(limit) && limit >= 1
+		&& Number.isSafeInteger(limit + 1), 'invalid_pagination');
+	const offset = (page - 1) * limit;
+	requireValue(Number.isSafeInteger(offset) && Number.isSafeInteger(offset + limit + 1), 'invalid_pagination');
+	result.page = page;
+	result.limit = limit;
+	return result;
+}
+
 /** Create an account-bound adapter for live note reads and immutable native history. */
 export function createRevisionService({ backend, permit, accountId, readableNotebookTitle }) {
 	requireValue(typeof backend === 'function' && typeof permit === 'function'
@@ -81,6 +112,13 @@ export function createRevisionService({ backend, permit, accountId, readableNote
 			const page = pagination({ page: input.page, limit: input.limit });
 			const result = await core().listNoteRevisions({ note_id: noteId, ...page }, signal);
 			return { accountId, ...result, items: result.items.map(identity) };
+		},
+		/** List retained revisions across the selected native note and notebook scopes. */
+		async listRevisions(input = {}, signal) {
+			permit('read');
+			const args = listRevisionsInput(input);
+			const result = await core().listRevisions(args, signal);
+			return { accountId, ...result };
 		},
 		/** Read an immutable historical snapshot without requiring the live note to exist. */
 		async readNoteRevision(input, signal) {

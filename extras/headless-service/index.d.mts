@@ -224,6 +224,59 @@ export interface NoteRevisionListInput extends PageOptions {
     /** Note whose revision history should be listed. */
     note_id: string;
 }
+/**
+ * Input for combined native history. If both selectors are omitted, all retained
+ * account revisions are eligible; supplied selectors form a deduplicated union,
+ * and an empty selector contributes no notes. Notebook scope uses current readable
+ * membership and does not reconstruct past notebook membership.
+ */
+export interface ListRevisionsInput {
+    /** Optional note IDs whose retained revision histories should be included. */
+    note_ids?: string[];
+    /** Optional notebooks whose currently readable notes should be included. */
+    notebook_ids?: string[];
+    /** Whether current descendants of selected notebooks are included; defaults to true. */
+    include_descendants?: boolean;
+    /** Inclusive native revision item_updated_time lower bound in Unix epoch milliseconds. */
+    since?: number;
+    /** Exclusive native revision item_updated_time upper bound in Unix epoch milliseconds. */
+    until?: number;
+    /** One-based positive safe-integer page number; defaults to 1. */
+    page?: number;
+    /** Positive safe-integer page size; defaults to 20 and accepts values above 100. */
+    limit?: number;
+}
+/** Combined-history row with the note's current metadata when it remains readable. */
+export interface CombinedNoteRevisionSummary {
+    /** Original native note ID, including for a retained revision of a deleted note. */
+    note_id: string;
+    /** Native Joplin revision ID. */
+    revision_id: string;
+    /** Parent revision ID, or null for the first revision. */
+    parent_revision_id: string | null;
+    /**
+     * Native revision item_updated_time in Unix epoch milliseconds, exposed as
+     * captured_time. It can come from the note update or an immediate capture and
+     * can be adjusted to preserve parent ordering; it is not collection,
+     * synchronization, or first-observed time.
+     */
+    captured_time: number;
+    /** Current title, or null when the live note is absent or unavailable through the readable-note boundary. */
+    current_title: string | null;
+    /** Current notebook ID, or null when the live note is absent or unavailable through the readable-note boundary. */
+    current_notebook_id: string | null;
+}
+/** A page of combined revision history, including the requested page and limit. */
+export interface RevisionListPage<T> {
+    /** Matching revision rows on this page. */
+    items: T[];
+    /** One-based page number returned by the service. */
+    page: number;
+    /** Requested positive safe-integer page size. */
+    limit: number;
+    /** Whether another matching revision follows this page. */
+    hasMore: boolean;
+}
 /** Input for reading one immutable native note revision. */
 export interface NoteRevisionReadInput {
     /** Original note id. */
@@ -604,6 +657,8 @@ export interface JoplinBackend {
     updateNoteWithRevision(id: string, input: RevisionNoteUpdate, signal?: AbortSignal): Promise<UpdatedRevisionNote>;
     /** List one page of a note's immutable native revision history. */
     listNoteRevisions(input: NoteRevisionListInput, signal?: AbortSignal): Promise<Page<NoteRevisionSummary>>;
+    /** List combined native history by note IDs, current notebook membership, and native timestamp bounds. */
+    listRevisions(input: ListRevisionsInput, signal?: AbortSignal): Promise<RevisionListPage<CombinedNoteRevisionSummary>>;
     /** Read one immutable historical note snapshot. */
     readNoteRevision(input: NoteRevisionReadInput, signal?: AbortSignal): Promise<NoteRevisionSnapshot>;
     /** Compare historical snapshots, defaulting the destination to the latest revision. */
@@ -928,6 +983,11 @@ export interface AccountNoteRevisionPage {
     /** Whether a later page is available. */
     hasMore: boolean;
 }
+/** One account-bound page of combined native note revisions. */
+export interface AccountRevisionListPage extends RevisionListPage<CombinedNoteRevisionSummary> {
+    /** Account that supplied the revisions. */
+    accountId: string;
+}
 /** One account-bound page of device-local note conflicts. */
 export interface AccountConflictPage {
     /** Account that supplied the conflicts. */
@@ -981,6 +1041,8 @@ export interface AccountService {
     updateNoteWithRevision(id: string, input: RevisionNoteUpdate, signal?: AbortSignal): Promise<AccountUpdatedRevisionNote>;
     /** List one account-bound page of native note revisions. */
     listNoteRevisions(input: NoteRevisionListInput, signal?: AbortSignal): Promise<AccountNoteRevisionPage>;
+    /** List account revisions across selected notes or current notebook membership. */
+    listRevisions(input: ListRevisionsInput, signal?: AbortSignal): Promise<AccountRevisionListPage>;
     /** Read an immutable historical snapshot, including after live-note deletion. */
     readNoteRevision(input: NoteRevisionReadInput, signal?: AbortSignal): Promise<AccountNoteRevisionSnapshot>;
     /** Compare two native revisions, defaulting the destination to the latest. */

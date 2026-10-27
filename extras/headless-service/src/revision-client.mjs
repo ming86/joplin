@@ -65,6 +65,24 @@ function revisionSummary(data) {
 	return { revision_id: data.revision_id, captured_time: data.captured_time, parent_revision_id: data.parent_revision_id };
 }
 
+/** Validate list-wide revision rows and retain only the documented summary fields. */
+function combinedRevisionSummary(data) {
+	requireValue(record(data) && typeof data.note_id === 'string' && /^[a-f0-9]{32}$/.test(data.note_id)
+		&& typeof data.revision_id === 'string' && /^[a-f0-9]{32}$/.test(data.revision_id)
+		&& (data.parent_revision_id === null || typeof data.parent_revision_id === 'string' && /^[a-f0-9]{32}$/.test(data.parent_revision_id))
+		&& Number.isSafeInteger(data.captured_time)
+		&& (data.current_title === null || typeof data.current_title === 'string')
+		&& (data.current_notebook_id === null || typeof data.current_notebook_id === 'string' && /^[a-f0-9]{32}$/.test(data.current_notebook_id)), 'invalid_backend_response');
+	return {
+		note_id: data.note_id,
+		revision_id: data.revision_id,
+		parent_revision_id: data.parent_revision_id,
+		captured_time: data.captured_time,
+		current_title: data.current_title,
+		current_notebook_id: data.current_notebook_id,
+	};
+}
+
 /** Validate and allowlist one reconstructed historical note snapshot. */
 function revisionSnapshot(data, noteId, requestedRevisionId) {
 	requireValue(record(data) && data.note_id === noteId && data.revision_id === requestedRevisionId
@@ -218,6 +236,32 @@ export function createRevisionClient(request) {
 			} catch (error) {
 				throw withDiagnostics(error, requestDiagnostics({
 					method: 'POST', path: 'services/headless', operation: 'listNoteRevisions',
+					elapsedMs: Date.now() - startedAt, stage: 'validation',
+				}));
+			}
+		},
+		/** Forward a typed combined history query and validate the native result. */
+		async listRevisions(input = {}, signal) {
+			const args = Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined));
+			args.page = input.page === undefined ? 1 : input.page;
+			args.limit = input.limit === undefined ? 20 : input.limit;
+			const startedAt = Date.now();
+			const response = await post('listRevisions', args, signal);
+			const data = validatedActionResult(response, 'listRevisions', false, startedAt);
+			try {
+				requireValue(record(data) && Array.isArray(data.items)
+					&& Number.isSafeInteger(data.page) && data.page >= 1 && data.page === args.page
+					&& Number.isSafeInteger(data.limit) && data.limit >= 1 && data.limit === args.limit
+					&& typeof data.hasMore === 'boolean', 'invalid_backend_response');
+				return {
+					items: data.items.map(combinedRevisionSummary),
+					page: data.page,
+					limit: data.limit,
+					hasMore: data.hasMore,
+				};
+			} catch (error) {
+				throw withDiagnostics(error, requestDiagnostics({
+					method: 'POST', path: 'services/headless', operation: 'listRevisions',
 					elapsedMs: Date.now() - startedAt, stage: 'validation',
 				}));
 			}
