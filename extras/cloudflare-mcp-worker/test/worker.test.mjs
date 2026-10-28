@@ -9,7 +9,7 @@ const { Miniflare } = createRequire(import.meta.resolve('wrangler'))('miniflare'
 const PUBLIC_URL = 'https://joplin-mcp.example.com';
 const CLIENT_ID = 'test-google-client';
 const DAY_SECONDS = 24 * 60 * 60;
-const REFRESH_TOKEN_TTL_SECONDS = 180 * DAY_SECONDS;
+const REFRESH_TOKEN_TTL_SECONDS = 365 * DAY_SECONDS;
 
 /** Hash a verifier exactly as public MCP and Google OAuth clients do for PKCE. */
 async function challenge(verifier) {

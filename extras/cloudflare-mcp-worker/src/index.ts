@@ -11,10 +11,10 @@ const MAX_REGISTRATION_BYTES = 16_384;
 /** Access tokens remain valid for one hour. */
 const ACCESS_TOKEN_TTL_SECONDS = 60 * 60;
 
-/** New refresh grants start with a 180-day lifetime. */
-const REFRESH_TOKEN_TTL_SECONDS = 180 * 24 * 60 * 60;
+/** New refresh grants start with a 365-day lifetime. */
+const REFRESH_TOKEN_TTL_SECONDS = 365 * 24 * 60 * 60;
 
-/** Successful refreshes slide the grant's inactivity expiry by the same 180 days. */
+/** Successful refreshes slide the grant's inactivity expiry by the same 365 days. */
 const REFRESH_TOKEN_IDLE_TTL_SECONDS = REFRESH_TOKEN_TTL_SECONDS;
 
 /** Read a registration body with a fixed bound before handing it to the provider. */
