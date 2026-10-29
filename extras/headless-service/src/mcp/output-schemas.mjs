@@ -95,12 +95,33 @@ const status = object({
 /** A single Desktop-style search row, optionally enriched for semantic modes. */
 const searchResult = exactObject({
 	id: string, title: string, notebook_id: nullableString, updated_time: time, snippet: string,
+	section: { type: 'string', description: 'Positional path of the section enclosing an actual source keyword match.' },
+	section_heading: { type: 'string', description: 'Normalized full heading enclosing the source keyword match; empty for a preamble.' },
 	provenance: { type: 'string', enum: ['keyword', 'semantic', 'hybrid'] }, score: number, semanticExcerpt: string,
 	chunk: exactObject({ ordinal: number, start: { type: 'number', description: 'Start offset in UTF-8 bytes.' }, end: { type: 'number', description: 'End offset in UTF-8 bytes.' }, offsetUnit: { const: 'utf8-byte', type: 'string' } }),
 }, ['id', 'notebook_id', 'snippet']);
+/** A Markdown heading or nonempty preamble with exact complete-source coordinates. */
+const outlineEntry = exactObject({
+	path: { type: 'string', description: 'Positional heading path; 0 identifies a nonempty preamble before the first heading.' },
+	heading: { type: 'string', description: 'Normalized full heading text; empty for a preamble.' },
+	level: { type: 'integer', minimum: 0, maximum: 6, description: 'Markdown heading level, or zero for a preamble.' },
+	start_offset: { type: 'integer', minimum: 0, description: 'Inclusive whole-source UTF-16 offset.' },
+	end_offset: { type: 'integer', minimum: 0, description: 'Exclusive whole-source UTF-16 offset, including subsections.' },
+	start_line: { type: 'integer', minimum: 1, description: 'Inclusive whole-source first line, starting at one.' },
+	end_line: { type: 'integer', minimum: 1, description: 'Inclusive whole-source last line, starting at one.' },
+});
+/** Distinct selected-section bounds never replace the complete body's measurements. */
+const sectionProperties = {
+	section_path: { type: 'string', description: 'Resolved positional outline path.' },
+	section_heading: { type: 'string', description: 'Resolved normalized full heading; empty for a preamble.' },
+	section_start_offset: { type: 'integer', minimum: 0, description: 'Inclusive whole-source UTF-16 section start.' },
+	section_end_offset: { type: 'integer', minimum: 0, description: 'Exclusive whole-source UTF-16 section end, including subsections.' },
+};
+/** Paging fields that must never appear on an outline-only result. */
+const pagingFields = ['body_offset', 'body_returned_chars', 'body_start_line', 'body_end_line', 'has_more', 'offset', 'nextOffset', 'offsetUnit'];
 /** Body output fields shared by read_note and its numeric legacy alias. */
 const readProperties = {
-	...noteProperties, revision_id: string, previous_revision_id: nullableString, changed: boolean,
+	...noteProperties, ...sectionProperties, outline: array(outlineEntry), revision_id: string, previous_revision_id: nullableString, changed: boolean,
 	notebook_id: nullableString, notebook_title: nullableString, tags: array(string),
 	body_length: { type: 'number', description: 'Full body length in UTF-16 code units.' },
 	body_size_bytes: { type: 'integer', minimum: 0, description: 'Full body size in UTF-8 bytes.' },
@@ -112,7 +133,7 @@ const readProperties = {
 	body_end_line: { type: ['integer', 'null'], minimum: 1, description: 'Actual last line returned by a line-range read, inclusive and 1-based; null when the requested start is beyond the body.' },
 	has_more: boolean,
 	offset: { type: 'number', description: 'Legacy alias for body_offset in UTF-16 code units.' },
-	nextOffset: { type: ['number', 'null'], description: 'Next UTF-16 code-unit offset, or null when the full body has been returned.' },
+	nextOffset: { type: ['number', 'null'], description: 'Next absolute source UTF-16 offset, or null at the end of the complete body or selected section.' },
 	totalLength: { type: 'number', description: 'Legacy full body length in UTF-16 code units.' },
 	offsetUnit: { type: 'string', const: 'utf16-code-unit' },
 };
@@ -125,7 +146,7 @@ const noteFile = exactObject({ uri: string, filename: string, mime_type: string,
 	size: { type: 'integer', minimum: 0, description: 'Full UTF-8 file size in bytes.' },
 	sha256: { type: 'string', pattern: '^[a-f0-9]{64}$' }, expires_at: { type: 'string', format: 'date-time' },
 });
-/** Keep the success contract an object while describing inline, file and metadata-only results separately. */
+/** Keep the success contract an object with distinct inline, outline, file and metadata-only branches. */
 function noteReadSchema(legacy = false) {
 	return {
 		...object({ ...readProperties, ...(legacy ? {} : { is_todo: boolean, todo_completed: boolean }), file: noteFile },
@@ -133,15 +154,23 @@ function noteReadSchema(legacy = false) {
 		anyOf: [
 			{
 				required: readRequired,
-				not: { required: ['file'] },
+				not: { anyOf: [{ required: ['file'] }, { required: ['outline'] }] },
+				anyOf: [
+					{ required: Object.keys(sectionProperties) },
+					{ not: { anyOf: Object.keys(sectionProperties).map(name => ({ required: [name] })) } },
+				],
+			},
+			{
+				required: ['outline', 'body_length', 'totalLength', 'body_total_line_count'],
+				not: { anyOf: ['body', 'file', ...pagingFields, ...Object.keys(sectionProperties)].map(name => ({ required: [name] })) },
 			},
 			{
 				required: ['file'],
-				not: { required: ['body'] },
+				not: { anyOf: ['body', 'outline', ...Object.keys(sectionProperties)].map(name => ({ required: [name] })) },
 			},
 			{
 				required: metadataReadRequired,
-				not: { anyOf: [{ required: ['body'] }, { required: ['file'] }] },
+				not: { anyOf: ['body', 'file', 'outline', ...Object.keys(sectionProperties)].map(name => ({ required: [name] })) },
 			},
 		],
 	};
