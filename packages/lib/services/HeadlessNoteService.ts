@@ -93,7 +93,12 @@ async function prepareCapture(note: NoteEntity, previous?: PreparedCapture, sour
 	const service = Note.revisionService();
 	if (!previous && !source) {
 		const revision = await Revision.latestRevision(BaseModel.TYPE_NOTE, note.id);
-		source = { revision, ...(revision ? await Revision.reconstructWithDependencies(revision) : { content: null, revisions: [] }) };
+		// An unlocked snapshot starts fresh after locked history. Protect the persisted head
+		// without reading its ciphertext ancestry; ordinary diff parents still reconstruct strictly.
+		const reconstruction: RevisionReconstruction = revision && !service.startsNewRevisionChain(note, revision)
+			? await Revision.reconstructWithDependencies(revision)
+			: { content: null, revisions: revision ? [revision] : [] };
+		source = { revision, ...reconstruction };
 	}
 	const parent = previous?.revision || source?.revision;
 	const parentContent = previous?.content || source?.content;

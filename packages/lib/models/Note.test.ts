@@ -306,6 +306,12 @@ describe('models/Note', () => {
 
 		await expect(Note.load(note.id, { fields: ['id', 'is_locked'], useNoteLock: true })).rejects.toThrow();
 		await expect(Note.load(note.id, { fields: ['id', 'body'], useNoteLock: true })).rejects.toThrow('Gated note lock load is missing lock state');
+		// Resolves empty like a plain load, so callers keep their deleted-note handling.
+		await expect(Note.load('0123456789abcdef0123456789abcdef', { useNoteLock: true })).resolves.toBeUndefined();
+		// A row still encrypted by sync has no note lock body yet, so it comes back untouched.
+		const syncEncryptedId = '0123456789abcdef0123456789abcdee';
+		await Note.save({ id: syncEncryptedId, parent_id: '', is_locked: 1, encryption_applied: 1, encryption_cipher_text: 'cipher' }, { isNew: true });
+		expect(await Note.load(syncEncryptedId, { useNoteLock: true })).toMatchObject({ encryption_applied: 1, body: '' });
 
 		await Note.save(await Note.load(note.id, { useNoteLock: true }), { useNoteLock: true });
 		expect((await Note.load(note.id)).body).not.toBe(plainTextBody);
@@ -314,7 +320,7 @@ describe('models/Note', () => {
 		await expect(Note.save({
 			id: note.id,
 			body: 'must not be stored',
-		}, { useNoteLock: true })).rejects.toThrow('Gated note lock save is missing lock state');
+		}, { useNoteLock: true })).rejects.toThrow('Gated note lock save is missing decrypted state');
 		await expect(Note.save({
 			id: note.id,
 			is_locked: 1,
@@ -337,6 +343,54 @@ describe('models/Note', () => {
 		expect(unlockedNote.extracted_resource_ids).toBe('');
 	});
 
+	it('should encrypt an ungated partial save whose body is plaintext for a locked note', async () => {
+		await NoteLockKey.instance().create('123456');
+		await NoteLockSession.instance().unlock('123456');
+		const resourceId = '06894e83b8f84d3d8cbe0f1587f9e226';
+		const note = await Note.save({ body: 'secret', is_locked: 1 }, { useNoteLock: true });
+
+		// Gated loaded data saved in full through an ungated path is refused, and so is a lock
+		// change without the body.
+		await expect(Note.save({ ...await Note.load(note.id, { useNoteLock: true }), body: 'edited' })).rejects.toThrow('must be gated when the body was loaded using a gated load');
+		await expect(Note.save({ id: note.id, is_locked: 0 })).rejects.toThrow('Saves that change is_locked must include the body field');
+		expect((await Note.load(note.id, { useNoteLock: true })).body).toBe('secret');
+
+		// A fresh partial save picks up the row's lock state and keeps the lock fields together
+		// even when the caller restricts the saved fields, and the caller still gets the plaintext back.
+		const partialBody = `partial [](:/${resourceId})`;
+		expect((await Note.save({ id: note.id, body: partialBody }, { fields: ['body'] })).body).toBe(partialBody);
+		const storedNote = await Note.load(note.id);
+		expect(storedNote.is_locked).toBe(1);
+		expect(storedNote.body).not.toBe(partialBody);
+		expect(storedNote.extracted_resource_ids).toBe(resourceId);
+		expect((await Note.load(note.id, { useNoteLock: true })).body).toBe(partialBody);
+
+		// An ungated load returns ciphertext, which passes through unchanged, like sync data does.
+		await Note.save({ id: note.id, body: storedNote.body });
+		expect((await Note.load(note.id, { useNoteLock: true })).body).toBe(partialBody);
+
+		// With the session locked there is no key to encrypt with, so the save fails closed.
+		NoteLockSession.instance().lock();
+		await expect(Note.save({ id: note.id, body: 'plain while locked' })).rejects.toThrow('Note lock session is locked');
+		await NoteLockSession.instance().unlock('123456');
+		expect((await Note.load(note.id, { useNoteLock: true })).body).toBe(partialBody);
+
+		// Only a complete header marks ciphertext, so a body that merely starts like one is still encrypted.
+		await Note.save({ id: note.id, body: 'JLD01 shopping list' });
+		expect((await Note.load(note.id)).body).not.toBe('JLD01 shopping list');
+		expect((await Note.load(note.id, { useNoteLock: true })).body).toBe('JLD01 shopping list');
+
+		// A save while sync still holds the row encrypted is encrypted too, in case decryption never runs.
+		await Note.save({ id: note.id, body: 'before decryption', encryption_applied: 1 });
+		expect((await Note.load(note.id)).body).not.toBe('before decryption');
+	});
+
+	it('should save a note object that the store has frozen', async () => {
+		const note = await Note.save({ title: 'note', body: 'plain' });
+		await Note.save(Object.freeze({ ...note, body: 'edited' }));
+		expect((await Note.load(note.id)).body).toBe('edited');
+	});
+
 	it('should treat a locked note as a normal note while the feature is disabled', async () => {
 		await NoteLockKey.instance().create('123456');
 		await NoteLockSession.instance().unlock('123456');
@@ -350,6 +404,38 @@ describe('models/Note', () => {
 		expect((await Note.load(note.id, { useNoteLock: true })).body).toBe(cipherText);
 		await Note.save({ id: note.id, is_locked: 1, body: 'overwrite' });
 		expect((await Note.load(note.id)).body).toBe('overwrite');
+	});
+
+	it('should find a locked note anywhere in a notebook tree', async () => {
+		const parent = await Folder.save({ title: 'parent' });
+		const child = await Folder.save({ title: 'child', parent_id: parent.id });
+		const other = await Folder.save({ title: 'other' });
+		await Note.save({ title: 'plain', body: 'plain', parent_id: parent.id });
+		await Note.save({ title: 'other plain', body: 'plain', parent_id: other.id });
+		const locked = await Note.save({ title: 'locked', body: 'JLD01cipher', parent_id: child.id });
+		await db().exec('UPDATE notes SET is_locked = 1 WHERE id = ?', [locked.id]);
+
+		expect(await Note.hasLockedNoteInFolderTrees([parent.id])).toBe(true);
+		expect(await Note.hasLockedNoteInFolderTrees([child.id])).toBe(true);
+		expect(await Note.hasLockedNoteInFolderTrees([other.id])).toBe(false);
+	});
+
+	it('should refuse to save a decrypted locked note once the feature is disabled', async () => {
+		await NoteLockKey.instance().create('123456');
+		await NoteLockSession.instance().unlock('123456');
+		const note = await Note.save({ body: 'secret', is_locked: 1 }, { useNoteLock: true });
+		const lockedNote = await Note.load(note.id, { useNoteLock: true });
+		const unlockedNote = await Note.load((await Note.save({ body: 'plain' })).id, { useNoteLock: true });
+		const cipherText = (await Note.load(note.id)).body;
+
+		Setting.setValue('featureFlag.noteLock', false);
+		const error = 'Locked notes cannot be saved while the note lock feature is turned off';
+		await expect(Note.save({ ...lockedNote, body: 'edited' }, { useNoteLock: true })).rejects.toThrow(error);
+		await expect(Note.save({ id: note.id, body: 'edited', isDecrypted: true } as NoteEntity, { useNoteLock: true })).rejects.toThrow(error);
+		expect((await Note.load(note.id)).body).toBe(cipherText);
+
+		await Note.save({ ...unlockedNote, body: 'plain edited' }, { useNoteLock: true });
+		expect((await Note.load(unlockedNote.id)).body).toBe('plain edited');
 	});
 
 	it('should encrypt a gated save with a captured key while the session is locked, but not after a key rotation', async () => {
@@ -396,7 +482,7 @@ describe('models/Note', () => {
 		expect((await Note.load(note.id, { useNoteLock: true })).body).toBe('edited again');
 
 		const unlocked = await Note.save({ ...await Note.load(note.id, { useNoteLock: true }), is_locked: 0 }, { useNoteLock: true });
-		expect(unlocked).toMatchObject({ isDecrypted: false });
+		expect(unlocked).toMatchObject({ isDecrypted: true });
 	});
 
 	it('should fail closed when note lock encryption cannot decrypt or encrypt', async () => {
@@ -765,6 +851,18 @@ describe('models/Note', () => {
 		expect(movedNote.parent_id).toBe(targetFolder.id);
 		expect(movedNote.is_conflict).toBe(0);
 		expect(movedNote.conflict_original_id).toBe('');
+	}));
+
+	it('should take the share_id of the target folder when moving a note', (async () => {
+		const sharedFolder = await Folder.save({ title: 'Shared', share_id: 'share-1' });
+		const folder = await Folder.save({ title: 'Folder' });
+		const note = await Note.save({ title: 'note', parent_id: sharedFolder.id, share_id: 'share-1' });
+
+		await Note.moveToFolder(note.id, folder.id);
+		expect((await Note.load(note.id)).share_id).toBe('');
+
+		await Note.moveToFolder(note.id, sharedFolder.id);
+		expect((await Note.load(note.id)).share_id).toBe('share-1');
 	}));
 
 	function testResourceReplacement(body: string, pathsToTry: string[], expected: string) {

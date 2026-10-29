@@ -27,10 +27,10 @@ import markupLanguageUtils from '@joplin/lib/utils/markupLanguageUtils';
 import Setting from '@joplin/lib/models/Setting';
 import stateToWhenClauseContext from '../../services/commands/stateToWhenClauseContext';
 import ExternalEditWatcher from '@joplin/lib/services/ExternalEditWatcher';
-import { itemIsReadOnly } from '@joplin/lib/models/utils/readOnly';
+import { itemIsReadOnly, noteIsLockedInShare } from '@joplin/lib/models/utils/readOnly';
 import NoteLockSession from '@joplin/lib/services/noteLock/NoteLockSession';
 import isNoteLockEnabled from '@joplin/lib/services/noteLock/isNoteLockEnabled';
-import { SyncInfo } from '@joplin/lib/services/synchronizer/syncInfoUtils';
+import hasNoteLockKey from '../utils/hasNoteLockKey';
 import NoteLockPanel from './NoteLockPanel/NoteLockPanel';
 import { themeStyle } from '@joplin/lib/theme';
 import { substrWithEllipsis } from '@joplin/lib/string-utils';
@@ -84,7 +84,7 @@ let editorIdCounter = 0;
 function NoteEditorContent(props: NoteEditorProps) {
 	const [showRevisions, setShowRevisions] = useState(false);
 	const [titleHasBeenManuallyChanged, setTitleHasBeenManuallyChanged] = useState(false);
-	const [isReadOnly, setIsReadOnly] = useState<boolean>(false);
+	const [isReadOnlyItem, setIsReadOnlyItem] = useState<boolean>(false);
 	const [reloadInProgress, setReloadInProgress] = useState(false);
 
 	const editorRef = useRef<NoteBodyEditorRef|null>(null);
@@ -178,7 +178,8 @@ function NoteEditorContent(props: NoteEditorProps) {
 			// Enabling requires an unlocked session, so capture the key the same way a decrypt
 			// does - a pending save can then still encrypt if the session locks before it runs.
 			const noteLockKey = event.isLocked && NoteLockSession.instance().isUnlocked() ? NoteLockSession.instance().decryptedKey() : null;
-			const newFormNote = { ...formNoteRef.current, is_locked: event.isLocked ? 1 : 0, noteLockKey, isDecrypted: event.isLocked };
+			// The form note came from a gated load, so the marker stays true even when disabling.
+			const newFormNote = { ...formNoteRef.current, is_locked: event.isLocked ? 1 : 0, noteLockKey, isDecrypted: true };
 			setFormNote(newFormNote);
 			void scheduleSaveNote(newFormNote);
 		};
@@ -375,13 +376,17 @@ function NoteEditorContent(props: NoteEditorProps) {
 		return parseShareCache(props.shareCacheSetting);
 	}, [props.shareCacheSetting]);
 
+	// The list row covers a form whose refresh was skipped for unsaved edits, the form covers a window whose list no longer holds the note.
+	const lockedInShare = noteIsLockedInShare(formNote) || noteIsLockedInShare(props.notes.find(n => n.id === formNote.id));
+	const isReadOnly = isReadOnlyItem || lockedInShare;
+
 	useAsyncEffect(async event => {
 		if (!formNote.id) return;
 
 		try {
 			const result = await itemIsReadOnly(BaseItem, ModelType.Note, ItemChange.SOURCE_UNSPECIFIED, formNote.id, props.syncUserId, shareCache);
 			if (event.cancelled) return;
-			setIsReadOnly(result);
+			setIsReadOnlyItem(result);
 		} catch (error) {
 			if (error.code === ErrorCode.NotFound) {
 				// Can happen if the note has been deleted but a render is
@@ -390,7 +395,7 @@ function NoteEditorContent(props: NoteEditorProps) {
 				throw error;
 			}
 		}
-	}, [formNote.id, props.syncUserId, shareCache]);
+	}, [formNote.id, formNote.deleted_time, props.syncUserId, shareCache]);
 
 	const onBodyWillChange = useCallback((event: { changeId: number }) => {
 		handleProvisionalFlag();
@@ -634,7 +639,7 @@ function NoteEditorContent(props: NoteEditorProps) {
 
 		return (
 			<div style={revStyle} ref={containerRef}>
-				<NoteRevisionViewer customCss={props.customCss} noteId={formNote.id} onBack={noteRevisionViewer_onBack} />
+				<NoteRevisionViewer customCss={props.customCss} noteId={isNoteLockEnabled() ? effectiveNoteId : formNote.id} onBack={noteRevisionViewer_onBack} />
 			</div>
 		);
 	}
@@ -766,6 +771,7 @@ function NoteEditorContent(props: NoteEditorProps) {
 						hasNoteLockKey={props.hasNoteLockKey}
 						dispatch={props.dispatch}
 						undecryptable={true}
+						lockedInShare={noteIsLockedInShare(lockedNoteMetadata)}
 					/>
 				</div>
 			);
@@ -781,6 +787,8 @@ function NoteEditorContent(props: NoteEditorProps) {
 						noteTitle={lockedNoteMetadata.title}
 						hasNoteLockKey={props.hasNoteLockKey}
 						dispatch={props.dispatch}
+						migrationRunning={props.noteLockMigrationRunning}
+						lockedInShare={noteIsLockedInShare(lockedNoteMetadata)}
 					/>
 				</div>
 			);
@@ -843,7 +851,7 @@ function NoteEditorContent(props: NoteEditorProps) {
 					setTagsToolbarButtonInfo={props.setTagsToolbarButtonInfo}
 					selectedNoteTags={props.selectedNoteTags}
 				/>
-				<WarningBanner bodyEditor={props.bodyEditor}/>
+				<WarningBanner bodyEditor={props.bodyEditor} lockedInShare={lockedInShare}/>
 			</div>
 		</div>
 	);
@@ -852,15 +860,6 @@ function NoteEditorContent(props: NoteEditorProps) {
 interface ConnectProps {
 	windowId: string;
 }
-
-// Memoized because mapStateToProps runs on every dispatch and SyncInfo parses the cached JSON.
-let hasNoteLockKeyCache: { syncInfoCache: string; value: boolean } = null;
-const hasNoteLockKey = (syncInfoCache: string) => {
-	if (!hasNoteLockKeyCache || hasNoteLockKeyCache.syncInfoCache !== syncInfoCache) {
-		hasNoteLockKeyCache = { syncInfoCache, value: !!new SyncInfo(syncInfoCache).noteLockKey };
-	}
-	return hasNoteLockKeyCache.value;
-};
 
 const mapStateToProps = (state: AppState, ownProps: ConnectProps) => {
 	const whenClauseContext = stateToWhenClauseContext(state, { windowId: ownProps.windowId });
@@ -923,6 +922,7 @@ const mapStateToProps = (state: AppState, ownProps: ConnectProps) => {
 		whiteboardForceMarkdown: windowState.whiteboardForceMarkdown ?? {},
 		noteLockSessionUnlocked: state.noteLockSessionUnlocked,
 		hasNoteLockKey: hasNoteLockKey(state.settings['syncInfoCache']),
+		noteLockMigrationRunning: !!state.noteLockMigrationStatus?.running,
 		editorNoteReloadTimeRequest: windowState.windowEditorNoteReloadTimeRequest,
 	};
 };

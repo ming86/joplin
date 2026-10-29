@@ -167,6 +167,13 @@ class Application extends BaseApplication {
 			await ExternalEditWatcher.instance().stopWatching(action.id);
 		}
 
+		// Like a lock made on this device (see enableNoteEncryption), a lock that arrives with a sync ends the note's
+		// external editing, which the UI cannot stop for a locked note. The lock is already saved here, so pending
+		// plaintext edits are dropped rather than saved over the ciphertext.
+		if (action.type === 'NOTE_UPDATE_ONE' && action.note.is_locked && store.getState().watchedNoteFiles.includes(action.note.id)) {
+			await ExternalEditWatcher.instance().stopWatching(action.note.id, false);
+		}
+
 		if (action.type === 'SETTING_UPDATE_ONE' && action.key === 'featureFlag.autoUpdaterServiceEnabled' || action.type === 'SETTING_UPDATE_ALL') {
 			if (Setting.value('featureFlag.autoUpdaterServiceEnabled')) this.setupAutoUpdaterService();
 		}
@@ -676,7 +683,7 @@ class Application extends BaseApplication {
 				setTimeout(() => {
 					// Schedule sync with a delay of 0 and wrap with the desired timeout, as shim.setTimeout may not fire on first run or after an upgrade
 					// eslint-disable-next-line promise/prefer-await-to-then -- Old code before rule was applied
-					void reg.scheduleSync(0).then(() => {
+					void reg.scheduleSync(0).finally(() => {
 						// Wait for the first sync before updating the notifications, since synchronisation
 						// might change the notifications.
 						void AlarmService.updateAllNotifications();

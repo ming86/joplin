@@ -5,6 +5,7 @@ import Resource from '../../models/Resource';
 import Setting from '../../models/Setting';
 import Synchronizer from '../../Synchronizer';
 import SyncTargetRegistry from '../../SyncTargetRegistry';
+import { reg } from '../../registry';
 import { afterAllCleanUp, createNoteAndResource, fileApi, loadEncryptionMasterKey, setupDatabaseAndSynchronizer, sleep, switchClient, synchronizer, synchronizerStart, syncTargetId } from '../../testing/test-utils';
 import { fetchSyncInfo, getEncryptionEnabled, uploadSyncInfo } from './syncInfoUtils';
 
@@ -126,6 +127,26 @@ describe('Synchronizer.remoteChangesOnly', () => {
 		expect(getEncryptionEnabled()).toBe(true);
 		const remote = await BaseItem.unserialize(await fileApi().get(BaseItem.systemPath(note)));
 		expect(remote.encryption_applied).toBe(1);
+	});
+
+	it('schedules a full follow-up when post-poll publication updates a note', async () => {
+		const note = await Note.save({ title: 'published note' });
+		await synchronizerStart();
+		await sleep(0.1);
+
+		jest.spyOn(fileApi(), 'delta').mockResolvedValueOnce({ items: [], hasMore: false, context: { cursor: 'after-empty-poll' } });
+		jest.spyOn(Note, 'updatePublishedNotes').mockImplementationOnce(async () => {
+			await Note.save({ id: note.id, title: 'publication status updated' });
+		});
+		const itemsThatNeedSync = jest.spyOn(BaseItem, 'itemsThatNeedSync');
+		const scheduleSync = jest.spyOn(reg, 'scheduleSync').mockResolvedValue(undefined);
+
+		await synchronizerStart(null, { remoteChangesOnly: true, throwOnError: true });
+
+		expect(itemsThatNeedSync).toHaveBeenCalled();
+		expect(scheduleSync).toHaveBeenCalledWith(reg.syncAsYouTypeInterval(), {
+			syncSteps: ['update_remote', 'delete_remote', 'delta'],
+		}, true);
 	});
 
 	it('does not checkpoint a probe that is cancelled while fetching', async () => {

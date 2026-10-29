@@ -52,19 +52,37 @@ export default async (action: SyncAction, ItemClass: typeof BaseItem, remoteExis
 		// Reload the note, to ensure the latest version is used to create the conflict
 		local = await Note.load(local.id);
 
+		// An older client drops is_locked when it edits a shared locked note: its change is discarded and the local version pushed back,
+		// ahead of the remote time. A read-only share rejects the push back, so there the lock is restored on the remote version and the
+		// normal conflict below keeps the local version. Outside a share, only a bug could drop the lock, so the change is kept.
+		if (remoteExists && (remoteContent as NoteEntity).share_id && (remoteContent as NoteEntity).is_locked === undefined && (local as NoteEntity).is_locked) {
+			if (itemIsReadOnly) {
+				remoteContent = { ...remoteContent, is_locked: (local as NoteEntity).is_locked } as NoteEntity;
+			} else {
+				const syncTimeQueries = BaseItem.updateSyncTimeQueries(syncTargetId, local, BaseItem.remoteItemSyncTime(remoteSyncedTime), null, remoteSyncedTime);
+				const newUpdatedTime = Math.max(local.updated_time, remoteSyncedTime + 1);
+				await ItemClass.save({ id: local.id, updated_time: newUpdatedTime, user_updated_time: newUpdatedTime }, { autoTimestamp: false, changeSource: ItemChange.SOURCE_SYNC, nextQueries: syncTimeQueries });
+				return;
+			}
+		}
+
 		// ------------------------------------------------------------------------------
 		// First find out if the conflict matters. For example, if the conflict is on the title or body
 		// we want to preserve all the changes. If it's on todo_completed it doesn't really matter
 		// so in this case we just take the remote content.
 		// ------------------------------------------------------------------------------
 
-		let mustHandleConflict = true;
-		if (!itemIsReadOnly && remoteContent) {
-			mustHandleConflict = Note.mustHandleConflict(local, remoteContent);
-		}
-
 		// The remote note is only decrypted after it's saved, so decrypt it in memory here
-		const decryptedRemoteNote = mustHandleConflict && remoteContent ? await decryptNoteInMemory(remoteContent as NoteEntity) : null;
+		let decryptedRemoteNote: NoteEntity | null = null;
+		let mustHandleConflict = true;
+		if ((local as NoteEntity).is_conflict) {
+			mustHandleConflict = false;
+		} else if (!itemIsReadOnly && remoteContent) {
+			decryptedRemoteNote = await decryptNoteInMemory(remoteContent as NoteEntity);
+			mustHandleConflict = Note.mustHandleConflict(local, decryptedRemoteNote ?? remoteContent);
+		} else if (remoteContent) {
+			decryptedRemoteNote = await decryptNoteInMemory(remoteContent as NoteEntity);
+		}
 
 		// Skipped for content that can't be merged safely: read-only items (the local change
 		// can't be pushed), still encrypted local notes and the locked notes
@@ -92,12 +110,14 @@ export default async (action: SyncAction, ItemClass: typeof BaseItem, remoteExis
 			// Only the title and body are replaced, so fields such as user_updated_time stay
 			// consistent with the normal conflict path. The decrypted copy drops the cipher text
 			const remoteNote = decryptedRemoteNote;
+			// Ahead of the remote time so the merge uploads as a local change
+			const newUpdatedTime = Math.max(time.unixMs(), remoteNote.updated_time + 1);
 			const mergedNote: NoteEntity = {
 				...remoteNote,
 				title: merge.resolvedLocal.title,
 				body: merge.resolvedLocal.body,
-				// Ahead of the remote time so the merge uploads as a local change
-				updated_time: Math.max(time.unixMs(), remoteNote.updated_time + 1),
+				updated_time: newUpdatedTime,
+				user_updated_time: newUpdatedTime,
 			};
 			// Both sides now share the merged output, so it becomes the base for later conflicts
 			const mergedBase = {
@@ -138,16 +158,20 @@ export default async (action: SyncAction, ItemClass: typeof BaseItem, remoteExis
 				const remoteUnchanged = merge.resolvedCurrent.title === remoteNote.title && merge.resolvedCurrent.body === remoteNote.body;
 
 				local = { ...local, title: merge.resolvedLocal.title, body: merge.resolvedLocal.body } as NoteEntity;
+				// Ahead of the remote time so the merged changes upload as a local change
+				const newUpdatedTime = Math.max(time.unixMs(), remoteNote.updated_time + 1);
 				remoteContent = {
 					...remoteNote,
 					title: merge.resolvedCurrent.title,
 					body: merge.resolvedCurrent.body,
-					// Ahead of the remote time so the merged changes upload as a local change
-					updated_time: remoteUnchanged ? remoteNote.updated_time : Math.max(time.unixMs(), remoteNote.updated_time + 1),
+					updated_time: remoteUnchanged ? remoteNote.updated_time : newUpdatedTime,
+					user_updated_time: remoteUnchanged ? remoteNote.user_updated_time : newUpdatedTime,
 				} as NoteEntity;
 			}
 
-			const conflictNote = await Note.createConflictNote(local, ItemChange.SOURCE_SYNC);
+			// If the remote no longer exists, the local note will be permanently deleted
+			// further down, so the conflict note must not refer back to it as its original.
+			const conflictNote = await Note.createConflictNote(local, ItemChange.SOURCE_SYNC, remoteExists);
 			createdConflictNoteId = conflictNote.id;
 
 			// Read the base before the rebuild below. The remote version is the original

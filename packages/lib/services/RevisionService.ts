@@ -10,11 +10,14 @@ import BaseService from './BaseService';
 import { _ } from '../locale';
 import { ItemChangeEntity, NoteEntity, RevisionEntity } from './database/types';
 import Logger from '@joplin/utils/Logger';
+import isNoteLockEnabled from './noteLock/isNoteLockEnabled';
+import NoteLockNote from './noteLock/NoteLockNote';
 import { MarkupLanguage } from '../../renderer';
 import { substrWithEllipsis } from '../string-utils';
 const { sprintf } = require('sprintf-js');
 import { wrapError } from '../errorUtils';
 import { Mutex } from 'async-mutex';
+import fastDeepEqual = require('fast-deep-equal');
 
 const logger = Logger.create('RevisionService');
 
@@ -90,29 +93,43 @@ export default class RevisionService extends BaseService {
 		return { title: note.title || '', body: note.body || '', metadata: this.noteMetadata_(note) };
 	}
 
-	/** Build an unsaved native diff; null means the tracked snapshot matches its parent. */
+	/** Whether native history must start with full contents instead of depending on the previous revision. */
+	public startsNewRevisionChain(note: NoteEntity, parent: RevisionEntity): boolean {
+		return !parent || !!parent.is_locked !== !!note.is_locked || (isNoteLockEnabled() && NoteLockNote.isLocked(note));
+	}
+
+	/** Build an unsaved native diff or standalone lock snapshot; null means no tracked diff remains. */
 	public prepareNoteRevision(note: NoteEntity, parent: RevisionEntity, parentContent: RevisionContent, itemUpdatedTime = note.updated_time): RevisionEntity {
 		const content = this.noteRevisionContent(note);
+		// Lock transitions sever ancestry even with the feature off. With it on, ciphertext
+		// snapshots always stand alone so clearing plaintext history cannot orphan them.
+		const startsNewChain = this.startsNewRevisionChain(note, parent);
+		const base = startsNewChain ? null : parentContent;
 		const revision: RevisionEntity = {
-			parent_id: parent?.id || '',
+			parent_id: startsNewChain ? '' : parent.id,
 			item_type: BaseModel.TYPE_NOTE,
 			item_id: note.id,
 			// Captures can be newer than a subsequently synced note. Keep native parent selection
 			// and timestamp-based reconstruction ordered even when the note's timestamp is earlier.
 			item_updated_time: Math.max(itemUpdatedTime, parent ? parent.item_updated_time + 1 : 0),
-			title_diff: Revision.createTextPatch(parentContent?.title || '', content.title),
-			body_diff: Revision.createTextPatch(parentContent?.body || '', content.body),
-			metadata_diff: Revision.createObjectPatch(parentContent?.metadata || {}, content.metadata),
+			// Retain the marker with the feature off too: the body still contains ciphertext.
+			is_locked: note.is_locked ? 1 : 0,
+			title_diff: Revision.createTextPatch(base?.title || '', content.title),
+			body_diff: Revision.createTextPatch(base?.body || '', content.body),
+			metadata_diff: Revision.createObjectPatch(base?.metadata || {}, content.metadata),
 		};
 		return Revision.isEmptyRevision(revision) ? null : revision;
 	}
 
+	/** Persist sampled history, retaining collection intervals and independent ciphertext snapshots. */
 	public async createNoteRevision_(note: NoteEntity, parentRevId: string = null, bypassInterval = false): Promise<RevisionEntity> {
 		try {
 			const parentRev = parentRevId ? await Revision.load(parentRevId) : await Revision.latestRevision(BaseModel.TYPE_NOTE, note.id);
 
-			if (parentRev && !bypassInterval && Date.now() - parentRev.updated_time < Setting.value('revisionService.intervalBetweenRevisions')) return null;
-			const parentContent = parentRev ? await Revision.mergeDiffs(parentRev) : null;
+			const lockStateChanged = parentRev && !!parentRev.is_locked !== !!note.is_locked;
+			const lockedSnapshot = isNoteLockEnabled() && NoteLockNote.isLocked(note);
+			if (parentRev && (!lockStateChanged || lockedSnapshot) && !bypassInterval && Date.now() - parentRev.updated_time < Setting.value('revisionService.intervalBetweenRevisions')) return null;
+			const parentContent = this.startsNewRevisionChain(note, parentRev) ? null : await Revision.mergeDiffs(parentRev);
 			const output = this.prepareNoteRevision(note, parentRev, parentContent);
 			return output ? Revision.save(output) : null;
 		} catch (error) {
@@ -174,10 +191,10 @@ export default class RevisionService extends BaseService {
 
 							if (note) {
 								const latest = await Revision.latestRevision(BaseModel.TYPE_NOTE, note.id);
-								const latestContent = latest ? await Revision.mergeDiffs(latest) : null;
+								const latestContent = this.startsNewRevisionChain(note, latest) ? null : await Revision.mergeDiffs(latest);
 								// Immediate MCP capture already retained both sides. Do not append the queued old
 								// snapshot after that newer result when the collector later sees its ItemChange.
-								const alreadyCaptured = latest && latest.item_updated_time >= note.updated_time && !this.prepareNoteRevision(note, latest, latestContent);
+								const alreadyCaptured = latestContent && latest.item_updated_time >= note.updated_time && fastDeepEqual(latestContent, this.noteRevisionContent(note));
 								let oldNoteSaved = false;
 
 								if (!alreadyCaptured && oldNote && oldNote.updated_time < this.oldNoteCutOffDate_()) {

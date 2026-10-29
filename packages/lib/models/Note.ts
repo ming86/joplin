@@ -27,8 +27,9 @@ import { resolveFileRef, RefKind } from '../services/whiteboard/resolveRef';
 const { isImageMimeType } = require('../resourceUtils');
 import { MarkupToHtml } from '@joplin/renderer';
 import { ALL_NOTES_FILTER_ID } from '../reserved-ids';
-import NoteLockNote from '../services/noteLock/NoteLockNote';
+import NoteLockNote, { NoteLockNoteEntity } from '../services/noteLock/NoteLockNote';
 import isNoteLockEnabled from '../services/noteLock/isNoteLockEnabled';
+import { isValidNoteLockHeader } from '../services/e2ee/EncryptionService';
 import { ShareType, StateShare } from '../services/share/reducer';
 
 export interface PreviewsOrder {
@@ -61,6 +62,12 @@ interface ByTitleAndParentOptions {
 	whereParentIn: string[];
 	fields: string[];
 }
+
+const getDirectlyPublishedNoteIds = (shares: StateShare[]) => {
+	return shares
+		.filter(share => share.type === ShareType.Note && !!share.note_id)
+		.map(share => share.note_id);
+};
 
 export default class Note extends BaseItem {
 
@@ -385,7 +392,7 @@ export default class Note extends BaseItem {
 	public static previewFields(options: { includeTimestamps?: boolean } = null) {
 		options = { includeTimestamps: true, ...options };
 
-		const output = ['id', 'title', 'is_todo', 'todo_completed', 'todo_due', 'parent_id', 'encryption_applied', 'is_locked', 'order', 'markup_language', 'is_conflict', 'is_shared', 'share_id', 'deleted_time'];
+		const output = ['id', 'title', 'is_todo', 'todo_completed', 'todo_due', 'parent_id', 'encryption_applied', 'is_locked', 'order', 'markup_language', 'is_conflict', 'conflict_original_id', 'is_shared', 'share_id', 'deleted_time'];
 
 		if (options.includeTimestamps) {
 			output.push('updated_time');
@@ -586,6 +593,11 @@ export default class Note extends BaseItem {
 		return r && r.total ? r.total : 0;
 	}
 
+	public static async syncIneligibleConflictedCount() {
+		const r = await this.db().selectOne('SELECT count(*) as total FROM notes WHERE is_conflict = 1 AND (conflict_original_id = \'\' OR share_id != \'\')');
+		return r && r.total ? r.total : 0;
+	}
+
 	// Count of notes that are eligible for indexing (anything searchable):
 	// not trashed, not in conflict, and not locked. Used by the AI status reporter as the
 	// denominator in "N / total indexed".
@@ -596,14 +608,55 @@ export default class Note extends BaseItem {
 		return r && r.total ? r.total : 0;
 	}
 
+	// Like the export of a notebook, the check includes its sub-notebooks.
+	public static async hasLockedNoteInFolderTrees(folderIds: string[]) {
+		if (!folderIds.length) return false;
+
+		const result = await this.db().selectOne(`
+			WITH RECURSIVE folder_tree(id) AS (
+				SELECT id
+				FROM folders
+				WHERE id IN (${this.escapeIdsForSql(folderIds)})
+
+				UNION
+
+				SELECT folder.id
+				FROM folders folder
+				INNER JOIN folder_tree parent
+					ON folder.parent_id = parent.id
+				WHERE folder.deleted_time = 0
+			)
+			SELECT EXISTS (
+				SELECT 1
+				FROM notes note
+				INNER JOIN folder_tree folder
+					ON note.parent_id = folder.id
+				WHERE note.is_locked = 1
+					AND note.is_conflict = 0
+					AND note.deleted_time = 0
+				LIMIT 1
+			) AS value
+		`);
+
+		return !!result.value;
+	}
+
+	// Trashed and conflict notes count too: their content still depends on the note lock key.
+	public static async hasLockedNotes() {
+		return !!(await this.db().selectOne('SELECT 1 FROM notes WHERE is_locked = 1 LIMIT 1'));
+	}
+
+	public static async lockedNoteIds() {
+		const rows = await this.db().selectAll<{ id: string }>('SELECT id FROM notes WHERE is_locked = 1');
+		return rows.map(row => row.id);
+	}
+
 	public static unconflictedNotes() {
 		return this.modelSelectAll('SELECT * FROM notes WHERE is_conflict = 0');
 	}
 
 	public static async updatePublishedNotes(activeShares: StateShare[]) {
-		const directlyPublishedNoteIds = activeShares
-			.filter(share => share.type === ShareType.Note && !!share.note_id)
-			.map(share => share.note_id);
+		const directlyPublishedNoteIds = getDirectlyPublishedNoteIds(activeShares);
 
 		const loadUnpublishedWithDirectShare = async (): Promise<NoteEntity[]> => {
 			if (directlyPublishedNoteIds.length === 0) return [];
@@ -629,6 +682,32 @@ export default class Note extends BaseItem {
 				{ ...note, type_: BaseModel.TYPE_NOTE },
 				true,
 			);
+		}
+	}
+
+	public static async updateNoLongerPublishedNotes(activeShares: StateShare[]) {
+		const directlyPublishedNoteIds = new Set(getDirectlyPublishedNoteIds(activeShares));
+
+		// Exclude notes in shared folders, since share participants don't have access to
+		// the full list of published items:
+		const andConditions = 'AND notes.share_id = \'\'';
+
+		const publishedNotesInUnpublishedFolders: NoteEntity[] = await this.db().selectAll(`
+			SELECT notes.id, notes.parent_id, notes.is_shared, notes.share_id
+			FROM notes
+			JOIN folders ON notes.parent_id = folders.id
+			WHERE notes.is_shared = 1 AND folders.is_shared = 0
+				${andConditions}
+			UNION ALL -- Deleted notes
+				SELECT id, parent_id, is_shared, share_id
+				FROM notes
+				WHERE is_shared = 1 AND deleted_time > 0
+					${andConditions}
+		`);
+
+		for (const note of publishedNotesInUnpublishedFolders) {
+			if (directlyPublishedNoteIds.has(note.id)) continue;
+			await this.updateShareStatus({ ...note, type_: BaseModel.TYPE_NOTE }, false);
 		}
 	}
 
@@ -709,23 +788,39 @@ export default class Note extends BaseItem {
 		const Folder = this.getClass<typeof FolderClass>('Folder');
 		if (folderId === Folder.conflictFolderId()) throw new Error(_('Cannot move note to "%s" notebook', Folder.conflictFolderTitle()));
 
+		const targetFolder = await Folder.load(folderId, {
+			fields: ['id', 'share_id'],
+		});
+
 		// When moving a note to a different folder, the user timestamp is not
 		// updated. However updated_time is updated so that the note can be
 		// synced later on.
 		//
 		// We also reset deleted_time, so that if a deleted note is moved to
 		// that folder it is restored. If it wasn't deleted, it does nothing.
+		//
+		// The share_id is also updated to match that of the parent, to give
+		// immediate feedback when a locked note is moved into or out of a
+		// share.
 
 		const modifiedNote: NoteEntity = {
 			id: noteId,
 			parent_id: folderId,
+			share_id: targetFolder?.share_id ?? '',
 			is_conflict: 0,
 			conflict_original_id: '',
 			deleted_time: 0,
 			updated_time: time.unixMs(),
 		};
 
-		return Note.save(modifiedNote, { autoTimestamp: false, ...saveOptions });
+		return Note.save(modifiedNote, {
+			autoTimestamp: false,
+			...saveOptions,
+			dispatchOptions: {
+				...saveOptions?.dispatchOptions,
+				noteMovedToFolder: true,
+			},
+		});
 	}
 
 	public static changeNoteType(note: NoteEntity, type: string) {
@@ -842,10 +937,32 @@ export default class Note extends BaseItem {
 
 	public static async load(id: string, options: LoadOptions = null): Promise<NoteEntity> {
 		const note = await super.load(id, options);
-		if (isNoteLockEnabled() && !!options?.useNoteLock) return NoteLockNote.decryptBody(note, options.noteLockKey);
+		// A row still encrypted by sync has no note lock body to decrypt yet.
+		if (isNoteLockEnabled() && !!options?.useNoteLock && note && !note.encryption_applied) return NoteLockNote.decryptBody(note, options.noteLockKey);
 		return note;
 	}
 
+	// Using useNoteLock on save is not mandatory for UI flows which may handle locked notes,
+	// but as a general rule, for any usage where a gated load (the note contents are loaded
+	// with useNoteLock: true) was used to originally populate the note contents, a full note
+	// save should include useNoteLock: true, so that it will throw if the contents were not
+	// loaded via a gated load, to prevent the possibility of the encrypted cipher being
+	// changed directly. An ungated save including both is_locked and a body from a gated load
+	// throws for the same reason. For partial saves, it usually does not need to be included.
+	// Normally a partial save to the body is used for a controlled change, but if the data may
+	// have been loaded via a gated load, a gated save should be used, and the isDecrypted flag
+	// from the full note object must be passed to the save, so that the gated validation will
+	// work correctly. For ungated partial saves which supply a body without the is_locked field,
+	// if the original note is locked and the new body does not begin with a suitable encryption
+	// header, it will be encrypted, as a fallback protection for code paths which have not been
+	// handled correctly. Do not pass is_locked to an ungated partial save: it throws if
+	// the lock state changes without the body, and bypasses these validations with the body.
+	// In certain cases, it may be necessary to hardcode the isDecrypted flag to true
+	// before calling a gated save, but caution should be used if doing so, because if the body
+	// is ever not decrypted when doing so, it will cause the contents to be double encrypted,
+	// causing the plain text to become inaccessible in UI, with no automatic remedy available.
+	// It must also never be set to true without first checking that isNoteLockEnabled() is true,
+	// as a note marked decrypted is refused when the feature is turned off before the save.
 	public static async save(o: NoteEntity, options: SaveOptions = null): Promise<NoteEntity> {
 		const isNew = this.isNew(o, options);
 
@@ -888,13 +1005,35 @@ export default class Note extends BaseItem {
 		// in the item_changes table
 		const oldNote = !isNew && o.id ? await Note.load(o.id) : null;
 		let plainTextBodyToReturn: string = null;
-		if (isNoteLockEnabled() && !!options?.useNoteLock) {
-			// Callers use the returned note to update UI state, so it must carry the plaintext
-			// body even though the encrypted one is what gets persisted.
-			if (NoteLockNote.isLocked(o) && 'body' in o) plainTextBodyToReturn = o.body;
-			await NoteLockNote.prepareForSave(o, this.linkedItemIds, this.serializeExtractedResourceIds, isNew, options.noteLockKey);
+		// With the feature turned off the note lock path below is skipped, so a decrypted body would be written over the
+		// ciphertext. The stored row decides for a partial save, which may not carry the lock state.
+		if (!isNoteLockEnabled() && (o as NoteLockNoteEntity).isDecrypted && (NoteLockNote.isLocked(o) || NoteLockNote.isLocked(oldNote))) {
+			throw new Error('Locked notes cannot be saved while the note lock feature is turned off');
 		}
-		// Cleared for ungated saves too, in case a gated load is fed to an ungated save.
+		if (isNoteLockEnabled()) {
+			if (!options?.useNoteLock && o.is_locked !== undefined && 'body' in o && !!(o as NoteLockNoteEntity).isDecrypted) throw new Error('Saves including both is_locked and body fields must be gated when the body was loaded using a gated load');
+			if (!isNew && o.is_locked !== undefined && !!o.is_locked !== !!oldNote?.is_locked && !('body' in o)) throw new Error('Saves that change is_locked must include the body field');
+
+			// A partial ungated save with a plaintext body goes through the note lock path too, as a
+			// fallback so that a missed gate encrypts instead of leaking plaintext. Ciphertext bodies
+			// pass through untouched.
+			if (!!options?.useNoteLock || (o.is_locked === undefined && 'body' in o && !isValidNoteLockHeader(o.body))) {
+				// The caller's note can be one the store has frozen, as when Note.duplicate saves it a second time.
+				o = { ...o };
+				if (o.is_locked === undefined && !isNew && oldNote) o.is_locked = oldNote.is_locked;
+				// Callers use the returned note to update UI state, so it must carry the plaintext
+				// body even though the encrypted one is what gets persisted.
+				if (NoteLockNote.isLocked(o) && 'body' in o) plainTextBodyToReturn = o.body;
+				await NoteLockNote.prepareForSave(o, this.linkedItemIds, this.serializeExtractedResourceIds, isNew, !!options?.useNoteLock, options?.noteLockKey);
+				// The lock state, body and resource ids must land in the row together to keep it consistent.
+				if (options && Array.isArray(options.fields)) {
+					options.fields = options.fields.slice();
+					for (const field of ['is_locked', 'body', 'extracted_resource_ids']) {
+						if (!options.fields.includes(field)) options.fields.push(field);
+					}
+				}
+			}
+		}
 		delete (o as Record<string, unknown>).isDecrypted;
 
 		syncDebugLog.info('Save Note: P:', oldNote);
@@ -977,13 +1116,19 @@ export default class Note extends BaseItem {
 			});
 		}
 
-		if (isNoteLockEnabled() && !!options?.useNoteLock) {
-			const gatedResult = {
+		if (plainTextBodyToReturn !== null) {
+			savedNote = {
 				...savedNote,
-				body: plainTextBodyToReturn !== null ? plainTextBodyToReturn : savedNote.body,
-				isDecrypted: NoteLockNote.isLocked(o),
+				body: plainTextBodyToReturn,
 			};
-			savedNote = gatedResult;
+		}
+
+		if (isNoteLockEnabled() && !!options?.useNoteLock) {
+			savedNote = {
+				...savedNote,
+				// Gated data keeps its marker, locked or not, so follow-up gated saves stay valid.
+				isDecrypted: true,
+			};
 		}
 
 		return savedNote;
@@ -1294,13 +1439,13 @@ export default class Note extends BaseItem {
 		}
 	}
 
-	public static async createConflictNote(sourceNote: NoteEntity, changeSource: number): Promise<NoteEntity> {
+	public static async createConflictNote(sourceNote: NoteEntity, changeSource: number, includeConflictOriginalId = true): Promise<NoteEntity> {
 		const conflictNote = { ...sourceNote };
 		delete conflictNote.id;
 		delete conflictNote.is_shared;
 		delete conflictNote.share_id;
 		conflictNote.is_conflict = 1;
-		conflictNote.conflict_original_id = sourceNote.id;
+		conflictNote.conflict_original_id = includeConflictOriginalId ? sourceNote.id : '';
 		return await Note.save(conflictNote, { autoTimestamp: false, changeSource: changeSource });
 	}
 

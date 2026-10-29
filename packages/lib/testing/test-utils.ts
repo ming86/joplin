@@ -42,7 +42,7 @@ import SyncTargetDropbox from '../SyncTargetDropbox';
 const SyncTargetAmazonS3 = require('../SyncTargetAmazonS3.js');
 import SyncTargetWebDAV from '../SyncTargetWebDAV';
 import SyncTargetJoplinServer from '../SyncTargetJoplinServer';
-import EncryptionService from '../services/e2ee/EncryptionService';
+import EncryptionService, { EncryptionMethod } from '../services/e2ee/EncryptionService';
 import DecryptionWorker from '../services/DecryptionWorker';
 import RevisionService from '../services/RevisionService';
 import ResourceFetcher from '../services/ResourceFetcher';
@@ -72,6 +72,8 @@ import { dirname } from '@joplin/utils/path';
 import SyncTargetJoplinServerSAML from '../SyncTargetJoplinServerSAML';
 import { MarkupLanguage } from '@joplin/renderer';
 import SearchEngine from '../services/search/SearchEngine';
+import { getCACertificates } from 'node:tls';
+import setExtraRootCertificates from '../utils/tls/setExtraRootCertificates';
 
 // Each suite has its own separate data and temp directory so that multiple
 // suites can be run at the same time. suiteName is what is used to
@@ -322,6 +324,8 @@ async function clearDatabase(id: number = null) {
 	await ItemChange.waitForAllSaved();
 
 	const tableNames = [
+		'chat_conversations',
+		'chat_messages',
 		'deleted_items',
 		'folders',
 		'item_changes',
@@ -1115,6 +1119,9 @@ export const newOcrService = () => {
 	return new OcrService([driver]);
 };
 
+// A body the note lock header check accepts, for locked fixtures that are never unlocked.
+export const noteLockCipherTextStandIn = (payload = 'ciphertext') => `${encryptionService().encodeHeader_({ encryptionMethod: EncryptionMethod.StringV1, masterKeyId: '0'.repeat(32) }, true)}${payload}`;
+
 export const mockMobilePlatform = (platform: MobilePlatform) => {
 	const originalMobilePlatform = shim.mobilePlatform;
 	const originalIsNode = shim.isNode;
@@ -1186,15 +1193,13 @@ export const mockFetch = (requestHandler: MockFetchRequestHandler) => {
 };
 
 export const withExtraRootCa = async <T> (caPemData: string, task: ()=> Promise<T>) => {
-	// getCACertificates requires a newer NodeJS version than the current @types/node version.
-	// Dynamically import tls to work around the missing types:
-	const tls = require('node:tls');
-	const trustedCas = tls.getCACertificates();
+	const trustedCas = getCACertificates();
 	try {
-		tls.setDefaultCACertificates([...trustedCas, caPemData]);
+		await setExtraRootCertificates([...trustedCas, caPemData].map(cert => ({ pem: cert })));
+
 		await task();
 	} finally {
-		tls.setDefaultCACertificates([...trustedCas]);
+		await setExtraRootCertificates(trustedCas.map(cert => ({ pem: cert })));
 	}
 };
 

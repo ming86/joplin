@@ -18,6 +18,8 @@ import NoteLockNote from '@joplin/lib/services/noteLock/NoteLockNote';
 import NoteLockSession from '@joplin/lib/services/noteLock/NoteLockSession';
 import { DialogContext } from './DialogManager';
 import Icon from './Icon';
+import isSyncDisabledConflict from '@joplin/lib/services/noteList/isSyncDisabledConflict';
+import { noteIsLockedInShare } from '@joplin/lib/models/utils/readOnly';
 
 interface Props {
 	dispatch: Dispatch;
@@ -85,6 +87,11 @@ const useStyles = (themeId: number, showTopBorder: boolean) => {
 				alignItems: 'center',
 			},
 			lockIcon: {
+				color: theme.color,
+				fontSize: theme.fontSize,
+				marginRight: 8,
+			},
+			syncDisabledIcon: {
 				color: theme.colorFaded,
 				fontSize: theme.fontSize,
 				marginRight: 8,
@@ -122,11 +129,16 @@ const NoteItemComponent: React.FC<Props> = memo(props => {
 
 		// Ignore the row press emitted by the checkbox gesture without blocking a deliberate
 		// follow-up tap on the row.
-		if (isNoteLockEnabled()) suppressPressUntilRef.current = Date.now() + 100;
+		if (isNoteLockEnabled() || noteIsLockedInShare(props.note)) suppressPressUntilRef.current = Date.now() + 100;
 
 		// Duplicates the locked-note guard in app-desktop/gui/NoteListItem/NoteListItem.tsx.
+		const lockState = await Note.load(props.note.id, { fields: ['is_locked', 'share_id'] });
+		if (noteIsLockedInShare(lockState)) {
+			setCheckboxKey(key => key + 1);
+			await dialogs.error(_('This note is read-only because it is locked and contained within a share. To enable editing, it must be moved outside of the share.'));
+			return;
+		}
 		if (isNoteLockEnabled()) {
-			const lockState = await Note.load(props.note.id, { fields: ['is_locked'] });
 			if (NoteLockNote.isLocked(lockState) && !NoteLockSession.instance().isUnlocked()) {
 				// The checkbox keeps its own checked state, so a remount reverts the tick.
 				setCheckboxKey(key => key + 1);
@@ -191,6 +203,8 @@ const NoteItemComponent: React.FC<Props> = memo(props => {
 	const listItemTextStyle = isTodo ? styles.listItemTextWithCheckbox : styles.listItemText;
 	const opacityStyle = isTodo && checkboxChecked ? styles.checkedOpacityStyle : styles.uncheckedOpacityStyle;
 	const isSelected = props.noteSelectionEnabled && props.selectedNoteIds.includes(note.id);
+	const showSyncDisabledIcon = isSyncDisabledConflict(note);
+	const showLockIcon = isNoteLockEnabled() && !!note.is_locked;
 
 	const selectionWrapperStyle = isSelected ? styles.selectionWrapperSelected : styles.selectionWrapper;
 
@@ -230,9 +244,10 @@ const NoteItemComponent: React.FC<Props> = memo(props => {
 				onPress={onPress}
 				beforePressable={todoCheckbox}
 			>
-				{isNoteLockEnabled() ? (
+				{showSyncDisabledIcon || showLockIcon ? (
 					<View style={styles.titleRow}>
-						{!!note.is_locked && <Icon name='fas fa-lock' style={styles.lockIcon} accessibilityLabel={_('Locked')} />}
+						{showSyncDisabledIcon && <Icon name='ionicon cloud-offline-outline' style={styles.syncDisabledIcon} accessibilityLabel={_('Local only')} />}
+						{showLockIcon && <Icon name='fas fa-lock' style={styles.lockIcon} accessibilityLabel={_('Locked')} />}
 						{titleElement}
 					</View>
 				) : titleElement}
