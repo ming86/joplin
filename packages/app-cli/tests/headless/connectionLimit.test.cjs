@@ -1,8 +1,13 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const fsExtra = require('fs-extra');
 const http = require('node:http');
+const os = require('node:os');
+const path = require('node:path');
 const load = require('./loadSource.cjs');
+// The shim uses lib's Undici version, which can differ from the CLI workspace's.
+const libRequire = require('node:module').createRequire(path.resolve(__dirname, '../../../lib/package.json'));
 
 /** Loads the real Node transport with mutable application settings and unrelated services isolated. */
 function createShim(settings) {
@@ -24,9 +29,10 @@ function createShim(settings) {
 		'./models/Note': {},
 		'./models/Resource': { IMAGE_MAX_DIMENSION: 0 },
 		'./path-utils': {},
-		'fs-extra': fs,
+		'fs-extra': fsExtra,
 		'./utils/replaceUnsupportedCharacters': value => value,
 		'file-type': { fromFile: async () => null },
+		'undici': libRequire('undici'),
 		'./services/e2ee/crypto': {},
 		'./file-api-driver-local': class {},
 		'./mime-utils': {},
@@ -91,4 +97,36 @@ test('Undici dispatchers follow the current connection limit only in headless mo
 			assert.strictEqual(shim.httpAgent('http://localhost'), currentAgent);
 		});
 	}
+});
+
+test('the Node shim preserves an explicit Host for fetch, downloads and uploads on the shared dispatcher', async t => {
+	const requests = [];
+	const server = http.createServer(async (request, response) => {
+		const chunks = [];
+		for await (const chunk of request) chunks.push(chunk);
+		requests.push({ host: request.headers.host, body: Buffer.concat(chunks).toString() });
+		response.end('response bytes');
+	});
+	await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+	t.after(() => new Promise(resolve => server.close(resolve)));
+	const directory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'joplin-shim-host-'));
+	t.after(() => fs.promises.rm(directory, { recursive: true, force: true }));
+	const url = `http://127.0.0.1:${server.address().port}/`;
+	const shim = createShim({ isHeadless: true, 'sync.maxConcurrentConnections': 2 });
+	const agent = shim.httpAgent(url);
+	t.after(() => agent.close());
+	const headers = { Host: 'joplin.example.test' };
+
+	assert.equal(await (await shim.fetch(url, { headers })).text(), 'response bytes');
+	const destination = path.join(directory, 'download');
+	await shim.fetchBlob(url, { headers, path: destination });
+	assert.equal(await fs.promises.readFile(destination, 'utf8'), 'response bytes');
+	const source = path.join(directory, 'upload');
+	await fs.promises.writeFile(source, 'resource bytes');
+	assert.equal(await (await shim.uploadBlob(url, { method: 'PUT', headers, path: source })).text(), 'response bytes');
+	assert.equal(await (await shim.fetch(url)).text(), 'response bytes');
+
+	assert.deepEqual(requests.map(request => request.host), [headers.Host, headers.Host, headers.Host, new URL(url).host]);
+	assert.equal(requests[2].body, 'resource bytes');
+	assert.strictEqual(shim.httpAgent(url), agent);
 });

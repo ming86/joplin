@@ -24,6 +24,7 @@ import { pathToFileURL } from 'url';
 // Use fetch from undici rather than the built-in fetch: Undici's fetch provides
 // more information when fetch fails.
 import { Agent, Request, Response, Headers, fetch, FormData, ProxyAgent, interceptors } from 'undici';
+import type { Dispatcher } from 'undici';
 import tls from 'tls';
 import type PdfJs from './utils/types/pdfJs';
 import { _ } from './locale';
@@ -91,6 +92,18 @@ export interface ShimInitOptions {
 	pdfJs?: PdfJs;
 	isAppleSilicon?: ()=> boolean;
 	restartApp?: ()=> void;
+}
+
+/** Restores an explicit Host stripped by Fetch while reusing the configured transport and leaving other redirect origins unchanged. */
+function withRequestHost(dispatcher: Dispatcher, url: string, headers: Record<string, string> = {}): Dispatcher {
+	const host = new Headers(headers).get('host');
+	if (!host) return dispatcher;
+	const origin = new URL(url).origin;
+	return dispatcher.compose(dispatch => (options, handler) => {
+		if (String(options.origin) !== origin) return dispatch(options, handler);
+		// Fetch supplies a header record here, after removing the caller's Host.
+		return dispatch({ ...options, headers: { ...options.headers as Record<string, string>, host } }, handler);
+	});
 }
 
 /** Installs Node implementations while deferring settings-dependent transport configuration until use. */
@@ -527,10 +540,10 @@ function shimInit(options: ShimInitOptions = null) {
 		} catch (error) { // If the url is not valid, a TypeError will be thrown
 			throw new Error(`Not a valid URL: ${url}`);
 		}
-		const agent = shim.httpAgent(url);
+		const dispatcher = withRequestHost(shim.httpAgent(url), url, options.headers);
 		return shim.fetchWithRetry(async () => {
 			try {
-				return await fetch(url, { ...options, dispatcher: agent });
+				return await fetch(url, { ...options, dispatcher });
 			} catch (error) {
 				throw mapFetchError(error);
 			}
@@ -569,10 +582,10 @@ function shimInit(options: ShimInitOptions = null) {
 
 		const doFetchOperation = async () => {
 			const agent: Agent = shim.httpAgent(url, options);
-			const dispatcher = agent.compose([
+			const dispatcher = withRequestHost(agent.compose([
 				interceptors.redirect({ maxRedirections: options.maxRedirects }),
 				interceptors.decompress(),
-			]);
+			]), url, headers);
 
 			const abortController = new AbortController();
 			const requestOptions = new Request(url, {
