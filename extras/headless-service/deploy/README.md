@@ -8,6 +8,8 @@ docker buildx build --platform linux/amd64 --load \
   -t joplin-headless:local .
 ```
 
+Dependency installation is cached separately from workspace sources. Source-only edits reuse the focused dependency layer. Changes to workspace manifests, the lockfile, Yarn configuration, releases or patches reinstall dependencies. The selected workspaces have no install hooks that require their source files; their explicit builds run after source copying. Build tools are installed before these copies so source edits also reuse that layer.
+
 The image runs as UID 1000 under `tini`. Its entrypoint selects one of two roles:
 
 | Role | Behavior |
