@@ -35,6 +35,55 @@ describe('Synchronizer.basics', () => {
 		await localNotesFoldersSameAsRemote(all, expect);
 	}));
 
+	it('observes a retryable network failure even when the progress report omits it', async () => {
+		const error = Object.assign(new Error('Network request failed'), { code: 'ECONNRESET' });
+		const initialize = jest.spyOn(fileApi(), 'initialize').mockRejectedValueOnce(error);
+		const onError = jest.fn();
+		let completedErrors: (Error | string)[] = null;
+		try {
+			await synchronizerStart(null, {
+				onError,
+				onProgress: report => { if (report.completedTime) completedErrors = report.errors.slice(); },
+			});
+			expect(onError.mock.calls).toEqual([[error, 'synchronize']]);
+			expect(completedErrors).toEqual([]);
+			expect(synchronizer().state()).toBe('idle');
+		} finally {
+			initialize.mockRestore();
+		}
+	});
+
+	it('observes a publication failure once while preserving the reported error and successful return', async () => {
+		const error = new Error('Could not update publication status');
+		const updatePublishedNotes = jest.spyOn(Note, 'updatePublishedNotes').mockRejectedValueOnce(error);
+		const onError = jest.fn();
+		let completedErrors: (Error | string)[] = null;
+		try {
+			await synchronizerStart(null, {
+				onError,
+				onProgress: report => { if (report.completedTime) completedErrors = report.errors.slice(); },
+			});
+			expect(onError.mock.calls).toEqual([[error, 'update-publication']]);
+			expect(completedErrors).toEqual([error]);
+			expect(synchronizer().state()).toBe('idle');
+		} finally {
+			updatePublishedNotes.mockRestore();
+		}
+	});
+
+	it('keeps changedDuringSync as a retry condition without reporting an error', async () => {
+		const error = Object.assign(new Error('The target changed during sync'), { code: 'changedDuringSync' });
+		const initialize = jest.spyOn(fileApi(), 'initialize').mockRejectedValueOnce(error);
+		const onError = jest.fn();
+		try {
+			await synchronizerStart(null, { onError });
+			expect(onError).not.toHaveBeenCalled();
+			expect(synchronizer().state()).toBe('idle');
+		} finally {
+			initialize.mockRestore();
+		}
+	});
+
 	it('should update remote items', (async () => {
 		const folder = await Folder.save({ title: 'folder1' });
 		const note = await Note.save({ title: 'un', parent_id: folder.id });

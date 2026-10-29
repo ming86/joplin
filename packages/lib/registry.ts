@@ -226,14 +226,17 @@ class Registry {
 						value: false,
 					});
 
+					let syncStage = 'initialize-synchronizer';
 					try {
 						const sync = await this.syncTarget(syncTargetId).synchronizer();
 
+						syncStage = 'load-context';
 						const contextKey = `sync.${syncTargetId}.context`;
 						let context = Setting.value(contextKey);
 						try {
 							context = context ? JSON.parse(context) : {};
 						} catch (error) {
+							syncOptions.onError?.(error, 'parse-context');
 							// Clearing the context is inefficient since it means all items are going to be re-downloaded
 							// however it won't result in duplicate items since the synchroniser is going to compare each
 							// item to the current state.
@@ -243,6 +246,7 @@ class Registry {
 						}
 
 						try {
+							syncStage = 'synchronize';
 							this.logger().info('Starting scheduled sync');
 							const options = { ...syncOptions, context: context };
 							if (!options.saveContextHandler) {
@@ -251,6 +255,7 @@ class Registry {
 								};
 							}
 							newContext = await sync.start(options);
+							syncStage = 'save-context';
 							Setting.setValue(contextKey, JSON.stringify(newContext));
 						} catch (error) {
 							if (error.code === 'alreadyStarted') {
@@ -262,6 +267,7 @@ class Registry {
 							}
 						}
 					} catch (error) {
+						syncOptions.onError?.(error, syncStage);
 						this.logger().info('Could not run background sync:');
 						this.logger().info(error);
 					}

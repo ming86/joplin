@@ -60,8 +60,11 @@ export interface SyncContext {
 	delta?: unknown;
 }
 
+/** Configure one synchronization pass and its progress and failure observers. */
 export interface SyncStartOptions {
 	onProgress?: (report: ProgressReport)=> void;
+	/** Observe internally handled failures with their original error and fixed operation stage. Must return normally; rethrown failures remain the caller's responsibility. */
+	onError?: (error: unknown, stage: string)=> void;
 	context?: SyncContext;
 	syncSteps?: string[];
 	/** For headless server targets, check remote changes before a normal full sync and skip item sync when unchanged. */
@@ -499,6 +502,7 @@ export default class Synchronizer {
 			}
 		} catch (error) {
 			logger.error('Error indexing resources:', error);
+			options.onError?.(error, 'index-resources');
 		}
 
 		// Before syncing, we run the share service maintenance, which is going
@@ -508,6 +512,7 @@ export default class Synchronizer {
 				await this.shareService_.maintenance();
 			} catch (error) {
 				logger.error('Could not run share service maintenance:', error);
+				options.onError?.(error, 'share-maintenance');
 			}
 		}
 
@@ -528,6 +533,7 @@ export default class Synchronizer {
 					// the UI should prevent, but if there's a bug in the UI or some
 					// other issue we don't want sync to fail because of this.
 					logger.error('Could not update share because an item is readonly:', error);
+					options.onError?.(error, 'update-shares');
 				} else {
 					throw error;
 				}
@@ -676,6 +682,7 @@ export default class Synchronizer {
 
 			this.lockHandler().startAutoLockRefresh(syncLock, (error: Error) => {
 				logger.warn('Could not refresh lock - cancelling sync. Error was:', error);
+				options.onError?.(error, 'refresh-lock');
 				this.syncTargetIsLocked_ = true;
 				void this.cancel();
 			});
@@ -816,6 +823,7 @@ export default class Synchronizer {
 							} catch (error) {
 								if (error.code === 'rejectedByTarget' || error.code === 'malformedItem') {
 									this.progressReport_.errors.push(error);
+									options.onError?.(error, 'read-remote-item');
 									logger.warn(`Skipping item from sync target: ${path}: ${error.message}`);
 									completeItemProcessing(path);
 									continue;
@@ -912,6 +920,7 @@ export default class Synchronizer {
 									}
 								} catch (error) {
 									if (isCannotSyncError(error)) {
+										options.onError?.(error, 'upload-resource');
 										await handleCannotSyncItem(ItemClass, syncTargetId, local, error.message);
 										action = null;
 									} else if (error && error.code === ErrorCode.IsReadOnly) {
@@ -933,6 +942,7 @@ export default class Synchronizer {
 								await itemUploader.serializeAndUploadItem(ItemClass, path, local);
 							} catch (error) {
 								if (error && error.code === 'rejectedByTarget') {
+									options.onError?.(error, 'upload-item');
 									await handleCannotSyncItem(ItemClass, syncTargetId, local, error.message);
 									canSync = false;
 								} else if (error && error.code === ErrorCode.IsReadOnly) {
@@ -1131,6 +1141,7 @@ export default class Synchronizer {
 						} catch (error) {
 							if (error.code === 'rejectedByTarget' || error.code === 'malformedItem') {
 								this.progressReport_.errors.push(error);
+								options.onError?.(error, 'download-item');
 								logger.warn(`Skipping item from sync target: ${path}: ${error.message}`);
 								action = null;
 							} else {
@@ -1240,6 +1251,7 @@ export default class Synchronizer {
 										await RevisionService.instance().deleteUnencryptedHistoryForNote(content.id, { sourceDescription: 'Synchronizer: note lock' });
 									} catch (error) {
 										logger.warn(`Could not delete unencrypted revisions for locked note ${content.id}`, error);
+										options.onError?.(error, 'delete-locked-history');
 									}
 								}
 							}
@@ -1325,6 +1337,7 @@ export default class Synchronizer {
 			} // DELTA STEP
 		} catch (error) {
 			hasCaughtError = true;
+			if (!throwOnError && error.code !== 'changedDuringSync') options.onError?.(error, 'synchronize');
 
 			if (error.code === ErrorCode.MustUpgradeApp) {
 				this.dispatch({
@@ -1379,6 +1392,7 @@ export default class Synchronizer {
 			}
 		} catch (error) {
 			logger.error('Failed to save note publication status', error);
+			options.onError?.(error, 'update-publication');
 			this.progressReport_.errors.push(error);
 		}
 
