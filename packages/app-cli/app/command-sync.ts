@@ -136,6 +136,7 @@ class Command extends BaseCommand {
 	}
 
 	public async action(args: { options: { useLock?: number; target?: number; upgrade?: boolean } }) {
+		const isHeadless = Setting.value('isHeadless');
 		this.releaseLockFn_ = null;
 
 		// Lock is unique per profile/database
@@ -151,6 +152,7 @@ class Command extends BaseCommand {
 				this.releaseLockFn_ = await Command.lockFile(lockFilePath);
 			} catch (error) {
 				if (error.code === 'ELOCKED') {
+					if (isHeadless) throw error;
 					const msg = _('Lock file is already being hold. If you know that no synchronisation is taking place, you may delete the lock file at "%s" and resume the operation.', error.file);
 					this.stdout(msg);
 					return;
@@ -178,13 +180,21 @@ class Command extends BaseCommand {
 				app().gui().maximizeConsole();
 
 				const authDone = await this.doAuth();
-				if (!authDone) return cleanUp();
+				if (!authDone) {
+					if (isHeadless) throw new Error('Synchronisation authentication was not completed.');
+					return cleanUp();
+				}
 			}
 
 			const sync = await syncTarget.synchronizer();
 
+			// The synchronizer also reports item/publication errors without rejecting.
+			// Keep its structured final report so headless bootstrap cannot report success.
+			let syncErrors: (Error | string)[] = [];
 			const options: SyncStartOptions = {
+				throwOnError: isHeadless,
 				onProgress: (report) => {
+					syncErrors = report.errors;
 					const lines = Synchronizer.reportToLines(report);
 					if (lines.length) cliUtils.redraw(lines.join(' '));
 				},
@@ -238,8 +248,12 @@ class Command extends BaseCommand {
 			try {
 				const newContext = await sync.start(options);
 				Setting.setValue(contextKey, JSON.stringify(newContext));
+				if (isHeadless && syncErrors.length) {
+					const error = syncErrors[0];
+					throw typeof error === 'string' ? new Error(error) : error;
+				}
 			} catch (error) {
-				if (error.code === 'alreadyStarted') {
+				if (error.code === 'alreadyStarted' && !isHeadless) {
 					this.stdout(error.message);
 				} else {
 					throw error;

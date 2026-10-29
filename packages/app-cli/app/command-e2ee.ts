@@ -32,6 +32,7 @@ class Command extends BaseCommand {
 
 	public async action(args: { command: string; path?: string; options: { password?: string; verbose?: boolean; output?: string; 'retry-failed-items'?: boolean; force?: boolean } }) {
 		const options = args.options;
+		const isHeadless = Setting.value('isHeadless');
 
 		const askForMasterKey = async (error: { masterKeyId: string }) => {
 			const masterKeyId = error.masterKeyId;
@@ -56,9 +57,13 @@ class Command extends BaseCommand {
 			this.stdout(_('Starting decryption... Please wait as it may take several minutes depending on how much there is to decrypt.'));
 			while (true) {
 				try {
-					const result = await DecryptionWorker.instance().start();
+					// Headless bootstrap must stop when an item cannot be decrypted.
+					const result = await DecryptionWorker.instance().start(isHeadless ? { errorHandler: 'throw' } : {});
 
 					if (result.error) throw result.error;
+					if (isHeadless && result.skippedItemCount) {
+						throw new Error(`Decryption skipped ${result.skippedItemCount} items disabled after repeated failures. Use --retry-failed-items to retry them.`);
+					}
 
 					const line = [];
 					line.push(_('Decrypted items: %d', result.decryptedItemCount));
