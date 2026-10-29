@@ -18,6 +18,16 @@ function clipper({ headless = true, port = 0, route = async () => ({ ok: true })
 		'@joplin/utils/Logger': Logger,
 		'./services/rest/Api': Api,
 		'./services/rest/ApiResponse': class {},
+		'./services/rest/utils/errors': {
+			// Match the real validation error fields that ClipperServer returns.
+			ErrorValidation: class ErrorValidation extends Error {
+				constructor(message) {
+					super(message);
+					this.code = 'validation_error';
+					this.httpCode = 400;
+				}
+			},
+		},
 		'./path-utils': { ltrimSlashes: s => s.replace(/^\/+/, '') },
 		'./randomClipperPort': {},
 		'server-destroy': server => { server.destroy = () => { server.closeAllConnections(); server.close(() => {}); }; },
