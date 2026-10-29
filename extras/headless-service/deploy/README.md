@@ -21,6 +21,16 @@ The core and MCP adapter run as separate containers in one rootless Podman pod a
 
 This image builds the CLI dependency set for the headless API and synchronization path. It does not compile the optional Rust-based OneNote importer.
 
+## Headless diagnostics
+
+The core writes safe diagnostic records to stderr and `/data/profile/log-headless.txt` with mode `0600`. In the native rootless deployment, inspect stderr with `journalctl --user -u joplin-headless-core.service` or read the file in the persistent profile. Records identify the operation and stage, recognized error codes and available HTTP statuses, fixed explanations, underlying causes and known source call sites. Status-acquisition failures identify whether disabled-item counting, account-profile lookup or live-state summarization failed; the public API keeps its generic error.
+
+The shared Joplin library and Clipper loggers remain disabled because they can log request tokens, credentials or note content. Diagnostic records never forward their raw error objects or response text. Unknown error codes and messages receive an explicit fallback explanation; HTTP status appears only when the underlying error retains it. A Joplin Server `invalidOrigin` code can replace its original numeric HTTP status, so the code and fixed origin explanation may appear without a status number.
+
+Background synchronization supplies an optional error observer at the existing native catch points. This records failures that Joplin handles internally, including temporary network errors omitted from the progress report and report-only item/publication failures. Scheduling failures also retain their original causes. Successful polls produce no new diagnostic entries, and `changedDuringSync` remains a quiet retry condition. Callers that do not supply the observer retain their existing behavior.
+
+Headless CLI sync and decryption failures exit nonzero. The native bootstrap helper labels import, sync, decrypt and informational encryption-status stages, stops at the failing stage, and prints completion only when every command succeeds. Successful import still removes the plaintext settings copy before synchronization. This changes failure reporting, not background scheduling, retry behavior or attachment-download policy.
+
 ## Core profile and key
 
 Mount durable storage at `/data`; the core profile defaults to `/data/profile`. The native Quadlet setup maps the host directory `~/.local/share/joplin-headless` to `/data`. It must be owned by container UID 1000 with mode `0700`: Joplin creates its profile lock beside the profile, so the parent directory must also be writable. This local profile contains the SQLCipher-encrypted Joplin database and is separate from the PostgreSQL data used by a Joplin Server. Other profile files, including resource files, are not necessarily covered by SQLCipher encryption. Protect the profile as sensitive data.
