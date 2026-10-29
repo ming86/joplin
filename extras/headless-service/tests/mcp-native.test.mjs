@@ -4,7 +4,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import net from 'node:net';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
+import { createAccountRegistry } from '../index.mjs';
+import { createTools } from '../src/mcp/tools.mjs';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { StdioTestClient } from '../scripts/lib/stdio-client.mjs';
@@ -176,10 +178,31 @@ test('MCP over stdio -> actual encrypted Joplin API, FTS, E2EE filesystem sync a
 	assert.equal(patchBase.structuredContent.revision_id, baseRevisionId);
 	assert.equal(patchBase.structuredContent.body, patchBody);
 
+	// Navigate the indexed body, then use that exact section snapshot as the edit base.
+	await until(async () => {
+		const found = await mcp.call('search_notes', { query: 'second' });
+		return found.structuredContent.results.some(row => row.id === patchNoteId && row.section === '2');
+	}, 'MCP section metadata not present in real FTS results');
+	const outlineRead = await mcp.call('read_note', { id: patchNoteId, outline: true });
+	assert.equal(outlineRead.isError, false, JSON.stringify(outlineRead));
+	assert.equal(outlineRead.structuredContent.revision_id, baseRevisionId);
+	assert.deepEqual(outlineRead.structuredContent.outline.map(entry => entry.path), ['0', '1', '2']);
+	assert.equal(Object.hasOwn(outlineRead.structuredContent, 'body'), false);
+	assert.equal(Object.hasOwn(outlineRead.structuredContent, 'body_offset'), false);
+	const betaSection = await mcp.call('get_note', { id: patchNoteId, section: 'Beta' });
+	assert.equal(betaSection.isError, false, JSON.stringify(betaSection));
+	assert.equal(betaSection.structuredContent.revision_id, baseRevisionId);
+	assert.equal(betaSection.structuredContent.body, patchBody.slice(patchBody.indexOf('## Beta')));
+	assert.equal(betaSection.structuredContent.section_path, '2');
+	assert.equal(betaSection.structuredContent.body_offset, patchBody.indexOf('## Beta'));
+	assert.equal(betaSection.structuredContent.body_length, patchBody.length);
+	assert.equal(betaSection.structuredContent.nextOffset, null);
+	assert.equal(betaSection.structuredContent.is_todo, 0);
+
 	const bodyPatch = `@@\n ${patchMarker} header\n ## Alpha\n-first: old\n+first: new\n+first: added\n keep alpha\n@@\n ## Beta\n-second: old\n+second: new\n keep beta\n ${patchMarker} footer\n`;
 	const patched = await mcp.call('update_note', {
 		id: patchNoteId,
-		base_revision_id: baseRevisionId,
+		base_revision_id: betaSection.structuredContent.revision_id,
 		body_patch: bodyPatch,
 		title: 'MCP context patch fixture updated',
 	});
@@ -243,7 +266,47 @@ test('MCP over stdio -> actual encrypted Joplin API, FTS, E2EE filesystem sync a
 	const historyAfterFailedPatch = await mcp.call('list_note_revisions', { note_id: patchNoteId });
 	assert.equal(historyAfterFailedPatch.isError, false);
 	assert.equal(historyAfterFailedPatch.structuredContent.items.length, revisionCountBeforeFailedPatch);
-	t.diagnostic('PASS native context patch workflow: grep revision, ordered multi-hunk edit, history, stale rejection and failed-hunk nonmutation');
+	const refreshedOutline = await mcp.call('read_note', { id: patchNoteId, outline: true });
+	assert.equal(refreshedOutline.structuredContent.revision_id, patched.structuredContent.revision_id);
+	assert.notEqual(refreshedOutline.structuredContent.revision_id, outlineRead.structuredContent.revision_id);
+	const oldSnapshot = await mcp.call('read_note_revision', { note_id: patchNoteId, revision_id: outlineRead.structuredContent.revision_id });
+	assert.equal(oldSnapshot.structuredContent.body, patchBody, 'outline revisions identify the exact native source snapshot');
+
+	// Exercise file import against the same core; only the already-tested public HTTPS download is injected.
+	const fileService = createAccountRegistry([{
+		id: 'acceptance', subjects: ['acceptance'], permissions: ['read', 'write'],
+		joplin: { baseUrl, token, allowInsecureHttp: true },
+		semantic: { databasePath: path.join(dir, 'file-fixture-semantic.sqlite'), keyRef: 'disposable-file-fixture' },
+	}], {}).forPrincipal('acceptance', 'acceptance');
+	let editedFile;
+	const fileTools = createTools(fileService, { allowWrites: true, readBodyFile: async () => editedFile });
+	const exported = await fileTools.call('read_note', { id: patchNoteId, output: 'file' });
+	assert.equal(exported.isError, false, JSON.stringify(exported));
+	assert.equal(Object.hasOwn(exported.structuredContent, 'body'), false);
+	const exportedBody = Buffer.from(exported.content[1].resource.blob, 'base64').toString('utf8');
+	assert.equal(exportedBody, patchedBody, 'file export contains the complete source, including other sections');
+	assert.equal(exported.structuredContent.revision_id, refreshedOutline.structuredContent.revision_id);
+	editedFile = exportedBody.replace('second: new', 'second: file roundtrip 😀');
+	const imported = await fileTools.call('update_note', {
+		id: patchNoteId, base_revision_id: exported.structuredContent.revision_id,
+		body_file: { download_url: 'https://fixture.example.test/body.md', file_id: 'native-roundtrip' },
+	});
+	assert.equal(imported.isError, false, JSON.stringify(imported));
+	assert.equal(imported.structuredContent.body_length, editedFile.length);
+	assert.equal(imported.structuredContent.body_size_bytes, Buffer.byteLength(editedFile));
+	assert.equal(imported.structuredContent.body_sha256, createHash('sha256').update(editedFile).digest('hex'));
+	const reexported = await mcp.call('read_note', { id: patchNoteId, output: 'file' });
+	assert.equal(reexported.isError, false, JSON.stringify(reexported));
+	assert.equal(reexported.structuredContent.revision_id, imported.structuredContent.revision_id);
+	assert.equal(Buffer.from(reexported.content[1].resource.blob, 'base64').toString('utf8'), editedFile);
+	assert.equal(reexported.structuredContent.file.sha256, imported.structuredContent.body_sha256);
+	const staleFile = await fileTools.call('update_note', {
+		id: patchNoteId, base_revision_id: exported.structuredContent.revision_id,
+		body_file: { download_url: 'https://fixture.example.test/body.md', file_id: 'stale-native-roundtrip' },
+	});
+	assert.equal(staleFile.structuredContent.error.code, 'note_conflict');
+	assert.equal((await mcp.call('delete_note', { id: patchNoteId })).isError, false, 'synthetic navigation note is cleaned up through Trash');
+	t.diagnostic('PASS native search/outline/section snapshot, context patch, history, stale guards and complete file roundtrip (HTTPS downloader injected)');
 
 	const destinationNotebook = await mcp.call('create_notebook', { title: 'MCP acceptance destination' });
 	assert.equal(destinationNotebook.isError, false);

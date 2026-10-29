@@ -122,7 +122,7 @@ test('metadata reads reject all slicing selectors before reading a note', async 
 			const result = await tools.call(name, { id: noteId, output: 'metadata', ...selector });
 			assert.equal(result.isError, true);
 			assert.equal(result.structuredContent.error.code, 'note_file_slice_conflict');
-			assert.match(result.structuredContent.error.message, /omit offset, max_chars and length/);
+			assert.match(result.structuredContent.error.message, /body selectors or navigation/);
 		}
 	}
 	assert.equal(context.reads, 0);
@@ -155,6 +155,6 @@ test('read tool schemas describe metadata as a distinct body-free result mode', 
 		assert.equal(success.properties.body_size_bytes.type, 'integer');
 		assert.equal(success.properties.body_sha256.pattern, '^[a-f0-9]{64}$');
 		const excluded = metadata.not.anyOf.flatMap(branch => branch.required);
-		assert.deepEqual(excluded, ['body', 'file']);
+		assert.deepEqual(excluded, ['body', 'file', 'outline', 'section_path', 'section_heading', 'section_start_offset', 'section_end_offset']);
 	}
 });

@@ -206,8 +206,8 @@ test('catalog publishes a fixed file-input object and object output variants', a
 		assert.equal(success.properties.file.type, 'object');
 		const inline = success.anyOf.find(branch => branch.required.includes('body'));
 		const file = success.anyOf.find(branch => branch.required.includes('file'));
-		assert.deepEqual(inline.not, { required: ['file'] });
-		assert.deepEqual(file.not, { required: ['body'] });
+		assert.ok(inline.not.anyOf.some(branch => branch.required.includes('file')));
+		assert.ok(file.not.anyOf.some(branch => branch.required.includes('body')));
 		const value = (await tools.call(name, { id: noteId, output: 'file' })).structuredContent;
 		for (const field of [...success.required, ...file.required]) assert.ok(Object.hasOwn(value, field), field);
 		for (const field of success.properties.file.required) assert.ok(Object.hasOwn(value.file, field), field);
