@@ -34,16 +34,42 @@ RUN npm install --global --no-audit --no-fund node-gyp@12.4.0 \
 
 FROM native AS builder
 
-# The normal CLI dependency set includes keytar even though headless mode does not use it.
+# The CLI dependency set includes keytar; its build needs libsecret and the CLI copy step needs rsync.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libsecret-1-dev \
+    && apt-get install -y --no-install-recommends libsecret-1-dev rsync \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY package.json yarn.lock .yarnrc.yml tsconfig.json LICENSE ./
+COPY package.json yarn.lock .yarnrc.yml ./
 COPY .yarn/releases ./.yarn/releases
 COPY .yarn/patches ./.yarn/patches
 COPY .yarn/joplin-empty-package ./.yarn/joplin-empty-package
+# Keep source changes out of the dependency layer. Yarn runs workspace install hooks
+# (preinstall/install/postinstall), and these workspaces have none; their builds run below.
+COPY packages/app-cli/package.json ./packages/app-cli/package.json
+COPY packages/lib/package.json ./packages/lib/package.json
+COPY packages/renderer/package.json ./packages/renderer/package.json
+COPY packages/utils/package.json ./packages/utils/package.json
+COPY packages/htmlpack/package.json ./packages/htmlpack/package.json
+COPY packages/onenote-converter/package.json ./packages/onenote-converter/package.json
+COPY packages/fork-htmlparser2/package.json ./packages/fork-htmlparser2/package.json
+COPY packages/fork-sax/package.json ./packages/fork-sax/package.json
+COPY packages/fork-uslug/package.json ./packages/fork-uslug/package.json
+COPY packages/turndown/package.json ./packages/turndown/package.json
+COPY packages/turndown-plugin-gfm/package.json ./packages/turndown-plugin-gfm/package.json
+COPY packages/tools/package.json ./packages/tools/package.json
+
+# Some existing resolutions use the builder HOME. Keep the repository patches at that path too.
+# Disable only the root postinstall in staging so the selected workspace build is explicit.
+RUN mkdir -p /root/.yarn node_modules \
+    && cp -a .yarn/patches /root/.yarn/patches \
+    && node -e 'const fs = require("node:fs"); const p = JSON.parse(fs.readFileSync("package.json", "utf8")); delete p.scripts.postinstall; fs.writeFileSync("package.json", JSON.stringify(p, null, 2));' \
+    && ln -sf /app/.yarn/releases/yarn-4.16.0.cjs /usr/local/bin/yarn
+
+# Focus uses the committed lock without rewriting it, and installs workspace-local dependencies.
+RUN node .yarn/releases/yarn-4.16.0.cjs workspaces focus joplin @joplin/tools
+
+COPY tsconfig.json LICENSE ./
 COPY packages/app-cli ./packages/app-cli
 COPY packages/lib ./packages/lib
 COPY packages/renderer ./packages/renderer
@@ -56,21 +82,6 @@ COPY packages/fork-uslug ./packages/fork-uslug
 COPY packages/turndown ./packages/turndown
 COPY packages/turndown-plugin-gfm ./packages/turndown-plugin-gfm
 COPY packages/tools ./packages/tools
-
-# Some existing resolutions use the builder HOME. Keep the repository patches at that path too.
-# Disable only the root postinstall in staging so the selected workspace build is explicit.
-RUN mkdir -p /root/.yarn node_modules \
-    && cp -a .yarn/patches /root/.yarn/patches \
-    && node -e 'const fs = require("node:fs"); const p = JSON.parse(fs.readFileSync("package.json", "utf8")); delete p.scripts.postinstall; fs.writeFileSync("package.json", JSON.stringify(p, null, 2));' \
-    && ln -sf /app/.yarn/releases/yarn-4.16.0.cjs /usr/local/bin/yarn
-
-# Focus uses the committed lock without rewriting it, and installs workspace-local dependencies.
-RUN node .yarn/releases/yarn-4.16.0.cjs workspaces focus joplin @joplin/tools
-
-# The CLI's gulp copy step uses rsync on Linux.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends rsync \
-    && rm -rf /var/lib/apt/lists/*
 
 # OneNote import is outside this headless runtime; its optional Rust/Wasm build is omitted.
 RUN node .yarn/releases/yarn-4.16.0.cjs workspaces foreach --all --exclude @joplin/onenote-converter --topological-dev run build \
