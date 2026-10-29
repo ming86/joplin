@@ -36,12 +36,15 @@ interface LoggerDatabase {
 	transactionExecBatch(queries: unknown[]): Promise<void>;
 }
 
+/** Configure a destination and any destination-specific formatting or file handling. */
 interface TargetOptions {
 	level?: LogLevel;
 	database?: LoggerDatabase;
 	console?: Console;
 	prefix?: string;
 	path?: string;
+	/** Override file appends while keeping them inside Logger's ordered write mutex. */
+	fsDriver?: FsDriver;
 	source?: string;
 
 	// Default message format
@@ -64,7 +67,9 @@ export interface LoggerWrapper {
 	error: (...object: unknown[])=> void;
 }
 
+/** The file operation used by Logger, including any work serialized with an append. */
 interface FsDriver {
+	/** Append one complete formatted record using the requested encoding. */
 	appendFile: (path: string, content: string, encoding: string)=> Promise<void>;
 }
 
@@ -328,7 +333,7 @@ class Logger {
 				/* eslint-disable-next-line promise/prefer-await-to-then -- Old code before rule was applied */
 				writeToFileMutex_.acquire().then((r) => {
 					release = r;
-					return Logger.fsDriver().appendFile(target.path as string, `${logLine}\n`, 'utf8');
+					return (target.fsDriver ?? Logger.fsDriver()).appendFile(target.path as string, `${logLine}\n`, 'utf8');
 					// eslint-disable-next-line promise/prefer-await-to-then, @typescript-eslint/no-explicit-any -- Old code before rule was applied, Old code before rule was applied
 				}).catch((error: any) => {
 					console.error('Cannot write to log file:', error);

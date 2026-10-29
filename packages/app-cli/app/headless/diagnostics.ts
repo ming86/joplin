@@ -1,4 +1,4 @@
-import { open } from 'fs/promises';
+import { appendFile, chmod, open, rename, rm } from 'fs/promises';
 import { join } from 'path';
 import Logger, { TargetType } from '@joplin/utils/Logger';
 
@@ -42,6 +42,12 @@ const stackModules = new Set(['main', 'app', 'status', 'diagnostics', 'config', 
 /** The independent logger accepts only values selected by this module, never original errors. */
 let diagnosticLogger: Logger | null = null;
 
+/** Rotate before the next complete record would make a nonempty file exceed 10 MiB. */
+const maxLogBytes = 10 * 1024 * 1024;
+
+/** Filesystem failure codes that identify an actionable cause without revealing private error data. */
+const fileErrorCodes = new Set(['ENOSPC', 'EDQUOT', 'EIO', 'EROFS', 'EACCES', 'EPERM', 'ENOENT', 'EMFILE', 'ENFILE', 'EISDIR', 'ENOTDIR']);
+
 /** Get a stderr logger even before the profile and application have initialized. */
 function logger(): Logger {
 	if (!diagnosticLogger) {
@@ -52,16 +58,58 @@ function logger(): Logger {
 	return diagnosticLogger;
 }
 
-/** Create a private diagnostic file after the dedicated profile directory exists. */
+/** Open a private diagnostic file and retain three size-bounded archives in the dedicated profile. */
 export async function initializeHeadlessDiagnostics(profileDir: string): Promise<void> {
 	const path = join(profileDir, 'log-headless.txt');
+	const archives = [1, 2, 3].map(index => join(profileDir, `log-headless.${index}.txt`));
 	const file = await open(path, 'a', 0o600);
+	/** Cached active-file bytes; the headless writer exclusively owns this diagnostic file. */
+	let size: number;
 	try {
 		await file.chmod(0o600);
+		size = (await file.stat()).size;
 	} finally {
 		await file.close();
 	}
-	logger().addTarget(TargetType.File, { path });
+	for (const archive of archives) {
+		try {
+			await chmod(archive, 0o600);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+		}
+	}
+	logger().addTarget(TargetType.File, {
+		path,
+		fsDriver: {
+			// Logger holds its write mutex throughout rotation and append, including queued records.
+			appendFile: async (_path, content) => {
+				try {
+					const bytes = Buffer.byteLength(content, 'utf8');
+					if (size > 0 && size + bytes > maxLogBytes) {
+						await rm(archives[2], { force: true });
+						for (let index = archives.length - 1; index > 0; index--) {
+							try {
+								await rename(archives[index - 1], archives[index]);
+							} catch (error) {
+								if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+							}
+						}
+						await rename(path, archives[0]);
+						size = 0;
+					}
+					// A single oversized record stays intact; the following record rotates it.
+					await appendFile(path, content, { encoding: 'utf8', mode: 0o600 });
+					size += bytes;
+				} catch (error) {
+					// Logger prints this failure directly, so exclude filesystem paths and raw error details.
+					const safeError: NodeJS.ErrnoException = new Error('Headless diagnostic log rotation or append failed.');
+					const code = (error as NodeJS.ErrnoException).code;
+					if (code && fileErrorCodes.has(code)) safeError.code = code;
+					throw safeError;
+				}
+			},
+		},
+	});
 }
 
 /** Read a valid HTTP status without forwarding arbitrary numeric error codes. */
