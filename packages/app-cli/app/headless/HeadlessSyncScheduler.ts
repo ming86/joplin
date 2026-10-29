@@ -60,7 +60,8 @@ export default class HeadlessSyncScheduler implements SyncSchedulingPolicy {
 		private readonly run_: (options: SyncStartOptions, wifiCheck: boolean)=> Promise<unknown>,
 		private readonly pendingChanged_: (pending: boolean)=> void,
 		private readonly intervalMs_: number,
-		private readonly reportError_: ()=> void,
+		/** Report rejected recurring requests without exposing their payload through scheduler state. */
+		private readonly reportError_: (error: unknown)=> void,
 		/** Wait after a periodic full sync settles before starting another; defaults to two minutes. */
 		private readonly fullIntervalMs_ = 120000,
 	) {}
@@ -231,8 +232,8 @@ export default class HeadlessSyncScheduler implements SyncSchedulingPolicy {
 	private async scheduleRecurring_(options: SyncStartOptions, periodicFullSync = false) {
 		try {
 			await this.scheduleRequest_(0, options, true, periodicFullSync);
-		} catch {
-			this.reportError_();
+		} catch (error) {
+			this.reportError_(error);
 		}
 	}
 

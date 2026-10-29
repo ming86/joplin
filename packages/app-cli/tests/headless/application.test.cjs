@@ -5,6 +5,7 @@ const load = require('./loadSource.cjs');
 // Exercise the real application wiring with fake Joplin workers. These are not sync integration tests.
 function fixture(options = {}) {
 	const events = [];
+	const diagnostics = [];
 	const schedulerStatus = { kind: null, lastPeriodicFullSync: null };
 	const profileCalls = [];
 	const settingValues = {
@@ -52,7 +53,13 @@ function fixture(options = {}) {
 		'./headless/conflicts': () => ({}),
 		'./headless/trash': () => ({}),
 		'./headless/attachmentReferences': () => ({}),
-		'./headless/status': load('packages/app-cli/app/headless/status.ts'),
+		'./headless/diagnostics': {
+			logHeadlessInfo: (...args) => diagnostics.push(args),
+			logHeadlessError: (...args) => diagnostics.push(args),
+			initializeHeadlessDiagnostics: async () => {},
+			flushHeadlessDiagnostics: async () => {},
+		},
+		'./headless/status': load('packages/app-cli/app/headless/status.ts', { './diagnostics': { logHeadlessError: (...args) => diagnostics.push(args) } }),
 		'@joplin/lib/ClipperServer': { instance: () => instance },
 		'@joplin/lib/services/DecryptionWorker': { instance: () => ({
 			scheduleStart: async () => events.push('decrypt'),
@@ -100,11 +107,11 @@ function fixture(options = {}) {
 	const app = new Application();
 	app.stdout = () => events.push('ready');
 	app.database_ = { close: async () => events.push('close-db') };
-	return { app, events, profileCalls, Driver, clipper: instance, settingValues };
+	return { app, events, diagnostics, profileCalls, Driver, clipper: instance, settingValues };
 }
 
 test('headless application wires one owner: initialize, listen, drain sync/workers, flush and close', async () => {
-	const { app, events, profileCalls, clipper, settingValues } = fixture();
+	const { app, events, diagnostics, profileCalls, clipper, settingValues } = fixture();
 	app.headlessConfig_ = { databaseKey: Buffer.alloc(32) };
 	app.headlessInitialized_ = true;
 	await app.runHeadlessService();
@@ -115,6 +122,7 @@ test('headless application wires one owner: initialize, listen, drain sync/worke
 		'close-db', 'reset-models',
 	]);
 	assert.equal(app.backgroundServicesEnabled(), false);
+	assert.deepEqual(diagnostics, [['startup', 'private-api-ready'], ['shutdown', 'started'], ['shutdown', 'completed']]);
 	const summary = await clipper.actions.headless().status();
 	assert.equal(summary.sync.pending, false);
 	assert.equal(summary.accountEmail, 'server@example.invalid');

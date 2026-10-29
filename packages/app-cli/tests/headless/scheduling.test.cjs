@@ -38,6 +38,19 @@ test('production recurrent scheduling retries after a synchronization failure wi
 	assert.equal(intervals.size, 1);
 });
 
+test('native background failures reach the observer with their original error without rejecting the scheduled operation', async () => {
+	const { reg, fakeSync } = fixture();
+	const observed = [];
+	const error = Object.assign(new Error('synthetic network outage'), { code: 'ECONNRESET' });
+	fakeSync.start = async () => { throw error; };
+	await reg.scheduleSync(0, { onError: (...args) => observed.push(args) });
+	assert.deepEqual(observed, [[error, 'synchronize']]);
+	const initializationError = new Error('synchronizer initialization failed');
+	reg.syncTarget = () => ({ isAuthenticated: async () => true, synchronizer: async () => { throw initializationError; } });
+	await reg.scheduleSync(0, { onError: (...args) => observed.push(args) });
+	assert.deepEqual(observed[1], [initializationError, 'initialize-synchronizer']);
+});
+
 test('cancelling registry timers drains callbacks and clears the cancellation polling timer', async () => {
 	const { reg, intervals } = fixture();
 	reg.setupRecurrentSync(); assert.equal(intervals.size, 1);
@@ -75,7 +88,7 @@ function headlessFixture(t, intervalMs = 10000) {
 	const errors = [];
 	let scheduler;
 	output.reg.setSyncSchedulingPolicy((run, pendingChanged) => {
-		scheduler = new Scheduler(run, pendingChanged, intervalMs, () => errors.push(true));
+		scheduler = new Scheduler(run, pendingChanged, intervalMs, error => errors.push(error));
 		return scheduler;
 	});
 	output.reg.setupRecurrentSync();
@@ -354,9 +367,11 @@ test('headless shutdown clears debounce and ticks and prevents active-run follow
 
 test('periodic authentication failure is reported without an unhandled rejection or immediate retry', async t => {
 	const { reg, advance, errors, calls } = headlessFixture(t);
-	reg.syncTarget = () => ({ isAuthenticated: async () => { throw new Error('authentication unavailable'); } });
+	const original = new Error('authentication unavailable');
+	reg.syncTarget = () => ({ isAuthenticated: async () => { throw original; } });
 	await advance(10000);
 	assert.equal(errors.length, 1);
+	assert.equal(errors[0], original, 'the diagnostic callback receives the underlying failure');
 	assert.equal(reg.syncSchedulingPending(), false);
 	await advance(9999); assert.equal(errors.length, 1);
 	await advance(1); assert.equal(errors.length, 2);

@@ -37,6 +37,7 @@ import createHeadlessAttachmentActions from './headless/attachments';
 import createHeadlessConflictActions from './headless/conflicts';
 import createHeadlessTrashActions from './headless/trash';
 import createHeadlessAttachmentReferenceActions from './headless/attachmentReferences';
+import { initializeHeadlessDiagnostics, logHeadlessError, logHeadlessInfo, flushHeadlessDiagnostics } from './headless/diagnostics';
 
 type FolderOrNoteType = ModelType.Note | ModelType.Folder | 'folderOrNote';
 
@@ -72,29 +73,41 @@ export class Application extends BaseApplication {
 		await this.database_.close();
 	}
 
+	/** Drain the private API and background workers, reporting the stage if shutdown fails. */
 	private async stopHeadless() {
 		if (!this.headlessInitialized_) return;
 		if (!this.headlessStop_) {
 			this.headlessStop_ = (async () => {
-				this.headlessBackground_ = false;
-				BaseItem.setLocalChangeHandler(null);
-				await ClipperServer.instance().stop({ graceful: true });
-				const syncTimersStopped = reg.cancelTimers();
-				if (await reg.syncTarget().syncStarted()) {
-					const synchronizer = await reg.syncTarget().synchronizer();
-					await synchronizer.cancel();
-					await synchronizer.waitForSyncToFinish();
+				logHeadlessInfo('shutdown', 'started');
+				let stage = 'drain-api';
+				try {
+					this.headlessBackground_ = false;
+					BaseItem.setLocalChangeHandler(null);
+					await ClipperServer.instance().stop({ graceful: true });
+					stage = 'drain-sync';
+					const syncTimersStopped = reg.cancelTimers();
+					if (await reg.syncTarget().syncStarted()) {
+						const synchronizer = await reg.syncTarget().synchronizer();
+						await synchronizer.cancel();
+						await synchronizer.waitForSyncToFinish();
+					}
+					await syncTimersStopped;
+					reg.setSyncSchedulingPolicy(null);
+					this.deinitRedux();
+					stage = 'stop-workers-and-database';
+					await super.destroy();
+					this.headlessInitialized_ = false;
+					logHeadlessInfo('shutdown', 'completed');
+				} catch (error) {
+					logHeadlessError('shutdown', stage, error);
+					throw error;
 				}
-				await syncTimersStopped;
-				reg.setSyncSchedulingPolicy(null);
-				this.deinitRedux();
-				await super.destroy();
-				this.headlessInitialized_ = false;
 			})();
 		}
 		await this.headlessStop_;
 	}
 
+	/** Run the authenticated private API with the native headless background services. */
 	public async runHeadlessService() {
 		if (!this.headlessConfig_) throw new Error('serve requires JOPLIN_HEADLESS=1 and an encrypted profile.');
 		const clipper = ClipperServer.instance();
@@ -125,11 +138,20 @@ export class Application extends BaseApplication {
 		await runService({
 			start: async () => {
 				reg.setSyncSchedulingPolicy((run, pendingChanged) => {
-					syncScheduler = new HeadlessSyncScheduler(run, pendingChanged, this.headlessConfig_.syncIntervalSeconds * 1000, () => this.stdout('headless: sync scheduling failed'));
+					syncScheduler = new HeadlessSyncScheduler((options, wifiCheck) => run({
+						...options,
+						onError: (error, stage) => logHeadlessError('sync', stage, error),
+					}, wifiCheck), pendingChanged, this.headlessConfig_.syncIntervalSeconds * 1000, error => {
+						logHeadlessError('sync', 'schedule-recurring', error);
+						this.stdout('headless: sync scheduling failed');
+					});
 					return syncScheduler;
 				});
 				BaseItem.setLocalChangeHandler(() => {
-					void reg.scheduleSync(reg.syncAsYouTypeInterval(), { syncSteps: Synchronizer.partialSyncSteps }).catch(() => { this.stdout('headless: sync scheduling failed'); });
+					void reg.scheduleSync(reg.syncAsYouTypeInterval(), { syncSteps: Synchronizer.partialSyncSteps }).catch(error => {
+						logHeadlessError('sync', 'schedule-local-change', error);
+						this.stdout('headless: sync scheduling failed');
+					});
 				});
 				this.headlessBackground_ = true;
 				await this.applySettingsSideEffects();
@@ -139,13 +161,20 @@ export class Application extends BaseApplication {
 				RevisionService.instance().runInBackground();
 				await Setting.saveAll();
 				await clipper.start({ returnWhenListening: true });
-				void reg.scheduleSync(0).catch(() => { this.stdout('headless: sync scheduling failed'); });
+				void reg.scheduleSync(0).catch(error => {
+					logHeadlessError('sync', 'schedule-startup', error);
+					this.stdout('headless: sync scheduling failed');
+				});
 			},
 			stop: () => this.stopHeadless(),
-			ready: () => this.stdout('headless: private API ready; synchronization and decryption may still be pending'),
+			ready: () => {
+				logHeadlessInfo('startup', 'private-api-ready');
+				this.stdout('headless: private API ready; synchronization and decryption may still be pending');
+			},
 			timedOut: () => {
+				logHeadlessInfo('shutdown', 'timed-out');
 				this.stdout('headless: shutdown timed out; exiting without claiming a clean checkpoint');
-				process.exit(1);
+				void flushHeadlessDiagnostics().finally(() => process.exit(1));
 			},
 		});
 	}
@@ -498,33 +527,47 @@ export class Application extends BaseApplication {
 		return argv.indexOf('version') < 0;
 	}
 
+	/** Start the CLI with an encrypted dedicated profile and the supplied headless configuration. */
 	public async startHeadless(argv: string[], config: HeadlessConfig) {
 		this.headlessConfig_ = config;
 		await this.start(argv);
 	}
 
+	/** Prepare the selected profile, run the command, and drain initialized headless services. */
 	public async start(argv: string[]) {
 		const headlessConfig = this.headlessConfig_;
 		let release: (()=> Promise<void>) | undefined;
 		let completed = false;
+		let stage = 'create-profile-directory';
 		try {
 			if (headlessConfig) {
 				process.umask(0o077);
 				headlessConfig.profileDir = await createProfileDirectory(headlessConfig.profileDir);
+				stage = 'initialize-diagnostics';
+				await initializeHeadlessDiagnostics(headlessConfig.profileDir);
+				logHeadlessInfo('startup', 'starting');
+				stage = 'acquire-profile-lease';
 				release = await locker.lock(headlessConfig.profileDir, {
 					retries: 0,
 					stale: 30000,
 					update: 10000,
-					onCompromised: () => {
+					onCompromised: error => {
+						logHeadlessError('profile-lease', 'compromised', error);
 						console.error('Headless profile lease lost; stopping immediately.');
-						process.exit(1);
+						void flushHeadlessDiagnostics().finally(() => process.exit(1));
 					},
 				});
+				stage = 'prepare-profile';
 				await prepareProfile(headlessConfig.profileDir);
+				stage = 'prepare-command';
 				argv = headlessArgv(argv, headlessConfig);
 			}
+			stage = 'start-application';
 			await this.startImpl(argv);
 			completed = true;
+		} catch (error) {
+			if (headlessConfig) logHeadlessError('startup', stage, error);
+			throw error;
 		} finally {
 			headlessConfig?.databaseKey.fill(0);
 			await this.stopHeadless();

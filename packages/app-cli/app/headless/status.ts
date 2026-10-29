@@ -1,5 +1,6 @@
 import type { State } from '@joplin/lib/reducer';
 import type { HeadlessSyncSchedulerStatus } from './HeadlessSyncScheduler';
+import { logHeadlessError } from './diagnostics';
 
 /** Sync operations whose numeric counters contain no item or backend details. */
 const syncCounterNames = [
@@ -144,11 +145,15 @@ export function createHeadlessActionApi(
 	// Put status last so callers cannot replace the reserved action.
 	const actions = Object.assign(Object.create(null), extraActions, {
 		status: async () => {
+			let stage = 'disabled-items';
 			try {
 				const disabledItemCount = await getDisabledItemCount();
+				stage = 'account-profile';
 				const accountEmail = await getAccountEmail();
+				stage = 'live-state';
 				return summarizeHeadlessState(getState(), disabledItemCount, serviceStartedAt, accountEmail, getSchedulerStatus?.());
-			} catch {
+			} catch (error) {
+				logHeadlessError('status', stage, error);
 				// REST returns exception messages, so acquisition errors must not expose database details.
 				throw new Error('Headless status unavailable.');
 			}

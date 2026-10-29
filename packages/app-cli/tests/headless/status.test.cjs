@@ -1,7 +1,10 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const load = require('./loadSource.cjs');
-const { summarizeHeadlessState, createHeadlessActionApi, getHeadlessAccountEmail } = load('packages/app-cli/app/headless/status.ts');
+const diagnostics = [];
+const { summarizeHeadlessState, createHeadlessActionApi, getHeadlessAccountEmail } = load('packages/app-cli/app/headless/status.ts', {
+	'./diagnostics': { logHeadlessError: (...args) => diagnostics.push(args) },
+});
 
 /** Supply only the Redux fields read by the status boundary. */
 function state() {
@@ -139,10 +142,25 @@ test('fixed headless status action uses REST token authentication and excludes o
 });
 
 test('profile lookup failures remain generic through the status action', async () => {
+	const original = new Error('lookup failed: /private/profile');
 	const actions = createHeadlessActionApi(state, async () => 0, () => getHeadlessAccountEmail(9, async () => ({
 		userId: 'owner-uuid',
 		async loadSession() {},
-		async exec() { throw new Error('lookup failed: /private/profile'); },
+		async exec() { throw original; },
 	})));
 	await assert.rejects(actions.headless().status(), { message: 'Headless status unavailable.' });
+	assert.deepEqual(diagnostics.at(-1), ['status', 'account-profile', original]);
+});
+
+test('status logs the failed acquisition stage while preserving the public error', async () => {
+	for (const stage of ['disabled-items', 'live-state']) {
+		const original = new Error('private database and report contents');
+		const actions = createHeadlessActionApi(
+			() => { if (stage === 'live-state') throw original; return state(); },
+			async () => { if (stage === 'disabled-items') throw original; return 0; },
+			async () => null,
+		);
+		await assert.rejects(actions.headless().status(), { message: 'Headless status unavailable.' });
+		assert.deepEqual(diagnostics.at(-1), ['status', stage, original]);
+	}
 });
