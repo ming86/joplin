@@ -23,7 +23,7 @@ For update results, body input means the presence of any of `body`, `body_file`,
 
 Calculate measurements from the native operation's returned committed snapshot, which also supplies the revision. Do not reread the note after saving or calculate measurements only from submitted input. Results never echo the full body.
 
-## Current implementation points
+## Implementation points identified before the change
 
 - The MCP output schemas live in `extras/headless-service/src/mcp/output-schemas.mjs`; `create_note` currently returns only `id`, `title`, and `notebook_id`, while `update_note` conditionally allows the measurements.
 - MCP handlers and the local `bodyMetadata` helper live in `extras/headless-service/src/mcp/tools.mjs`. The update handler currently measures only a `body_file` result.
