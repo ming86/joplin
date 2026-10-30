@@ -1,5 +1,5 @@
 import JoplinError from '@joplin/lib/JoplinError';
-import HeadlessNoteService, { HeadlessNoteUpdate } from '@joplin/lib/services/HeadlessNoteService';
+import HeadlessNoteService, { HeadlessNoteCreate, HeadlessNoteUpdate } from '@joplin/lib/services/HeadlessNoteService';
 import HeadlessRevisionHistory, {
 	CompareNoteRevisionsRequest,
 	ListNoteRevisionsRequest,
@@ -67,6 +67,8 @@ function validateListRevisions(input: ListRevisionsRequest): void {
 /** The fixed revision and conditional note actions exposed by the headless service. */
 export function createHeadlessRevisionActions() {
 	return Object.assign(Object.create(null), {
+		/** Create a note and its first native revision in one save transaction. */
+		createNoteWithRevision: (input: HeadlessNoteCreate) => withKnownServiceErrors(() => HeadlessNoteService.createNoteWithRevision(input)),
 		/** Read a note with the native revision used to guard its next edit. */
 		readNote: (input: { id: string }) => withKnownServiceErrors(() => HeadlessNoteService.readNote(input.id)),
 		/** Apply a conditional note edit through its native save and history transaction. */

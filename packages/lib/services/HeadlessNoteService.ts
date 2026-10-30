@@ -3,8 +3,25 @@ import JoplinError from '../JoplinError';
 import Folder from '../models/Folder';
 import Note from '../models/Note';
 import Revision, { RevisionContent, RevisionReconstruction } from '../models/Revision';
+import Setting from '../models/Setting';
 import applyBodyPatch from './HeadlessNotePatch';
 import { NoteEntity, RevisionEntity, SqlQuery } from './database/types';
+
+/** Supported inputs for a new Markdown note and its first native revision. */
+export interface HeadlessNoteCreate {
+	/** Nonblank title stored verbatim. */
+	title: string;
+	/** Literal Markdown body, defaulting to an empty string. */
+	body?: string;
+	/** Existing readable notebook that receives the new note. */
+	notebook_id: string;
+	/** Whether the new note is a to-do; defaults to false. */
+	is_todo?: boolean;
+	/** Due date in Unix milliseconds, or 0 to clear it, including on ordinary notes. */
+	todo_due?: number;
+	/** Source URL stored verbatim, defaulting to an empty string. */
+	source_url?: string;
+}
 
 /** Supported edits applied against a caller's native revision of the current note. */
 export interface HeadlessNoteChanges {
@@ -165,6 +182,20 @@ function validateChanges(changes: HeadlessNoteChanges) {
 	}
 }
 
+/** Validate the narrow create input before preparing any native history. */
+function validateCreate(input: HeadlessNoteCreate): void {
+	if (!input || typeof input !== 'object' || Array.isArray(input)) throw new JoplinError('A note object is required.', 'invalid_note_input');
+	const supported = ['title', 'body', 'notebook_id', 'is_todo', 'todo_due', 'source_url'];
+	if (Object.keys(input).some(key => !supported.includes(key))) throw new JoplinError('Unsupported note property.', 'unsupported_note_property');
+	if (typeof input.title !== 'string' || !input.title.trim()) throw new JoplinError('A nonblank note title is required.', 'invalid_note_input');
+	for (const field of ['body', 'source_url'] as const) {
+		if (input[field] !== undefined && typeof input[field] !== 'string') throw new JoplinError('Note text fields must be strings.', 'invalid_note_input');
+	}
+	requireId(input.notebook_id);
+	if (input.is_todo !== undefined && typeof input.is_todo !== 'boolean') throw new JoplinError('To-do type must be a boolean.', 'invalid_note_input');
+	if (input.todo_due !== undefined && !Number.isInteger(input.todo_due)) throw new JoplinError('A due date must be an integer timestamp.', 'invalid_note_input');
+}
+
 /** Translate expected save failures without exposing stored values or database details. */
 function rethrowSaveError(error: Error & { code?: string }): never {
 	if (error.code === 'conditionalSaveConflict') throw new JoplinError('The note or its revision history changed during the operation.', 'note_conflict');
@@ -221,6 +252,49 @@ async function editPatch(note: NoteEntity, changes: HeadlessNoteChanges): Promis
 	}
 	if (changes.source_url !== undefined) patch.source_url = changes.source_url;
 	return patch;
+}
+
+/** Create one native note and its first revision in the same ordinary save transaction. */
+export async function createNoteWithRevision(input: HeadlessNoteCreate): Promise<HeadlessNoteRead> {
+	validateCreate(input);
+	return Note.revisionService().withRevisionLock(async () => {
+		const folder = await Folder.load(input.notebook_id);
+		if (!folder || folder.encryption_applied !== 0 || folder.deleted_time) throw new JoplinError('The notebook is unavailable.', 'notebook_unavailable');
+
+		// Seed database defaults and Note.save's creation fields before capture. Filtering also
+		// normalizes coordinates and metadata exactly as the persisted note's load path does.
+		const now = Date.now();
+		const note = Note.filter({
+			...Note.defaultValues(Note.fieldNames()),
+			id: Note.generateUuid(),
+			parent_id: folder.id,
+			title: input.title,
+			body: input.body ?? '',
+			is_todo: input.is_todo ? 1 : 0,
+			todo_due: input.todo_due ?? 0,
+			source_url: input.source_url ?? '',
+			source: Setting.value('appName'),
+			source_application: Setting.value('appId'),
+			order: now,
+			deleted_time: 0,
+			created_time: now,
+			updated_time: now,
+			user_created_time: now,
+			user_updated_time: now,
+		});
+		const capture = await prepareCapture(note);
+		try {
+			const saved = await Note.save(note, {
+				isNew: true,
+				autoTimestamp: false,
+				userSideValidation: true,
+				nextQueries: [...capture.checks, ...capture.queries],
+			});
+			return { ...saved, revision_id: capture.revision.id };
+		} catch (error) {
+			rethrowSaveError(error);
+		}
+	});
 }
 
 /** Read one eligible snapshot, creating native history only when its tracked state is unrecorded. */
@@ -289,6 +363,8 @@ export async function updateNote(input: HeadlessNoteUpdate): Promise<HeadlessNot
 
 /** Native-history-aware note operations used by the fixed headless action catalog. */
 export default class HeadlessNoteService {
+	/** Atomically create a note paired with its first native revision. */
+	public static createNoteWithRevision = createNoteWithRevision;
 	/** Read a snapshot paired with its native revision ID. */
 	public static readNote = readNote;
 	/** Atomically save a conditional edit and its native history. */
