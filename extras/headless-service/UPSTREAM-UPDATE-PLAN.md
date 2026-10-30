@@ -85,3 +85,7 @@ Run TypeScript compilation with JavaScript emission before the CLI build copies 
 The stock Desktop adapter remains a separate design in [DESKTOP-BACKEND-DESIGN.md](DESKTOP-BACKEND-DESIGN.md); it is not part of this headless implementation.
 
 The outline and section rules are in `git show dev:packages/lib/services/ai/tools/utils/noteOutline.ts` and `git show dev:packages/lib/services/ai/tools/global/readNote.ts`. The [official upstream repository](https://github.com/laurent22/joplin) provides the public source history.
+
+## Verification limits
+
+The encrypted-profile MCP integration uses the real core/native save path with an injected HTTPS downloader, so it does not verify the external download boundary. Focused headless checks do not establish coverage of the upstream graphical clients or a global CPU benchmark.

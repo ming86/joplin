@@ -89,3 +89,7 @@ Use the existing repository test commands for these focused suites and the exist
 ## Operational and compatibility constraints
 
 Preserve native defaults, timestamps, permissions, and local-sync `ItemChange` behavior. Preserve the generic Data API creation path for non-MCP callers. Keep diagnostics on existing safe error paths and do not log note bodies or file payloads.
+
+## Verification limits
+
+The native integration workflow exercises the committed body and revision through the real core save path. Its injected HTTPS downloader does not verify external file-host availability. Build and deployment observations depend on the operator environment and should be checked separately.
