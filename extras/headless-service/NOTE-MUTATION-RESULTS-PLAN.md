@@ -25,8 +25,8 @@ Calculate measurements from the native operation's returned committed snapshot, 
 
 ## Implementation points identified before the change
 
-- The MCP output schemas live in `extras/headless-service/src/mcp/output-schemas.mjs`; `create_note` currently returns only `id`, `title`, and `notebook_id`, while `update_note` conditionally allows the measurements.
-- MCP handlers and the local `bodyMetadata` helper live in `extras/headless-service/src/mcp/tools.mjs`. The update handler currently measures only a `body_file` result.
+- The MCP output schemas live in `extras/headless-service/src/mcp/output-schemas.mjs`; `create_note` initially returned only `id`, `title`, and `notebook_id`, while `update_note` conditionally allows the measurements.
+- MCP handlers and the local `bodyMetadata` helper live in `extras/headless-service/src/mcp/tools.mjs`. The update handler initially measured only a `body_file` result.
 - The account service's generic `createNote` implementation lives in `extras/headless-service/index.mjs`. It validates the destination and then calls the generic backend's `createNote` method.
 - The generic backend creation path in `extras/headless-service/src/joplin.mjs` avoids media extraction by POSTing an empty body and then PUTting the supplied body. Keep that behavior for its existing callers.
 - Revision-aware operations already travel through `extras/headless-service/src/revisions.mjs`, `extras/headless-service/src/revision-client.mjs`, and the fixed native action catalog in `packages/app-cli/app/headless/revisions.ts`.
