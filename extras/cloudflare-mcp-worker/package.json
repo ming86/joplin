@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "sops exec-file --no-fifo --filename secrets.env .sops.env 'wrangler dev --env-file \"{}\" --local-protocol https'",
-    "deploy": "sops exec-file --no-fifo --filename secrets.env .sops.env 'wrangler deploy --secrets-file \"{}\"'",
+    "dev": "sops exec-file --no-fifo --filename secrets.env .sops.env 'wrangler dev --config wrangler.local.jsonc --env-file \"{}\" --local-protocol https'",
+    "deploy": "sops exec-file --no-fifo --filename secrets.env .sops.env 'wrangler deploy --config wrangler.local.jsonc --secrets-file \"{}\"'",
     "test": "node --import tsx --test test/*.test.ts",
     "test:worker": "npm run build && node --test --test-timeout=45000 test/worker.test.mjs",
     "typecheck": "tsc --noEmit",
