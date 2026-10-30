@@ -133,7 +133,7 @@ test('modern write tool call remains blocked by read-only account permission', a
 	config.permissions = ['read'];
 	const customBackend = backend();
 	let writeCalls = 0;
-	customBackend.createNote = async () => { writeCalls++; throw new Error('write should not reach backend'); };
+	customBackend.createNoteWithRevision = async () => { writeCalls++; throw new Error('write should not reach backend'); };
 	const session = createSession({ allowWrites: true, config, customBackend });
 	t.after(() => session.close());
 

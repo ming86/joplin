@@ -16,6 +16,14 @@ const cli = process.env.JOPLIN_MCP_TEST_CLI;
 /** Installed SQLite implementation; use its absolute module path when it is outside the CLI's dependencies. */
 const sqliteModule = process.env.JOPLIN_HEADLESS_SQLITE_MODULE;
 
+/** Compare compact mutation measurements with the exact body reconstructed from native history. */
+function assertBodyMeasurements(value, body, totalLines) {
+	assert.equal(value.body_length, body.length);
+	assert.equal(value.body_size_bytes, Buffer.byteLength(body, 'utf8'));
+	assert.equal(value.body_sha256, createHash('sha256').update(body, 'utf8').digest('hex'));
+	assert.equal(value.body_total_line_count, totalLines);
+}
+
 test('MCP over stdio -> actual encrypted Joplin API, FTS, E2EE filesystem sync and normal-mode client', {
 	skip: !cli || !sqliteModule ? 'Set JOPLIN_MCP_TEST_CLI and JOPLIN_HEADLESS_SQLITE_MODULE to the installed encrypted runtime.' : false,
 	timeout: 180000,
@@ -82,10 +90,28 @@ test('MCP over stdio -> actual encrypted Joplin API, FTS, E2EE filesystem sync a
 	await mcp.initialize();
 	assert.equal((await mcp.request('tools/list')).tools.length, 32);
 	const marker = `mcpacceptance${randomBytes(6).toString('hex')}`;
-	let result = await mcp.call('create_note', { parentId: notebook.id, title: 'MCP temporary note', body: `${marker} initial 笔记` });
+	const initialBody = `${marker} initial 笔记\r\nsecond 😀\nthird\r`;
+	const revisedBody = `${marker} revised 😀`;
+	let result = await mcp.call('create_note', { parentId: notebook.id, title: 'MCP temporary note', body: initialBody });
 	assert.equal(result.isError, false, JSON.stringify(result));
-	assert.deepEqual(Object.keys(result.structuredContent).sort(), ['id', 'notebook_id', 'title']);
+	assert.deepEqual(Object.keys(result.structuredContent).sort(), [
+		'body_length', 'body_sha256', 'body_size_bytes', 'body_total_line_count',
+		'id', 'notebook_id', 'revision_id', 'title', 'updated_time',
+	]);
+	assert.equal(Object.hasOwn(result.structuredContent, 'body'), false);
+	assert.match(result.structuredContent.revision_id, /^[a-f0-9]{32}$/);
+	assertBodyMeasurements(result.structuredContent, initialBody, 4);
 	const noteId = result.structuredContent.id;
+	const initialRevisionId = result.structuredContent.revision_id;
+	// Use the revision returned by the atomic create immediately, without a separate current-note read.
+	result = await mcp.call('update_note', { id: noteId, base_revision_id: initialRevisionId, body: revisedBody }); assert.equal(result.isError, false);
+	assert.deepEqual(Object.keys(result.structuredContent).sort(), [
+		'body_length', 'body_sha256', 'body_size_bytes', 'body_total_line_count',
+		'changed', 'id', 'previous_revision_id', 'revision_id', 'updated_time',
+	]);
+	assert.equal(result.structuredContent.previous_revision_id, initialRevisionId);
+	assert.notEqual(result.structuredContent.revision_id, initialRevisionId);
+	assertBodyMeasurements(result.structuredContent, revisedBody, 1);
 	const conflicts = await mcp.call('list_conflicts');
 	assert.equal(conflicts.isError, false, JSON.stringify(conflicts));
 	assert.deepEqual(conflicts.structuredContent.items, []);
@@ -93,21 +119,35 @@ test('MCP over stdio -> actual encrypted Joplin API, FTS, E2EE filesystem sync a
 	const ordinaryNoteConflict = await mcp.call('read_conflict', { id: noteId });
 	assert.equal(ordinaryNoteConflict.isError, true);
 	assert.equal(ordinaryNoteConflict.structuredContent.error.code, 'conflict_not_found');
-	const initialRead = await mcp.call('read_note', { id: noteId });
-	assert.equal(initialRead.isError, false);
-	assert.match(initialRead.structuredContent.revision_id, /^[a-f0-9]{32}$/);
-	const initialRevisionId = initialRead.structuredContent.revision_id;
-	result = await mcp.call('update_note', { id: noteId, base_revision_id: initialRevisionId, body: `${marker} revised 😀` }); assert.equal(result.isError, false);
-	assert.deepEqual(Object.keys(result.structuredContent).sort(), ['changed', 'id', 'previous_revision_id', 'revision_id', 'updated_time']);
-	assert.equal(result.structuredContent.previous_revision_id, initialRevisionId);
-	assert.notEqual(result.structuredContent.revision_id, initialRevisionId);
-	result = await mcp.call('get_note', { id: noteId }); assert.equal(result.structuredContent.body, `${marker} revised 😀`);
+	const createdRevision = await mcp.call('read_note_revision', { note_id: noteId, revision_id: initialRevisionId });
+	assert.equal(createdRevision.isError, false);
+	assert.equal(createdRevision.structuredContent.body, initialBody);
+	assert.equal(createdRevision.structuredContent.body_length, initialBody.length);
+	assert.equal(createdRevision.structuredContent.body_total_line_count, 4);
+	result = await mcp.call('get_note', { id: noteId }); assert.equal(result.structuredContent.body, revisedBody);
 	const history = await mcp.call('list_note_revisions', { note_id: noteId });
 	assert.equal(history.isError, false);
 	assert.ok(history.structuredContent.items.length >= 2);
 	const currentRevisionId = history.structuredContent.items[0].revision_id;
 	const historicalRevisionId = history.structuredContent.items.at(-1).revision_id;
 	assert.equal(currentRevisionId, result.structuredContent.revision_id);
+	assert.equal(historicalRevisionId, initialRevisionId);
+	const emptyNote = await mcp.call('create_note', { parentId: notebook.id, title: 'MCP empty note' });
+	assert.equal(emptyNote.isError, false, JSON.stringify(emptyNote));
+	assert.deepEqual(Object.keys(emptyNote.structuredContent).sort(), [
+		'body_length', 'body_sha256', 'body_size_bytes', 'body_total_line_count',
+		'id', 'notebook_id', 'revision_id', 'title', 'updated_time',
+	]);
+	assertBodyMeasurements(emptyNote.structuredContent, '', 1);
+	const emptyRevision = await mcp.call('read_note_revision', {
+		note_id: emptyNote.structuredContent.id,
+		revision_id: emptyNote.structuredContent.revision_id,
+	});
+	assert.equal(emptyRevision.isError, false);
+	assert.equal(emptyRevision.structuredContent.body, '');
+	assert.equal(emptyRevision.structuredContent.body_length, 0);
+	assert.equal(emptyRevision.structuredContent.body_total_line_count, 1);
+	assert.equal((await mcp.call('delete_note', { id: emptyNote.structuredContent.id })).isError, false);
 	const accountHistory = await mcp.call('list_revisions', {
 		note_ids: [noteId],
 		notebook_ids: [notebook.id],
@@ -135,7 +175,9 @@ test('MCP over stdio -> actual encrypted Joplin API, FTS, E2EE filesystem sync a
 	]);
 	const historical = await mcp.call('read_note_revision', { note_id: noteId, revision_id: accountHistoricalRevisionId });
 	assert.equal(historical.isError, false);
-	assert.equal(historical.structuredContent.body, `${marker} initial 笔记`);
+	assert.equal(historical.structuredContent.body, initialBody);
+	assert.equal(historical.structuredContent.body_length, initialBody.length);
+	assert.equal(historical.structuredContent.body_total_line_count, 4);
 	const comparison = await mcp.call('compare_note_revisions', {
 		note_id: noteId,
 		from_revision_id: accountHistoricalRevisionId,
@@ -207,13 +249,17 @@ test('MCP over stdio -> actual encrypted Joplin API, FTS, E2EE filesystem sync a
 		title: 'MCP context patch fixture updated',
 	});
 	assert.equal(patched.isError, false, JSON.stringify(patched));
-	assert.deepEqual(Object.keys(patched.structuredContent).sort(), ['changed', 'id', 'previous_revision_id', 'revision_id', 'updated_time']);
+	assert.deepEqual(Object.keys(patched.structuredContent).sort(), [
+		'body_length', 'body_sha256', 'body_size_bytes', 'body_total_line_count',
+		'changed', 'id', 'previous_revision_id', 'revision_id', 'updated_time',
+	]);
 	assert.equal(patched.structuredContent.changed, true);
 	assert.equal(patched.structuredContent.previous_revision_id, baseRevisionId);
 	assert.equal(Object.hasOwn(patched.structuredContent, 'body'), false);
 	assert.equal(Object.hasOwn(patched.structuredContent, 'body_patch'), false);
 	assert.ok(!JSON.stringify(patched).includes(bodyPatch));
 	const patchedBody = `${patchMarker} header\n## Alpha\nfirst: new\nfirst: added\nkeep alpha\n\n## Beta\nsecond: new\nkeep beta\n${patchMarker} footer`;
+	assertBodyMeasurements(patched.structuredContent, patchedBody, 10);
 	const patchRead = await mcp.call('read_note', { id: patchNoteId });
 	assert.equal(patchRead.isError, false);
 	assert.equal(patchRead.structuredContent.body, patchedBody);

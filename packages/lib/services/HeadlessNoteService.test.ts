@@ -4,8 +4,8 @@ import ItemChange from '../models/ItemChange';
 import Note from '../models/Note';
 import Revision from '../models/Revision';
 import Setting from '../models/Setting';
-import { db, revisionService, setupDatabaseAndSynchronizer, switchClient } from '../testing/test-utils';
-import { readNote, updateNote } from './HeadlessNoteService';
+import { db, revisionService, setupDatabaseAndSynchronizer, simulateReadOnlyShareEnv, switchClient } from '../testing/test-utils';
+import { createNoteWithRevision, HeadlessNoteCreate, readNote, updateNote } from './HeadlessNoteService';
 
 describe('services/HeadlessNoteService', () => {
 	beforeEach(async () => {
@@ -16,6 +16,92 @@ describe('services/HeadlessNoteService', () => {
 
 	afterEach(() => {
 		jest.restoreAllMocks();
+	});
+
+	it('creates a literal Markdown snapshot with native defaults, timestamps and immediately usable history', async () => {
+		const folder = await Folder.save({ title: 'Destination' });
+		const body = '😀\r\n![literal](data:image/png;base64,AA==)\rLast\n';
+		const observedAt = Date.now();
+		const save = jest.spyOn(Note, 'save');
+		const created = await createNoteWithRevision({ title: ' Created ', body, notebook_id: folder.id, is_todo: true, todo_due: -123, source_url: 'https://source.example' });
+		expect(save).toHaveBeenCalledTimes(1);
+		expect(save.mock.calls[0][1]).toMatchObject({ isNew: true, autoTimestamp: false, userSideValidation: true });
+		const stored = await Note.load(created.id);
+		const { revision_id, ...snapshot } = created;
+		expect(snapshot).toEqual(stored);
+		expect(stored).toMatchObject({
+			title: ' Created ', body, parent_id: folder.id, is_todo: 1, todo_due: -123, todo_completed: 0,
+			source: Setting.value('appName'), source_application: Setting.value('appId'), source_url: 'https://source.example',
+			deleted_time: 0, encryption_applied: 0, is_locked: 0, markup_language: 1, share_id: '',
+		});
+		expect(stored.updated_time).toBeGreaterThanOrEqual(observedAt);
+		for (const field of ['created_time', 'user_created_time', 'user_updated_time', 'order'] as const) expect(stored[field]).toBe(stored.updated_time);
+		expect(await Revision.countRevisions(BaseModel.TYPE_NOTE, created.id)).toBe(1);
+		expect(await Revision.mergeDiffsStrict(await Revision.load(revision_id))).toEqual(revisionService().noteRevisionContent(stored));
+		await ItemChange.waitForAllSaved();
+		expect(await db().selectAll('SELECT type FROM item_changes WHERE item_id = ?', [created.id])).toEqual([{ type: ItemChange.TYPE_CREATE }]);
+
+		// The create acknowledgement can guard the very next edit without an intervening read.
+		const edited = await updateNote({ id: created.id, base_revision_id: revision_id, changes: { append: 'Next' } });
+		expect(edited).toMatchObject({ body: `${body}Next`, changed: true, previous_revision_id: revision_id });
+		expect((await Revision.load(edited.revision_id)).parent_id).toBe(revision_id);
+	});
+
+	it.each([undefined, ''])('captures a new empty body when the supplied body is %s', async (body) => {
+		const folder = await Folder.save({ title: 'Destination' });
+		const created = await createNoteWithRevision({ title: 'Empty', notebook_id: folder.id, ...(body === undefined ? {} : { body }) });
+		expect(created).toMatchObject({ body: '', is_todo: 0, todo_due: 0, source_url: '' });
+		expect((await Note.load(created.id)).body).toBe('');
+		expect(await Revision.mergeDiffsStrict(await Revision.load(created.revision_id))).toEqual(revisionService().noteRevisionContent(await Note.load(created.id)));
+		expect((await readNote(created.id)).revision_id).toBe(created.revision_id);
+	});
+
+	it('rolls back both the new note and its first revision when revision persistence fails', async () => {
+		const folder = await Folder.save({ title: 'Destination' });
+		const originalQuery = Revision.saveQuery.bind(Revision);
+		jest.spyOn(Revision, 'saveQuery').mockImplementation((revision, options) => {
+			const query = originalQuery(revision, options);
+			return { ...query, sql: 'INSERT INTO revision_table_that_does_not_exist (id) VALUES (?)', params: [query.id] };
+		});
+		const save = jest.spyOn(Note, 'save');
+		await expect(createNoteWithRevision({ title: 'Atomic create', body: 'Body', notebook_id: folder.id })).rejects.toThrow();
+		const attemptedId = save.mock.calls[0][0].id;
+		expect(await Note.load(attemptedId)).toBeUndefined();
+		expect(await Note.count()).toBe(0);
+		expect(await Revision.count()).toBe(0);
+		await ItemChange.waitForAllSaved();
+		expect(await db().selectAll('SELECT id FROM item_changes WHERE item_id = ?', [attemptedId])).toEqual([]);
+	});
+
+	it('rejects unsupported or malformed creation fields and unavailable destinations before writing', async () => {
+		const folder = await Folder.save({ title: 'Destination' });
+		const input = { title: 'Valid', notebook_id: folder.id };
+		const invalidInputs: unknown[] = [undefined, null, [] as unknown[], { ...input, title: '  ' }, { ...input, title: 1 }, { ...input, body: null as unknown }, { ...input, notebook_id: '' }, { ...input, is_todo: 1 }, { ...input, todo_due: 0.5 }, { ...input, todo_due: '123' }, { ...input, source_url: false }];
+		for (const invalid of invalidInputs) {
+			await expect(createNoteWithRevision(invalid as HeadlessNoteCreate)).rejects.toMatchObject({ code: 'invalid_note_input' });
+		}
+		await expect(createNoteWithRevision({ ...input, parent_id: folder.id } as HeadlessNoteCreate)).rejects.toMatchObject({ code: 'unsupported_note_property' });
+		await expect(createNoteWithRevision({ ...input, notebook_id: '0'.repeat(32) })).rejects.toMatchObject({ code: 'notebook_unavailable' });
+		for (const changes of [{ deleted_time: Date.now() }, { deleted_time: 0, encryption_applied: 1 }]) {
+			await Folder.save({ id: folder.id, ...changes });
+			await expect(createNoteWithRevision(input)).rejects.toMatchObject({ code: 'notebook_unavailable' });
+		}
+		expect(await Note.count()).toBe(0);
+		expect(await Revision.count()).toBe(0);
+	});
+
+	it('keeps native permission and user validation checks before committing a new note or history', async () => {
+		const cleanup = simulateReadOnlyShareEnv('123456789');
+		try {
+			const readonlyFolder = await Folder.save({ share_id: '123456789' });
+			await expect(createNoteWithRevision({ title: 'Read-only', notebook_id: readonlyFolder.id })).rejects.toMatchObject({ code: 'note_read_only' });
+			const writableFolder = await Folder.save({ title: 'Writable' });
+			await expect(createNoteWithRevision({ title: 'Native validation', body: '\0', notebook_id: writableFolder.id })).rejects.toMatchObject({ code: 'validation_error' });
+			expect(await Note.count()).toBe(0);
+			expect(await Revision.count()).toBe(0);
+		} finally {
+			cleanup();
+		}
 	});
 
 	it('captures an old current snapshot at capture time with unchanged note timestamps, even when collection is disabled', async () => {

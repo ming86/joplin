@@ -87,6 +87,87 @@ test('revision client sends only fixed flat headless actions and validates nativ
 	]);
 });
 
+test('revision-aware create sends the fixed write action and validates its committed snapshot', async () => {
+	const calls = [];
+	const created = {
+		...note,
+		updated_time: 42,
+		revision_id: rev1,
+	};
+	const client = createRevisionClient(async (...args) => { calls.push(args); return created; });
+	const signal = new AbortController().signal;
+	const result = await client.createNoteWithRevision({
+		title: 'Created', body: 'Saved body', notebook_id: notebookId,
+		is_todo: true, todo_due: 0, source_url: '',
+	}, signal);
+	assert.equal(result.id, noteId);
+	assert.equal(result.body, 'Body');
+	assert.equal(result.updated_time, 42);
+	assert.equal(result.revision_id, rev1);
+	assert.deepEqual(calls[0][3], {
+		action: 'createNoteWithRevision', title: 'Created', body: 'Saved body', notebook_id: notebookId,
+		is_todo: true, todo_due: 0, source_url: '',
+	});
+	assert.equal(calls[0][0], 'services/headless');
+	assert.equal(calls[0][2], 'POST');
+	assert.equal(calls[0][4], signal);
+	assert.deepEqual(calls[0][5], { writeOperation: true });
+
+	const omitted = createRevisionClient(async (...args) => {
+		assert.deepEqual(args[3], { action: 'createNoteWithRevision', title: 'Title', notebook_id: notebookId });
+		return { ...created, title: 'Title', body: '' };
+	});
+	assert.equal((await omitted.createNoteWithRevision({ title: 'Title', notebook_id: notebookId })).body, '');
+});
+
+test('revision-aware create treats malformed committed replies as uncertain and hides native details', async () => {
+	for (const malformed of [
+		{ ...note, body: undefined },
+		{ ...note, parent_id: 'bad' },
+		{ ...note, updated_time: Number.NaN },
+		{ ...note, revision_id: 'private-revision' },
+	]) {
+		const client = createRevisionClient(async () => malformed);
+		await assert.rejects(client.createNoteWithRevision({ title: 'Title', notebook_id: notebookId }), error => {
+			assert.equal(error.code, 'write_outcome_unknown');
+			assert.equal(error.outcomeUnknown, true);
+			assert.ok(!JSON.stringify(error).includes('private-revision'));
+			assert.equal(error.diagnostics.method, 'POST');
+			assert.equal(error.diagnostics.path, 'services/headless');
+			assert.equal(error.diagnostics.operation, 'createNoteWithRevision');
+			assert.equal(error.diagnostics.stage, 'validation');
+			return true;
+		});
+	}
+
+	const rejected = createRevisionClient(async () => ({ error: {
+		code: 'note_read_only', message: 'private native detail', applied: false,
+	} }));
+	await assert.rejects(rejected.createNoteWithRevision({ title: 'Title', notebook_id: notebookId }), error => {
+		assert.equal(error.code, 'note_read_only');
+		assert.equal(error.outcomeUnknown, false);
+		assert.ok(!error.message.includes('private native detail'));
+		assert.equal(error.diagnostics.operation, 'createNoteWithRevision');
+		return true;
+	});
+
+	let calls = 0;
+	const invalidInput = createRevisionClient(async () => { calls++; return {}; });
+	for (const input of [
+		{ title: 'Title' },
+		{ title: ' ', notebook_id: notebookId },
+		{ title: 'Title', notebook_id: 'bad' },
+		{ title: 'Title', notebook_id: notebookId, parentId: notebookId },
+		{ title: 'Title', notebook_id: notebookId, body: 1 },
+	]) {
+		await assert.rejects(invalidInput.createNoteWithRevision(input), error => {
+			assert.ok(['invalid_note_input', 'invalid_note_or_notebook_id', 'unsupported_note_property'].includes(error.code));
+			return true;
+		});
+	}
+	assert.equal(calls, 0);
+});
+
 test('revision client rejects missing or invalid complete-body line counts', async () => {
 	for (const counts of [
 		undefined,

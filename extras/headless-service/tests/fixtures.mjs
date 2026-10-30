@@ -101,6 +101,22 @@ export function backend(id = 'alice') {
 			};
 		},
 		async listAllTags() { return []; },
+		/** Return a committed creation snapshot with its first monotonically numbered revision. */
+		async createNoteWithRevision(input) {
+			const revision_id = (revisionSequence++).toString(16).padStart(32, '0');
+			currentRevisionId = revision_id;
+			const parent_id = input.notebook_id ?? input.parentId ?? folderId;
+			return {
+				...note,
+				id: noteId,
+				parent_id,
+				notebook_id: parent_id,
+				title: input.title,
+				body: input.body ?? '',
+				updated_time: 101,
+				revision_id,
+			};
+		},
 		async createNote(input) { return { ...note, parent_id: input.parentId, title: input.title, body: input.body, is_todo: input.is_todo }; },
 		async updateNote(_id, input) { return { ...note, ...input, parent_id: input.parentId ?? note.parent_id, updated_time: 101 }; },
 		async deleteNote() {},

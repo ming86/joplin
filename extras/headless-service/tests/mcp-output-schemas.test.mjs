@@ -112,10 +112,17 @@ export function createOutputSchemaTestSession({ allowWrites = true } = {}) {
 			if (id === 'f'.repeat(32)) throw new ServiceError('note_unavailable');
 			return { ...note, revision_id: revisionId, previous_revision_id: null, changed: false };
 		},
-		async updateNoteWithRevision() {
-			return { ...note, updated_time: 4, revision_id: '1'.repeat(32), previous_revision_id: revisionId, changed: true };
+		async updateNoteWithRevision(_id, changes) {
+			return { ...note, body: changes.body ?? note.body, updated_time: 4, revision_id: '1'.repeat(32), previous_revision_id: revisionId, changed: true };
 		},
-		async createNote() { return { ...note, id: '2'.repeat(32), title: 'Created' }; },
+		async createNoteWithRevision(input) {
+			return {
+				...note, id: '2'.repeat(32), title: input.title,
+				parent_id: input.notebook_id ?? input.parentId ?? notebookId,
+				notebook_id: input.notebook_id ?? input.parentId ?? notebookId,
+				body: input.body ?? '', updated_time: 4, revision_id: '2'.repeat(32),
+			};
+		},
 		async deleteNote() { return { id: noteId }; },
 		async createNotebook() { return { id: '3'.repeat(32), title: 'Nested', parent_id: notebookId }; },
 		async manageTags() { return { note_id: noteId, added: ['idea'], removed: [], tags: ['idea'] }; },
@@ -252,8 +259,11 @@ test('every enabled catalog tool publishes an output schema without changing inp
 		assert.deepEqual(Object.keys(listNotebooks.outputSchema.anyOf[0].properties), ['notebooks']);
 		assert.equal(listNotebooks.outputSchema.anyOf[0].additionalProperties, false);
 		const createNote = writableByName.get('create_note').outputSchema.anyOf[0];
-		assert.deepEqual(Object.keys(createNote.properties), ['id', 'title', 'notebook_id']);
-		assert.deepEqual(createNote.required, ['id', 'title', 'notebook_id']);
+		assert.deepEqual(Object.keys(createNote.properties), [
+			'id', 'title', 'notebook_id', 'updated_time', 'revision_id',
+			'body_length', 'body_size_bytes', 'body_sha256', 'body_total_line_count',
+		]);
+		assert.deepEqual(createNote.required, Object.keys(createNote.properties));
 		assert.equal(createNote.additionalProperties, false);
 		const updateNote = writableByName.get('update_note').outputSchema.anyOf[0];
 		assert.deepEqual(Object.keys(updateNote.properties), [
@@ -262,6 +272,12 @@ test('every enabled catalog tool publishes an output schema without changing inp
 		]);
 		assert.deepEqual(updateNote.required, ['id', 'updated_time', 'revision_id', 'previous_revision_id', 'changed']);
 		assert.equal(updateNote.additionalProperties, false);
+		assert.deepEqual(updateNote.anyOf, [
+			{ not: { anyOf: [{ required: ['body_length'] }, { required: ['body_size_bytes'] }, { required: ['body_sha256'] }, { required: ['body_total_line_count'] }] } },
+			{ required: ['body_length', 'body_size_bytes', 'body_sha256', 'body_total_line_count'] },
+		]);
+		assert.match(updateNote.properties.body_length.description, /any body operation/);
+		assert.match(updateNote.properties.body_total_line_count.description, /CRLF, LF and lone CR.*trailing break.*empty body/);
 		for (const name of ['list_trash', 'list_attachment_notes', 'restore_note', 'restore_notebook']) {
 			const schema = writableByName.get(name).outputSchema.anyOf[0];
 			assert.ok(schema.required.includes('accountEmail'), `${name} exposes the authenticated identity`);
@@ -316,10 +332,16 @@ test('tool output samples preserve aliases, nullable history, semantic chunks, a
 		assert.deepEqual(Object.keys(notebooks), ['notebooks']);
 		assert.deepEqual(Object.keys(schemas.get('list_notebooks').properties), ['notebooks']);
 		const created = results.get('create_note').structuredContent;
-		assert.deepEqual(Object.keys(created).sort(), ['id', 'notebook_id', 'title']);
+		assert.deepEqual(Object.keys(created).sort(), [
+			'body_length', 'body_sha256', 'body_size_bytes', 'body_total_line_count',
+			'id', 'notebook_id', 'revision_id', 'title', 'updated_time',
+		]);
 		assert.equal(Object.hasOwn(created, 'body'), false);
 		const updated = results.get('update_note').structuredContent;
-		assert.deepEqual(Object.keys(updated).sort(), ['changed', 'id', 'previous_revision_id', 'revision_id', 'updated_time']);
+		assert.deepEqual(Object.keys(updated).sort(), [
+			'body_length', 'body_sha256', 'body_size_bytes', 'body_total_line_count',
+			'changed', 'id', 'previous_revision_id', 'revision_id', 'updated_time',
+		]);
 		assert.equal(Object.hasOwn(updated, 'body'), false);
 		const trash = results.get('list_trash').structuredContent;
 		assert.equal(trash.accountEmail, 'alice@example.test');

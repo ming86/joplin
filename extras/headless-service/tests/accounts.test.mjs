@@ -37,6 +37,7 @@ test('read-only permission is enforced for both create and update without callin
 	const config = account(); config.permissions = ['read']; let calls = 0;
 	const service = createAccountRegistry([config], { makeBackend() { calls++; return backend(); } }).forPrincipal('alice', 'alice');
 	await assert.rejects(service.createNote({ title: 'x', body: 'x', parentId: noteId }), code('operation_not_permitted'));
+	await assert.rejects(service.createNoteWithRevision({ title: 'x', parentId: noteId }), code('operation_not_permitted'));
 	await assert.rejects(service.updateNote(noteId, { body: 'x' }), code('operation_not_permitted'));
 	assert.equal(calls, 0);
 });
@@ -198,6 +199,46 @@ test('account note create, read and update preserve due dates and origin URLs', 
 	for (const invalid of [1.5]) {
 		await assert.rejects(service.updateNote(noteId, { todo_due: invalid }), code('invalid_note_input'));
 	}
+});
+
+test('revision-aware account creation keeps permission and notebook selection rules', async () => {
+	const fake = backend();
+	const nativeInputs = [];
+	fake.createNoteWithRevision = async input => {
+		nativeInputs.push(structuredClone(input));
+		return {
+			id: noteId,
+			parent_id: input.notebook_id,
+			title: input.title,
+			body: input.body ?? '',
+			updated_time: 123,
+			revision_id: 'd'.repeat(32),
+		};
+	};
+	const config = account();
+	config.defaultNotebookId = 'c'.repeat(32);
+	const service = createAccountRegistry([config], { makeBackend: () => fake }).forPrincipal('alice', 'alice');
+
+	const explicit = await service.createNoteWithRevision({
+		title: 'Explicit', body: 'Markdown', notebook_id: folderId, parentId: 'c'.repeat(32),
+		is_todo: true, todo_due: 0, source_url: '',
+	});
+	assert.deepEqual(nativeInputs[0], {
+		title: 'Explicit', body: 'Markdown', notebook_id: folderId,
+		is_todo: true, todo_due: 0, source_url: '',
+	});
+	assert.equal(explicit.parent_id, folderId);
+	assert.equal(explicit.notebook_id, folderId);
+	assert.equal(explicit.accountId, 'alice');
+	assert.equal(explicit.revision_id, 'd'.repeat(32));
+
+	await service.createNoteWithRevision({ title: 'Legacy', parentId: folderId });
+	assert.equal(nativeInputs[1].notebook_id, folderId);
+	assert.equal(nativeInputs[1].body, '');
+	assert.equal(nativeInputs[1].is_todo, false);
+
+	await service.createNoteWithRevision({ title: 'Configured default' });
+	assert.equal(nativeInputs[2].notebook_id, config.defaultNotebookId);
 });
 
 test('missing account ID is rejected rather than coerced to a valid string', () => {

@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { createTools } from '../src/mcp/tools.mjs';
 import { ServiceError } from '../src/errors.mjs';
 
@@ -10,24 +11,36 @@ const bodyFile = { download_url: 'https://files.example.test/generated?secret=hi
 /** Build a writable catalog with a small fake create service. */
 function fixture(t, overrides = {}, options = {}) {
 	const service = {
-		async createNote(args) {
-			return { id: noteId, title: args.title, notebook_id: args.notebook_id ?? args.parentId ?? null };
+		async createNoteWithRevision(args) {
+			const notebook_id = args.notebook_id ?? args.parentId ?? notebookId;
+			return { id: noteId, title: args.title, notebook_id, parent_id: notebook_id, updated_time: 20, revision_id: 'c'.repeat(32), body: args.body ?? '' };
 		},
 		...overrides,
 	};
 	return createTools(service, { allowWrites: true, ...options });
 }
 
-test('create_note accepts a large UTF-8 file body and returns metadata only', async t => {
+/** Calculate the four measurement fields for an exact saved body. */
+function bodyMetrics(text) {
+	return {
+		body_length: text.length,
+		body_size_bytes: Buffer.byteLength(text, 'utf8'),
+		body_sha256: createHash('sha256').update(text, 'utf8').digest('hex'),
+		body_total_line_count: (text.match(/\r\n|\n|\r/g) ?? []).length + 1,
+	};
+}
+
+test('create_note accepts a large UTF-8 file body and measures the committed snapshot without returning its body', async t => {
 	const generatedBody = '\uFEFF# Generated 🧪\r\n' + 'large body 🌿\n'.repeat(100000);
+	const savedBody = '\uFEFF# Native snapshot 🪵\r\nCommitted text\n';
 	const signal = new AbortController().signal;
 	let saved;
 	let reads = 0;
 	const tools = fixture(t, {
-		async createNote(args, receivedSignal) {
+		async createNoteWithRevision(args, receivedSignal) {
 			assert.equal(receivedSignal, signal);
 			saved = args;
-			return { id: noteId, title: args.title, notebook_id: args.notebook_id };
+			return { id: noteId, title: args.title, notebook_id: args.notebook_id, updated_time: 21, revision_id: 'd'.repeat(32), body: savedBody };
 		},
 	}, {
 		async readBodyFile(file, receivedSignal) {
@@ -43,7 +56,8 @@ test('create_note accepts a large UTF-8 file body and returns metadata only', as
 	assert.deepEqual(definition.inputSchema.properties.body_file.required, ['download_url', 'file_id']);
 	assert.match(definition.inputSchema.properties.body_file.description, /large generated notes.*validated as UTF-8 before note creation/);
 	assert.match(definition.description, /body_file for large generated note bodies/);
-	assert.match(definition.description, /response contains note metadata only/);
+	assert.match(definition.description, /native revision_id.*base_revision_id/);
+	assert.match(definition.description, /measurements.*committed body/);
 	assert.deepEqual(definition.inputSchema.anyOf, [
 		{ required: ['notebook_id'] },
 		{ required: ['parentId'] },
@@ -57,13 +71,17 @@ test('create_note accepts a large UTF-8 file body and returns metadata only', as
 	assert.deepEqual(saved, {
 		title: 'Generated note', notebook_id: notebookId, is_todo: true, body: generatedBody,
 	});
-	assert.deepEqual(result.structuredContent, { id: noteId, title: 'Generated note', notebook_id: notebookId });
+	assert.deepEqual(result.structuredContent, {
+		id: noteId, title: 'Generated note', notebook_id: notebookId, updated_time: 21, revision_id: 'd'.repeat(32),
+		...bodyMetrics(savedBody),
+	});
 	assert.equal(result.content[0].text.includes(generatedBody), false);
+	assert.equal(result.content[0].text.includes(savedBody), false);
 });
 
 test('create_note file parameter keeps destination, nested-file and closed-object validation', async t => {
 	let writes = 0;
-	const tools = fixture(t, { async createNote() { writes++; return { id: noteId, title: 'Unexpected' }; } });
+	const tools = fixture(t, { async createNoteWithRevision() { writes++; return { id: noteId, title: 'Unexpected' }; } });
 	const validFile = { download_url: bodyFile.download_url, file_id: bodyFile.file_id };
 
 	const missingDestination = await tools.call('create_note', { title: 'Missing destination', body_file: validFile });
@@ -83,7 +101,7 @@ test('create_note rejects body and body_file together, including an empty inline
 	let reads = 0;
 	let writes = 0;
 	const tools = fixture(t, {
-		async createNote() { writes++; throw new Error('should not create'); },
+		async createNoteWithRevision() { writes++; throw new Error('should not create'); },
 	}, { async readBodyFile() { reads++; return 'file body'; } });
 	const result = await tools.call('create_note', {
 		title: 'Conflict', notebook_id: notebookId, body: '', body_file: bodyFile,
@@ -97,7 +115,7 @@ test('create_note rejects body and body_file together, including an empty inline
 test('create_note does not create a note when the downloaded file is invalid UTF-8', async t => {
 	let writes = 0;
 	const tools = fixture(t, {
-		async createNote() { writes++; throw new Error('should not create'); },
+		async createNoteWithRevision() { writes++; throw new Error('should not create'); },
 	}, { async readBodyFile() { throw new ServiceError('note_file_invalid_utf8'); } });
 	const result = await tools.call('create_note', { title: 'Invalid', notebook_id: notebookId, body_file: bodyFile });
 	assert.equal(result.isError, true);
@@ -106,12 +124,13 @@ test('create_note does not create a note when the downloaded file is invalid UTF
 	assert.equal(writes, 0);
 });
 
-test('inline and body-free create_note payloads retain their existing fields and compact replies', async t => {
+test('inline and body-free create_note payloads retain input fields and report all committed-body measurements', async t => {
 	const calls = [];
 	const tools = fixture(t, {
-		async createNote(args) {
+		async createNoteWithRevision(args) {
 			calls.push(args);
-			return { id: noteId, title: args.title, parent_id: args.notebook_id ?? args.parentId };
+			const parent_id = args.notebook_id ?? args.parentId;
+			return { id: noteId, title: args.title, parent_id, updated_time: 30, revision_id: 'e'.repeat(32), body: args.body ?? '' };
 		},
 	}, { async readBodyFile() { throw new Error('inline creates should not download'); } });
 	const inline = await tools.call('create_note', {
@@ -122,6 +141,23 @@ test('inline and body-free create_note payloads retain their existing fields and
 		{ title: 'Inline', parentId: notebookId, body: '# Inline', is_todo: true },
 		{ title: 'Empty', notebook_id: notebookId },
 	]);
-	assert.deepEqual(inline.structuredContent, { id: noteId, title: 'Inline', notebook_id: notebookId });
-	assert.deepEqual(metadataOnly.structuredContent, { id: noteId, title: 'Empty', notebook_id: notebookId });
+	assert.deepEqual(inline.structuredContent, {
+		id: noteId, title: 'Inline', notebook_id: notebookId, updated_time: 30, revision_id: 'e'.repeat(32), ...bodyMetrics('# Inline'),
+	});
+	assert.deepEqual(metadataOnly.structuredContent, {
+		id: noteId, title: 'Empty', notebook_id: notebookId, updated_time: 30, revision_id: 'e'.repeat(32), ...bodyMetrics(''),
+	});
+	assert.equal(Object.hasOwn(inline.structuredContent, 'body'), false);
+});
+
+test('create_note returns an unknown outcome if the committed snapshot body is missing', async t => {
+	const tools = fixture(t, {
+		async createNoteWithRevision() {
+			return { id: noteId, title: 'Uncertain', notebook_id: notebookId, updated_time: 30, revision_id: 'e'.repeat(32) };
+		},
+	});
+	const result = await tools.call('create_note', { title: 'Uncertain', notebook_id: notebookId });
+	assert.equal(result.isError, true);
+	assert.equal(result.structuredContent.error.code, 'write_outcome_unknown');
+	assert.equal(result.structuredContent.error.outcomeUnknown, true);
 });

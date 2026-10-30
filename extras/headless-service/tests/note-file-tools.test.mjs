@@ -187,9 +187,9 @@ test('catalog publishes a fixed file-input object and object output variants', a
 	assert.deepEqual(update._meta, { 'openai/fileParams': ['body_file'] });
 	assert.deepEqual(Object.keys(update.inputSchema.properties.body_file.properties), ['download_url', 'file_id', 'mime_type', 'file_name']);
 	assert.deepEqual(update.inputSchema.properties.body_file.required, ['download_url', 'file_id']);
-	assert.match(update.inputSchema.properties.body_file.description, /body_size_bytes, body_sha256 and body_total_line_count.*edited local file byte count.*SHA-256/);
-	assert.match(update.description, /File-update acknowledgments include body_length, body_size_bytes, body_sha256 and body_total_line_count/);
-	assert.match(update.description, /edited local file byte count.*SHA-256/);
+	assert.match(update.inputSchema.properties.body_file.description, /any body operation.*body_length, body_size_bytes, body_sha256 and body_total_line_count.*edited local file byte count.*SHA-256/);
+	assert.match(update.description, /Any supplied body, body_file, body_patch, replace_text, prepend or append includes body_length, body_size_bytes, body_sha256 and body_total_line_count/);
+	assert.match(update.description, /metadata-only updates omit all four measurements/i);
 	assert.equal(update.inputSchema.type, 'object');
 	assert.deepEqual(update.inputSchema.required, ['id', 'base_revision_id']);
 	assert.equal(update.inputSchema.additionalProperties, false);
@@ -240,7 +240,7 @@ test('fixed update input rejects empty changes and accepts metadata-only changes
 	}
 });
 
-test('file body update returns measurements for the saved body, not the downloaded text', async t => {
+test('body_file update returns measurements for the saved body, not the downloaded text', async t => {
 	const submittedBody = '\uFEFF# submitted 🔧\r\n' + 'complete body\n'.repeat(200000);
 	const savedBody = '\uFEFF# returned native snapshot 🪵\r\nSaved complete body\n';
 	const signal = new AbortController().signal;
@@ -267,7 +267,7 @@ test('file body update returns measurements for the saved body, not the download
 	assert.equal(result.content[0].text.includes('Saved complete body'), false);
 });
 
-test('file body no-op acknowledgments measure the returned unchanged saved body', async t => {
+test('body_file no-op acknowledgments measure the returned unchanged saved body', async t => {
 	const { tools } = fixture(t, {
 		async updateNoteWithRevision(_id, changes) {
 			assert.deepEqual(changes, { base_revision_id: revisionId, body: note.body });
@@ -285,7 +285,7 @@ test('file body no-op acknowledgments measure the returned unchanged saved body'
 	});
 });
 
-test('file body updates report unknown outcome when the saved snapshot has no usable body', async t => {
+test('body operations report unknown outcome when the saved snapshot has no usable body', async t => {
 	let writes = 0;
 	const savedSnapshots = [
 		{ ...note, body: undefined },

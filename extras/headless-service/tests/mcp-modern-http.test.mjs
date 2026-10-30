@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import http from 'node:http';
 import { createAccountRegistry } from '../index.mjs';
 import { startMcpHttpServer } from '../src/mcp/http.mjs';
@@ -79,9 +80,9 @@ function assertError(response, status, code, id) {
 
 test('modern HTTP discovers, lists, reads and saves through the account service without initialization', async t => {
 	const b = backend();
-	const create = b.createNote;
+	const create = b.createNoteWithRevision;
 	let writes = 0;
-	b.createNote = async (input, signal) => { writes++; return create(input, signal); };
+	b.createNoteWithRevision = async (input, signal) => { writes++; return create(input, signal); };
 	const server = await start(t, b, true);
 	const discover = await exchange(server, request(1, 'server/discover'));
 	assertComplete(discover);
@@ -103,8 +104,10 @@ test('modern HTTP discovers, lists, reads and saves through the account service 
 	const saved = await exchange(server, call(4, 'create_note', { parentId: folderId, title: 'Modern HTTP', body: 'Saved once' }));
 	assertComplete(saved);
 	assert.equal(saved.json.result.isError, false);
-	assert.deepEqual(Object.keys(saved.json.result.structuredContent).sort(), ['id', 'notebook_id', 'title']);
+	assert.deepEqual(Object.keys(saved.json.result.structuredContent).sort(), ['body_length', 'body_sha256', 'body_size_bytes', 'body_total_line_count', 'id', 'notebook_id', 'revision_id', 'title', 'updated_time']);
 	assert.equal(saved.json.result.structuredContent.title, 'Modern HTTP');
+	assert.equal(saved.json.result.structuredContent.body_length, 'Saved once'.length);
+	assert.equal(saved.json.result.structuredContent.body_sha256, createHash('sha256').update('Saved once', 'utf8').digest('hex'));
 	assert.equal(writes, 1);
 	const encodedName = await exchange(server, call(5, 'get_status'), { 'Mcp-Name': '=?base64?Z2V0X3N0YXR1cw==?=' });
 	assertComplete(encodedName);
@@ -115,7 +118,7 @@ test('modern HTTP discovers, lists, reads and saves through the account service 
 test('modern HTTP rejects absent or mismatched routing headers before dispatching writes', async t => {
 	const b = backend();
 	let writes = 0;
-	b.createNote = async () => { writes++; return { ...note }; };
+	b.createNoteWithRevision = async () => { writes++; return { ...note, notebook_id: note.parent_id, revision_id: '2'.repeat(32) }; };
 	const server = await start(t, b, true);
 	const message = call('write', 'create_note', { parentId: folderId, title: 'Blocked' });
 	for (const headers of [
@@ -179,15 +182,21 @@ test('modern HTTP rejects notification and client-response POSTs while legacy ke
 test('modern HTTP keeps a small edit to a large note response compact', async t => {
 	const b = backend();
 	const body = `${'x'.repeat(2 * 1024 * 1024)}needle`;
+	const savedBody = `${'x'.repeat(2 * 1024 * 1024)}updated`;
 	const largeNote = { ...note, body };
 	let writes = 0;
 	b.getNote = async () => ({ ...largeNote });
-	b.updateNote = async (_id, patch) => { writes++; return { ...largeNote, ...patch }; };
+	b.updateNote = async (_id, patch) => { writes++; return { ...largeNote, ...patch, body: savedBody }; };
 	const server = await start(t, b, true);
 	const response = await exchange(server, call(1, 'update_note', { id: noteId, base_revision_id: initialRevisionId, replace_text: { find: 'needle', replace: 'updated' } }));
 	assertComplete(response);
 	assert.equal(response.json.result.isError, false);
-	assert.deepEqual(Object.keys(response.json.result.structuredContent).sort(), ['changed', 'id', 'previous_revision_id', 'revision_id', 'updated_time']);
+	const result = response.json.result.structuredContent;
+	assert.deepEqual(Object.keys(result).sort(), ['body_length', 'body_sha256', 'body_size_bytes', 'body_total_line_count', 'changed', 'id', 'previous_revision_id', 'revision_id', 'updated_time']);
+	assert.equal(result.body_length, savedBody.length);
+	assert.equal(result.body_size_bytes, Buffer.byteLength(savedBody));
+	assert.equal(result.body_sha256, createHash('sha256').update(savedBody, 'utf8').digest('hex'));
+	assert.equal(result.body_total_line_count, 1);
 	// The modern server identity, including its embedded icon, is returned in _meta; measure the tool reply without that metadata.
 	const responseWithoutServerMetadata = { ...response.json, result: { ...response.json.result } };
 	delete responseWithoutServerMetadata.result._meta;

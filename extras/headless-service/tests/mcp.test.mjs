@@ -99,7 +99,7 @@ test('get_status carries the core email through real HTTP transport into MCP str
 	} finally { s.close(); }
 });
 test('invalid envelopes and ids; unknown methods; no response or tool execution for notifications', async () => {
-	let writes = 0; const b = backend(); b.createNote = async () => { writes++; };
+	let writes = 0; const b = backend(); b.createNoteWithRevision = async () => { writes++; };
 	const s = session({ allowWrites: true }, b); await ready(s);
 	for (const input of [null, [], 1, {}, request(null, 'ping'), request({}, 'ping'), { ...request(1, 'ping'), params: [] }]) assert.equal((await s.handle(input)).error.code, -32600);
 	assert.equal((await s.handle(request(2, 'unknown'))).error.code, -32601);
@@ -250,8 +250,8 @@ test('tool schemas reject account switching, arbitrary properties and invalid pa
 });
 test('create_note requires an explicit notebook and accepts either destination field', async () => {
 	const b = backend(); const createdInputs = [];
-	const createNote = b.createNote;
-	b.createNote = async input => { createdInputs.push(input); return createNote(input); };
+	const createNoteWithRevision = b.createNoteWithRevision;
+	b.createNoteWithRevision = async input => { createdInputs.push(input); return createNoteWithRevision(input); };
 	const config = account(); config.defaultNotebookId = 'c'.repeat(32);
 	const s = session({ allowWrites: true }, b, config); await ready(s);
 	try {
@@ -269,16 +269,16 @@ test('create_note requires an explicit notebook and accepts either destination f
 
 		const canonical = (await s.handle(call(4, 'create_note', { title: 'Canonical', notebook_id: folderId }))).result;
 		assert.equal(canonical.isError, false);
-		assert.equal(createdInputs[0].parentId, folderId);
+		assert.deepEqual(createdInputs[0], { title: 'Canonical', body: '', notebook_id: folderId, is_todo: false });
 		const alias = (await s.handle(call(5, 'create_note', { title: 'Legacy alias', parentId: folderId }))).result;
 		assert.equal(alias.isError, false);
-		assert.equal(createdInputs[1].parentId, folderId);
+		assert.deepEqual(createdInputs[1], { title: 'Legacy alias', body: '', notebook_id: folderId, is_todo: false });
 	} finally { s.close(); }
 
 	const soleBackend = backend(); let notebookScans = 0; let writes = 0;
 	const listNotebooks = soleBackend.listNotebooks;
 	soleBackend.listNotebooks = async (...args) => { notebookScans++; return listNotebooks(...args); };
-	soleBackend.createNote = async () => { writes++; return note; };
+	soleBackend.createNoteWithRevision = async () => { writes++; return note; };
 	const onlyNotebook = session({ allowWrites: true }, soleBackend, account()); await ready(onlyNotebook);
 	try {
 		const omitted = (await onlyNotebook.handle(call(2, 'create_note', { title: 'No destination' }))).result;
@@ -303,7 +303,7 @@ test('result identity/previews, Unicode paging and semantic fallback are explici
 	assert.equal(r.structuredContent.executedMode, null); assert.equal(r.structuredContent.semantic.reason, 'not_implemented');
 });
 test('opt-in writes also require account permission, preserve unknown outcomes and never retry', async () => {
-	let calls = 0; const b = backend(); b.createNote = async () => { calls++; throw new ServiceError('write_outcome_unknown', true); };
+	let calls = 0; const b = backend(); b.createNoteWithRevision = async () => { calls++; throw new ServiceError('write_outcome_unknown', true); };
 	const config = account(); config.permissions = ['read'];
 	const denied = session({ allowWrites: true }, b, config); await ready(denied);
 	const args = { parentId: folderId, title: 'x', body: 'y' };
@@ -320,7 +320,13 @@ test('write replies expose revision metadata and unexpected errors stay safe', a
 	const b = backend(); const s = session({ allowWrites: true }, b); await ready(s);
 	const revision = (await s.handle(call(2, 'read_note', { id: noteId }))).result.structuredContent.revision_id;
 	const r = (await s.handle(call(3, 'update_note', { id: noteId, base_revision_id: revision, body: 'new' }))).result;
-	assert.deepEqual(Object.keys(r.structuredContent).sort(), ['changed', 'id', 'previous_revision_id', 'revision_id', 'updated_time']);
+	assert.deepEqual(Object.keys(r.structuredContent).sort(), [
+		'body_length', 'body_sha256', 'body_size_bytes', 'body_total_line_count',
+		'changed', 'id', 'previous_revision_id', 'revision_id', 'updated_time',
+	]);
+	assert.equal(r.structuredContent.body_length, 3);
+	assert.equal(r.structuredContent.body_size_bytes, 3);
+	assert.equal(r.structuredContent.body_total_line_count, 1);
 	assert.equal(Object.hasOwn(r.structuredContent, 'saved'), false);
 	assert.equal(Object.hasOwn(r.structuredContent, 'synchronization'), false);
 	b.getNote = async () => { throw new Error('secret upstream payload'); };

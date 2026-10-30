@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { createTools } from '../src/mcp/tools.mjs';
 
 const noteId = 'a'.repeat(32);
@@ -13,15 +14,16 @@ function fixture() {
 	const created = [];
 	const updated = [];
 	const tools = createTools({
-		async createNote(input) {
+		async createNoteWithRevision(input) {
 			created.push(input);
-			return { id: noteId, title: input.title, notebook_id: input.notebook_id ?? input.parentId ?? null };
+			const notebook_id = input.notebook_id ?? input.parentId;
+			return { id: noteId, title: input.title, notebook_id, parent_id: notebook_id, updated_time: 30, revision_id: 'd'.repeat(32), body: input.body ?? '' };
 		},
 		async updateNoteWithRevision(id, input) {
 			updated.push({ id, input });
 			return {
 				id, updated_time: 20, revision_id: 'c'.repeat(32), previous_revision_id: revisionId, changed: true,
-				...(typeof input.body === 'string' ? { body: input.body } : {}),
+				body: typeof input.body === 'string' ? input.body : 'Initial saved body',
 			};
 		},
 	}, {
@@ -32,6 +34,16 @@ function fixture() {
 		},
 	});
 	return { tools, created, updated };
+}
+
+/** Calculate the public measurement fields for one UTF-8 body snapshot. */
+function bodyMetrics(text) {
+	return {
+		body_length: text.length,
+		body_size_bytes: Buffer.byteLength(text, 'utf8'),
+		body_sha256: createHash('sha256').update(text, 'utf8').digest('hex'),
+		body_total_line_count: (text.match(/\r\n|\n|\r/g) ?? []).length + 1,
+	};
 }
 
 test('note field schemas expose writable due and source URL values with clear semantics', () => {
@@ -50,6 +62,8 @@ test('note field schemas expose writable due and source URL values with clear se
 		assert.equal(Object.hasOwn(definition.inputSchema.properties, 'source_application'), false);
 	}
 	assert.match(update.inputSchema.properties.source_url.description, /Omit to preserve/);
+	assert.match(update.inputSchema.properties.base_revision_id.description, /create_note or a previous update_note result/);
+	assert.match(update.description, /read_note, grep_notes, create_note or a previous update_note result/);
 	assert.match(update.inputSchema.properties.is_todo.description, /resets its existing due date and completion state/i);
 	assert.match(update.inputSchema.properties.is_todo.description, /explicitly supplied todo_due and todo_completed values are applied after that reset/i);
 	assert.equal(update.inputSchema.properties.body_patch.type, 'string');
@@ -65,7 +79,7 @@ test('note field schemas expose writable due and source URL values with clear se
 	for (const branch of create.inputSchema.anyOf) assert.equal(Object.hasOwn(branch, 'properties'), false);
 });
 
-test('create_note forwards metadata with inline, omitted and file bodies', async () => {
+test('create_note forwards metadata and acknowledges the committed native snapshot for inline, omitted and file bodies', async () => {
 	const { tools, created } = fixture();
 	const due = 1700000000123;
 	const sourceUrl = 'https://example.test/article';
@@ -76,22 +90,44 @@ test('create_note forwards metadata with inline, omitted and file bodies', async
 	const omitted = await tools.call('create_note', {
 		title: 'Empty todo', notebook_id: noteId, is_todo: false, todo_due: 0, source_url: '',
 	});
+	const explicitEmpty = await tools.call('create_note', {
+		title: 'Explicit empty body', notebook_id: noteId, body: '',
+	});
 	const fromFile = await tools.call('create_note', {
 		title: 'File todo', notebook_id: noteId, body_file: bodyFile, is_todo: true, todo_due: due, source_url: sourceUrl,
 	});
 
 	assert.equal(inline.isError, false);
 	assert.equal(omitted.isError, false);
+	assert.equal(explicitEmpty.isError, false);
 	assert.equal(fromFile.isError, false);
 	assert.deepEqual(created, [
 		{ title: 'Inline todo', notebook_id: noteId, body: 'inline body', is_todo: true, todo_due: due, source_url: sourceUrl },
 		{ title: 'Empty todo', notebook_id: noteId, is_todo: false, todo_due: 0, source_url: '' },
+		{ title: 'Explicit empty body', notebook_id: noteId, body: '' },
 		{ title: 'File todo', notebook_id: noteId, is_todo: true, todo_due: due, source_url: sourceUrl, body: fileBody },
 	]);
-	for (const result of [inline, omitted, fromFile]) {
-		assert.deepEqual(Object.keys(result.structuredContent).sort(), ['id', 'notebook_id', 'title']);
+	const nativeInlineBody = 'inline body';
+	for (const result of [inline, omitted, explicitEmpty, fromFile]) {
+		assert.deepEqual(Object.keys(result.structuredContent).sort(), [
+			'body_length', 'body_sha256', 'body_size_bytes', 'body_total_line_count',
+			'id', 'notebook_id', 'revision_id', 'title', 'updated_time',
+		]);
 		assert.equal(JSON.stringify(result.structuredContent).includes(fileBody), false);
 	}
+	assert.deepEqual(inline.structuredContent, {
+		id: noteId, title: 'Inline todo', notebook_id: noteId, updated_time: 30, revision_id: 'd'.repeat(32), ...bodyMetrics(nativeInlineBody),
+	});
+	assert.deepEqual(omitted.structuredContent, {
+		id: noteId, title: 'Empty todo', notebook_id: noteId, updated_time: 30, revision_id: 'd'.repeat(32), ...bodyMetrics(''),
+	});
+	assert.deepEqual(explicitEmpty.structuredContent, {
+		id: noteId, title: 'Explicit empty body', notebook_id: noteId, updated_time: 30, revision_id: 'd'.repeat(32), ...bodyMetrics(''),
+	});
+	assert.deepEqual(fromFile.structuredContent, {
+		id: noteId, title: 'File todo', notebook_id: noteId, updated_time: 30, revision_id: 'd'.repeat(32), ...bodyMetrics(fileBody),
+	});
+	assert.equal(Object.hasOwn(inline.structuredContent, 'body'), false);
 });
 
 test('update_note accepts standalone metadata edits and forwards them with body_file', async () => {
@@ -113,7 +149,7 @@ test('update_note accepts standalone metadata edits and forwards them with body_
 	assert.equal(Object.hasOwn(fileUpdate.structuredContent, 'body'), false);
 });
 
-test('update_note forwards body_patch with metadata and keeps its acknowledgment compact', async () => {
+test('update_note forwards body_patch with metadata and includes saved-body measurements', async () => {
 	const { tools, updated } = fixture();
 	const title = 'Revised travel plan';
 	const sourceUrl = 'https://example.test/itinerary';
@@ -126,7 +162,43 @@ test('update_note forwards body_patch with metadata and keeps its acknowledgment
 		id: noteId,
 		input: { base_revision_id: revisionId, body_patch: bodyPatch, title, source_url: sourceUrl },
 	}]);
-	assert.deepEqual(Object.keys(result.structuredContent).sort(), ['changed', 'id', 'previous_revision_id', 'revision_id', 'updated_time']);
+	assert.deepEqual(result.structuredContent, {
+		id: noteId, updated_time: 20, revision_id: 'c'.repeat(32), previous_revision_id: revisionId, changed: true,
+		...bodyMetrics('Initial saved body'),
+	});
 	assert.equal(result.content[0].text.includes(bodyPatch), false);
-	assert.equal(result.content[0].text.includes('We arrive Tuesday.'), false);
+	assert.equal(result.content[0].text.includes('Initial saved body'), false);
+});
+
+test('update_note measures the returned snapshot for all six supplied body operation modes', async () => {
+	const savedSnapshot = 'Saved native 🧪\r\n';
+	const updates = [];
+	const service = {
+		async updateNoteWithRevision(id, input) {
+			updates.push({ id, input });
+			return { id, updated_time: 50, revision_id: 'c'.repeat(32), previous_revision_id: revisionId, changed: input.body_patch ? false : true, body: savedSnapshot };
+		},
+	};
+	const output = createTools(service, {
+		allowWrites: true,
+		async readBodyFile(file) { assert.deepEqual(file, bodyFile); return fileBody; },
+	});
+	const bodyOperations = [
+		{ body: '' },
+		{ body_file: bodyFile },
+		{ body_patch: bodyPatch },
+		{ replace_text: { find: 'old', replace: '' } },
+		{ prepend: '' },
+		{ append: '' },
+	];
+	for (const operation of bodyOperations) {
+		const result = await output.call('update_note', { id: noteId, base_revision_id: revisionId, ...operation });
+		assert.equal(result.isError, false);
+		assert.deepEqual(result.structuredContent, {
+			id: noteId, updated_time: 50, revision_id: 'c'.repeat(32), previous_revision_id: revisionId,
+			changed: operation.body_patch ? false : true, ...bodyMetrics(savedSnapshot),
+		});
+		assert.equal(result.content[0].text.includes(savedSnapshot), false);
+	}
+	assert.equal(updates.length, bodyOperations.length);
 });

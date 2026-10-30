@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import http from 'node:http';
 import { createAccountRegistry, ServiceError } from '../index.mjs';
 import { startMcpHttpServer } from '../src/mcp/http.mjs';
@@ -85,7 +86,7 @@ test('HTTP MCP enforces bearer credentials, exact origins and POST-only access',
 test('HTTP MCP accepts notifications and client responses with empty 202 replies', async t => {
 	let writes = 0;
 	const b = backend();
-	b.createNote = async () => { writes++; throw Error('notification executed a tool'); };
+	b.createNoteWithRevision = async () => { writes++; throw Error('notification executed a tool'); };
 	const server = await start(t, b, { allowWrites: true });
 	for (const message of [
 		{ jsonrpc: '2.0', method: 'tools/call', params: { name: 'create_note', arguments: { title: 'x' } } },
@@ -173,13 +174,13 @@ test('HTTP client disconnection leaves dispatched write work running', { timeout
 	const completed = deferred();
 	let signal;
 	let writes = 0;
-	b.createNote = async (input, operationSignal) => {
+	b.createNoteWithRevision = async (input, operationSignal) => {
 		signal = operationSignal;
 		writes++;
 		entered.resolve();
 		await release.promise;
 		completed.resolve();
-		return { ...note, title: input.title, body: input.body };
+		return { ...note, title: input.title, notebook_id: input.notebook_id ?? input.parentId, body: input.body ?? '', updated_time: 101, revision_id: '2'.repeat(32) };
 	};
 	const server = await start(t, b, { allowWrites: true });
 	t.after(() => release.resolve());
@@ -200,15 +201,21 @@ test('HTTP client disconnection leaves dispatched write work running', { timeout
 test('HTTP keeps a small edit to a large note response compact', async t => {
 	const b = backend();
 	const body = `${'x'.repeat(2 * 1024 * 1024)}needle`;
+	const savedBody = `${'x'.repeat(2 * 1024 * 1024)}updated`;
 	const largeNote = { ...note, body };
 	let writes = 0;
 	b.getNote = async () => ({ ...largeNote });
-	b.updateNote = async (_id, patch) => { writes++; return { ...largeNote, ...patch }; };
+	b.updateNote = async (_id, patch) => { writes++; return { ...largeNote, ...patch, body: savedBody }; };
 	const server = await start(t, b, { allowWrites: true });
 	const response = await exchange(server, call(1, 'update_note', { id: noteId, base_revision_id: initialRevisionId, replace_text: { find: 'needle', replace: 'updated' } }));
 	assert.equal(response.status, 200);
 	assert.equal(response.json.result.isError, false);
-	assert.deepEqual(Object.keys(response.json.result.structuredContent).sort(), ['changed', 'id', 'previous_revision_id', 'revision_id', 'updated_time']);
+	const result = response.json.result.structuredContent;
+	assert.deepEqual(Object.keys(result).sort(), ['body_length', 'body_sha256', 'body_size_bytes', 'body_total_line_count', 'changed', 'id', 'previous_revision_id', 'revision_id', 'updated_time']);
+	assert.equal(result.body_length, savedBody.length);
+	assert.equal(result.body_size_bytes, Buffer.byteLength(savedBody));
+	assert.equal(result.body_sha256, createHash('sha256').update(savedBody, 'utf8').digest('hex'));
+	assert.equal(result.body_total_line_count, 1);
 	assert.ok(Buffer.byteLength(response.text) < 10_000, 'the reply does not echo the large updated note body');
 	assert.equal(writes, 1);
 });
