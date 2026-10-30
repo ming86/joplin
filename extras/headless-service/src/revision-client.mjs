@@ -19,8 +19,8 @@ const knownCoreErrors = new Map([
 	['note_unavailable', 'The note is not available.'],
 	['note_read_only', 'The note or destination notebook is read-only.'],
 	['notebook_unavailable', 'The destination notebook is not available.'],
-	['unsupported_note_property', 'The note update contains an unsupported property.'],
-	['invalid_note_input', 'The note update is invalid.'],
+	['unsupported_note_property', 'The note input contains an unsupported property.'],
+	['invalid_note_input', 'The note input is invalid.'],
 	['replace_text_empty_find', 'replace_text.find must not be empty.'],
 	['replace_text_not_found', 'The text to replace was not found.'],
 	['replace_text_ambiguous', 'The text to replace must occur exactly once.'],
@@ -60,6 +60,16 @@ function noteResult(data, expectedId) {
 		else requireValue(typeof data[key] === 'number' && Number.isFinite(data[key]), 'invalid_backend_response');
 	}
 	return Object.fromEntries(fields.filter(key => Object.hasOwn(data, key)).map(key => [key, data[key]]));
+}
+
+/** Validate the complete committed snapshot returned by native note creation. */
+function createdNoteResult(data) {
+	requireValue(record(data) && typeof data.id === 'string', 'invalid_backend_response');
+	const result = noteResult(data, data.id);
+	requireValue(typeof result.parent_id === 'string' && typeof result.title === 'string'
+		&& typeof result.body === 'string' && Number.isFinite(result.updated_time), 'invalid_backend_response');
+	identifier(result.parent_id);
+	return result;
 }
 
 /** Validate and allowlist the compact row returned by revision-history pages. */
@@ -168,6 +178,40 @@ export function createRevisionClient(request) {
 	}
 
 	return Object.freeze({
+		/** Create a note and return the saved native snapshot with its first revision. */
+		async createNoteWithRevision(input, signal) {
+			requireValue(record(input), 'invalid_note_input');
+			const allowed = ['title', 'body', 'notebook_id', 'is_todo', 'todo_due', 'source_url'];
+			requireValue(Object.keys(input).every(key => allowed.includes(key)), 'unsupported_note_property');
+			requireValue(typeof input.title === 'string' && input.title.trim().length > 0, 'invalid_note_input');
+			identifier(input.notebook_id);
+			if (Object.hasOwn(input, 'body')) requireValue(typeof input.body === 'string', 'invalid_note_input');
+			if (Object.hasOwn(input, 'is_todo')) requireValue(typeof input.is_todo === 'boolean', 'invalid_note_input');
+			if (Object.hasOwn(input, 'todo_due')) requireValue(Number.isInteger(input.todo_due), 'invalid_note_input');
+			if (Object.hasOwn(input, 'source_url')) requireValue(typeof input.source_url === 'string', 'invalid_note_input');
+
+			const values = {
+				title: input.title,
+				...(Object.hasOwn(input, 'body') ? { body: input.body } : {}),
+				notebook_id: input.notebook_id,
+				...(Object.hasOwn(input, 'is_todo') ? { is_todo: input.is_todo } : {}),
+				...(Object.hasOwn(input, 'todo_due') ? { todo_due: input.todo_due } : {}),
+				...(Object.hasOwn(input, 'source_url') ? { source_url: input.source_url } : {}),
+			};
+			const startedAt = Date.now();
+			const data = validatedActionResult(await post('createNoteWithRevision', values, signal, true), 'createNoteWithRevision', true, startedAt);
+			try { return createdNoteResult(data); }
+			catch (error) {
+				// A malformed reply cannot prove whether native creation committed.
+				throw new ServiceError('write_outcome_unknown', true, undefined, {
+					cause: error,
+					diagnostics: requestDiagnostics({
+						method: 'POST', path: 'services/headless', operation: 'createNoteWithRevision',
+						elapsedMs: Date.now() - startedAt, stage: 'validation',
+					}),
+				});
+			}
+		},
 		/** Read a note and capture its current revision, classifying a lost capture reply as uncertain. */
 		async readNoteWithRevision(id, signal) {
 			identifier(id);

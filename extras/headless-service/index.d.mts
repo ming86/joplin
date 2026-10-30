@@ -433,6 +433,34 @@ export interface CreateNoteInput {
     /** Legacy web-service notebook ID. */
     parentId?: string;
 }
+/** Normalized fields accepted by the fixed native revision-aware create action. */
+export interface RevisionNoteCreateInput {
+    /** Note title. */
+    title: string;
+    /** Markdown body; the native action defaults an omitted body to an empty string. */
+    body?: string;
+    /** Verified destination notebook ID. */
+    notebook_id: string;
+    /** Create the note as a to-do. */
+    is_todo?: boolean;
+    /** To-do due time in Unix epoch milliseconds; negative values represent dates before 1970, and 0 clears the date. */
+    todo_due?: number;
+    /** Origin URL; an empty string clears it. */
+    source_url?: string;
+}
+/** Complete committed note snapshot returned with its first native revision. */
+export interface CreatedRevisionNote extends Note {
+    /** Native parent notebook ID. */
+    parent_id: string;
+    /** Saved note title. */
+    title: string;
+    /** Saved Markdown body. */
+    body: string;
+    /** Last update time in Unix epoch milliseconds. */
+    updated_time: number;
+    /** Native Joplin revision ID captured atomically with creation. */
+    revision_id: string;
+}
 /** Exact-match body operation used by updateNote. */
 export interface ReplaceTextInput {
     /** Non-empty text that must occur exactly once. */
@@ -655,6 +683,8 @@ export interface JoplinBackend {
     createWebPlaceholder?(input: WebPlaceholder, signal?: AbortSignal): Promise<{ id: string }>;
     listIndexNotes?(options?: PageOptions, signal?: AbortSignal): Promise<Page<Note>>;
     getNote(id: string, signal?: AbortSignal): Promise<Note>;
+    /** Create a note and its first native revision in one core transaction, when supported. */
+    createNoteWithRevision?(input: RevisionNoteCreateInput, signal?: AbortSignal): Promise<CreatedRevisionNote>;
     /** Read current note data and capture its native revision id for a protected update. */
     readNoteWithRevision(id: string, signal?: AbortSignal): Promise<RevisionNote>;
     /** Apply note changes only if the supplied native revision id is still current. */
@@ -963,6 +993,13 @@ export interface AccountUpdatedRevisionNote extends UpdatedRevisionNote {
     /** Account that supplied the note. */
     accountId: string;
 }
+/** Committed create snapshot enriched with account and selected notebook identities. */
+export interface CreatedAccountRevisionNote extends CreatedRevisionNote {
+    /** Account that supplied the note. */
+    accountId: string;
+    /** Notebook selected for creation. */
+    notebook_id: string;
+}
 /** Revision history row enriched with its account identity. */
 export interface AccountNoteRevisionSummary extends NoteRevisionSummary {
     /** Account that supplied the revision. */
@@ -1032,6 +1069,8 @@ export interface AccountService {
     readNote(id: string, signal?: AbortSignal): Promise<ReadableAccountNote>;
     /** Create a note using Desktop fields or the legacy parentId field. */
     createNote(input: CreateNoteInput, signal?: AbortSignal): Promise<CreatedAccountNote>;
+    /** Create a note and first native revision using the same destination rules as createNote. */
+    createNoteWithRevision(input: CreateNoteInput, signal?: AbortSignal): Promise<CreatedAccountRevisionNote>;
     /** Create a notebook under an optional verified parent notebook. */
     createNotebook(input: CreateNotebookInput, signal?: AbortSignal): Promise<Notebook>;
     updateNote(id: string, input: NoteUpdate, signal?: AbortSignal): Promise<AccountNote>;

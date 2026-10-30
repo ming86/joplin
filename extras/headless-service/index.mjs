@@ -113,6 +113,47 @@ export function createAccountRegistry(configurations, factories = {}) {
 				return semanticBackends.get(accountId);
 			};
 			const semanticStatus = Object.freeze({ state: 'unavailable', reason: 'not_implemented', ...(config.embedding ? { embeddingSpaceId: config.embedding.space.id } : {}) });
+			/** Validate creation fields, select the same notebook as createNote, and verify it is readable. */
+			async function prepareNoteCreation(input, signal) {
+				inputRecord(input, 'invalid_note_input');
+				requireValue(Object.keys(input).every(key => ['title', 'body', 'notebook_id', 'parentId', 'is_todo', 'todo_due', 'source_url'].includes(key)), 'unsupported_note_property');
+				requireValue(typeof input.title === 'string', 'invalid_note_input');
+				requireValue(input.title.trim().length > 0, 'invalid_note_input');
+				if (input.body !== undefined) requireValue(typeof input.body === 'string', 'invalid_note_input');
+				if (input.notebook_id !== undefined) requireValue(typeof input.notebook_id === 'string', 'invalid_note_input');
+				if (input.parentId !== undefined) requireValue(typeof input.parentId === 'string', 'invalid_note_input');
+				if (input.is_todo !== undefined) requireValue(typeof input.is_todo === 'boolean', 'invalid_note_input');
+				if (input.todo_due !== undefined) requireValue(Number.isInteger(input.todo_due), 'invalid_note_input');
+				if (input.source_url !== undefined) requireValue(typeof input.source_url === 'string', 'invalid_note_input');
+				let parentId = input.notebook_id ?? input.parentId ?? config.defaultNotebookId;
+				if (parentId === undefined) {
+					// hasMore tracks raw folders, including folders filtered as unreadable.
+					let onlyNotebookId;
+					let notebookCount = 0;
+					let page = 1;
+					while (true) {
+						const result = await backend().listNotebooks({ page, limit: 2 }, signal);
+						for (const notebook of result.items) {
+							notebookCount++;
+							if (notebookCount > 1) throw new ServiceError('notebook_id_required');
+							onlyNotebookId = notebook.id;
+						}
+						if (!result.hasMore) break;
+						page++;
+					}
+					if (notebookCount !== 1) throw new ServiceError('notebook_id_required');
+					parentId = onlyNotebookId;
+				}
+				await backend().getNotebook(parentId, signal);
+				return {
+					title: input.title,
+					body: input.body ?? '',
+					parentId,
+					is_todo: input.is_todo ? 1 : 0,
+					...(input.todo_due !== undefined ? { todo_due: input.todo_due } : {}),
+					...(input.source_url !== undefined ? { source_url: input.source_url } : {}),
+				};
+			}
 			return Object.freeze({
 				...createGrepService({ backend, permit, accountId }),
 				...createRevisionService({ backend, permit, accountId, readableNotebookTitle }),
@@ -182,43 +223,22 @@ export function createAccountRegistry(configurations, factories = {}) {
 				},
 				/** Create a note in a verified notebook, accepting both Desktop and legacy web inputs. */
 				async createNote(input, signal) {
-					permit('write'); inputRecord(input, 'invalid_note_input');
-					requireValue(Object.keys(input).every(key => ['title', 'body', 'notebook_id', 'parentId', 'is_todo', 'todo_due', 'source_url'].includes(key)), 'unsupported_note_property');
-					requireValue(typeof input.title === 'string', 'invalid_note_input');
-					requireValue(input.title.trim().length > 0, 'invalid_note_input');
-					if (input.body !== undefined) requireValue(typeof input.body === 'string', 'invalid_note_input');
-					if (input.notebook_id !== undefined) requireValue(typeof input.notebook_id === 'string', 'invalid_note_input');
-					if (input.parentId !== undefined) requireValue(typeof input.parentId === 'string', 'invalid_note_input');
-					if (input.is_todo !== undefined) requireValue(typeof input.is_todo === 'boolean', 'invalid_note_input');
-					if (input.todo_due !== undefined) requireValue(Number.isInteger(input.todo_due), 'invalid_note_input');
-					if (input.source_url !== undefined) requireValue(typeof input.source_url === 'string', 'invalid_note_input');
-					let parentId = input.notebook_id ?? input.parentId ?? config.defaultNotebookId;
-					if (parentId === undefined) {
-						// hasMore tracks raw folders, including folders filtered as unreadable.
-						let onlyNotebookId;
-						let notebookCount = 0;
-						let page = 1;
-						while (true) {
-							const result = await backend().listNotebooks({ page, limit: 2 }, signal);
-							for (const notebook of result.items) {
-								notebookCount++;
-								if (notebookCount > 1) throw new ServiceError('notebook_id_required');
-								onlyNotebookId = notebook.id;
-							}
-							if (!result.hasMore) break;
-							page++;
-						}
-						if (notebookCount !== 1) throw new ServiceError('notebook_id_required');
-						parentId = onlyNotebookId;
-					}
-					await backend().getNotebook(parentId, signal);
-					const created = await backend().createNote({
-						title: input.title,
-						body: input.body ?? '',
-						parentId,
-						is_todo: input.is_todo ? 1 : 0,
-						...(input.todo_due !== undefined ? { todo_due: input.todo_due } : {}),
-						...(input.source_url !== undefined ? { source_url: input.source_url } : {}),
+					permit('write');
+					const creation = await prepareNoteCreation(input, signal);
+					const created = await backend().createNote(creation, signal);
+					return { ...identity(created), notebook_id: created.parent_id };
+				},
+				/** Create a note and its first native revision in the verified destination notebook. */
+				async createNoteWithRevision(input, signal) {
+					permit('write');
+					const creation = await prepareNoteCreation(input, signal);
+					const created = await backend().createNoteWithRevision({
+						title: creation.title,
+						body: creation.body,
+						notebook_id: creation.parentId,
+						is_todo: creation.is_todo === 1,
+						...(creation.todo_due !== undefined ? { todo_due: creation.todo_due } : {}),
+						...(creation.source_url !== undefined ? { source_url: creation.source_url } : {}),
 					}, signal);
 					return { ...identity(created), notebook_id: created.parent_id };
 				},
