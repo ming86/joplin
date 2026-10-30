@@ -535,7 +535,7 @@ export function createTools(service, { allowWrites = false, noteFileResources, r
 			source_url: { type: 'string', description: 'URL where the note came from. Use an empty string to clear it.' },
 		}, ['title']);
 		createNoteSchema.anyOf = [{ required: ['notebook_id'] }, { required: ['parentId'] }];
-		add('create_note', 'Create a note in a readable notebook. Use body_file for large generated note bodies; it is downloaded and validated before creation, and the response contains note metadata only. Provide notebook_id or the legacy parentId alias; use list_notebooks to find notebook ids.',
+		add('create_note', 'Create a note in a readable notebook. The response includes its native revision_id, which can be used immediately as base_revision_id for update_note, plus measurements of the committed body; the full body is never returned. Measurements are included even when body is omitted or empty. Use body_file for large generated note bodies; it is downloaded and validated before creation. Provide notebook_id or the legacy parentId alias; use list_notebooks to find notebook ids.',
 			createNoteSchema, async (args, signal) => {
 				if (Object.hasOwn(args, 'body_file') && Object.hasOwn(args, 'body')) throw new ServiceError('note_file_body_conflict');
 				let createArgs = args;
@@ -543,17 +543,21 @@ export function createTools(service, { allowWrites = false, noteFileResources, r
 					const { body_file, ...noteFields } = args;
 					createArgs = { ...noteFields, body: await readBodyFile(body_file, signal) };
 				}
-				const note = await service.createNote(createArgs, signal);
+				const note = await service.createNoteWithRevision(createArgs, signal);
+				if (typeof note?.body !== 'string') throw new ServiceError('write_outcome_unknown', true);
 				return {
 					id: note.id,
 					title: note.title,
-					notebook_id: note.notebook_id ?? note.parent_id ?? null,
+					notebook_id: note.notebook_id ?? note.parent_id,
+					updated_time: note.updated_time,
+					revision_id: note.revision_id,
+					...bodyMetadata(note.body),
 				};
 			}, createAnnotations, { 'openai/fileParams': ['body_file'] });
 
 		const updateSchema = object({
 			id: { ...id, description: 'The note id to update.' },
-			base_revision_id: { ...id, description: 'The revision_id from read_note or grep_notes for the exact note state this update is based on. If the note changed and the update conflicts, reread it, reconcile the requested change, then submit the new revision_id.' },
+			base_revision_id: { ...id, description: 'The revision_id from read_note, grep_notes, create_note or a previous update_note result for the exact note state this update is based on. If the note changed and the update conflicts, reread it, reconcile the requested change, then submit the new revision_id.' },
 			title: { ...title, description: 'New note title.' },
 			body: { ...body, description: 'Full replacement body in the note\'s existing Markdown or HTML format. Use body for small complete replacements and body_file for large or full-file rewrites. If provided, body takes precedence over append, prepend and replace_text. Cannot combine with body_patch.' },
 			body_file: {
@@ -563,7 +567,7 @@ export function createTools(service, { allowWrites = false, noteFileResources, r
 					mime_type: { type: 'string', description: 'Optional file MIME type.' },
 					file_name: { type: 'string', description: 'Optional file name.' },
 				}, ['download_url', 'file_id']),
-				description: 'Edited UTF-8 file containing the complete replacement body in the existing Markdown or HTML format. Use for large or full-file rewrites. Requires base_revision_id and cannot combine with body_patch, body, append, prepend or replace_text. The acknowledgment returns body_length, body_size_bytes, body_sha256 and body_total_line_count from the saved native body. The line count treats CRLF, LF and lone CR as line breaks, includes a final empty line after a trailing break, and counts an empty body as one line. Compare body_size_bytes with the edited local file byte count and body_sha256 with its SHA-256.',
+				description: 'Edited UTF-8 file containing the complete replacement body in the existing Markdown or HTML format. Use for large or full-file rewrites. Requires base_revision_id and cannot combine with body_patch, body, append, prepend or replace_text. When any body operation is supplied, the acknowledgment returns body_length, body_size_bytes, body_sha256 and body_total_line_count from the saved native body. The line count treats CRLF, LF and lone CR as line breaks, includes a final empty line after a trailing break, and counts an empty body as one line. Compare body_size_bytes with the edited local file byte count and body_sha256 with its SHA-256.',
 			},
 			body_patch: {
 				type: 'string',
@@ -592,11 +596,13 @@ Each hunk needs source and edit lines; its source sequence must match exactly on
 		// Require an update field alongside the two identifiers without repeating the file schema in union branches.
 		updateSchema.minProperties = 3;
 		// Preserve the host hint: it supplies a downloadable file reference; this server cannot read client-local paths.
-		add('update_note', 'Update supplied note fields using base_revision_id from read_note or grep_notes. On note_conflict, reread the current note, reconcile the edit and retry with its revision. Use replace_text for one exact snippet that occurs once, body_patch for localized contextual line edits, body_file for large or full-file rewrites, and body for a small complete replacement. body_patch uses bare @@ hunk markers and space, - and + line prefixes; each source sequence must occur exactly once in the original body, and hunks must be source-ordered and nonoverlapping. Combine hunks that share context. A patch can accompany metadata but cannot combine with body_file, body, prepend, append or replace_text. Empty prefixed lines represent empty body lines; adding or removing a final empty line controls the final newline. A matched no-op leaves the body unchanged. File-update acknowledgments include body_length, body_size_bytes, body_sha256 and body_total_line_count from the saved body. The line count treats CRLF, LF and lone CR as line breaks, includes a final empty line after a trailing break, and counts an empty body as one line. Compare body_size_bytes with the edited local file byte count and body_sha256 with its SHA-256. Other updates retain compact revision metadata without body content. Body operations preserve the note\'s existing Markdown or HTML format. When body is omitted, the existing prepend, append and replace_text operations run in that order; replace_text requires exactly one occurrence.', updateSchema, async ({ id: noteId, ...changes }, signal) => {
+		add('update_note', 'Update supplied note fields using base_revision_id from read_note, grep_notes, create_note or a previous update_note result. On note_conflict, reread the current note, reconcile the edit and retry with its revision. Use replace_text for one exact snippet that occurs once, body_patch for localized contextual line edits, body_file for large or full-file rewrites, and body for a small complete replacement. body_patch uses bare @@ hunk markers and space, - and + line prefixes; each source sequence must occur exactly once in the original body, and hunks must be source-ordered and nonoverlapping. Combine hunks that share context. A patch can accompany metadata but cannot combine with body_file, body, prepend, append or replace_text. Empty prefixed lines represent empty body lines; adding or removing a final empty line controls the final newline. A matched no-op leaves the body unchanged. Any supplied body, body_file, body_patch, replace_text, prepend or append includes body_length, body_size_bytes, body_sha256 and body_total_line_count from the saved native body, even for empty values and successful no-ops. Metadata-only updates omit all four measurements. body_length uses UTF-16 code units; body_size_bytes counts exact UTF-8 bytes; body_sha256 is lowercase SHA-256 hex of the UTF-8 body; body_total_line_count treats CRLF, LF and lone CR as breaks, adds a final empty line after a trailing break, and counts an empty body as one line. Results never include the body. Body operations preserve the note\'s existing Markdown or HTML format. When body is omitted, the existing prepend, append and replace_text operations run in that order; replace_text requires exactly one occurrence.', updateSchema, async ({ id: noteId, ...changes }, signal) => {
 			const patchUpdate = Object.hasOwn(changes, 'body_patch');
 			if (patchUpdate && ['body_file', 'body', 'prepend', 'append', 'replace_text'].some(key => Object.hasOwn(changes, key))) {
 				throw new ServiceError('note_patch_body_conflict');
 			}
+			const bodyUpdate = ['body', 'body_file', 'body_patch', 'replace_text', 'prepend', 'append']
+				.some(key => Object.hasOwn(changes, key));
 			const fileUpdate = Object.hasOwn(changes, 'body_file');
 			if (fileUpdate) {
 				if (['body', 'append', 'prepend', 'replace_text'].some(key => Object.hasOwn(changes, key))) throw new ServiceError('note_file_body_conflict');
@@ -606,7 +612,7 @@ Each hunk needs source and edit lines; its source sequence must match exactly on
 			}
 			const note = await service.updateNoteWithRevision(noteId, changes, signal);
 			let savedBodyMetadata = {};
-			if (fileUpdate) {
+			if (bodyUpdate) {
 				if (typeof note?.body !== 'string') throw new ServiceError('write_outcome_unknown', true);
 				// The returned body and revision are one committed snapshot; measuring it avoids a racy reread.
 				savedBodyMetadata = bodyMetadata(note.body);

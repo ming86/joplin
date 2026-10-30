@@ -199,14 +199,20 @@ const coreOutputSchemas = {
 	})), total: { type: 'number', description: 'Number of returned matching chunks.' } }), description: 'On success, returns ranked note chunks with source ids, matching text and similarity scores.' },
 	read_note: noteReadSchema(),
 	get_note: noteReadSchema(true),
-	create_note: exactObject({ id: string, title: string, notebook_id: string }),
+	create_note: exactObject({
+		id: string, title: string, notebook_id: string, updated_time: time, revision_id: string,
+		body_length: { type: 'number', description: 'Committed body length in UTF-16 code units.' },
+		body_size_bytes: { type: 'integer', minimum: 0, description: 'Committed body size in exact UTF-8 bytes.' },
+		body_sha256: { type: 'string', pattern: '^[a-f0-9]{64}$', description: 'Lowercase SHA-256 hex of the committed body encoded as UTF-8.' },
+		body_total_line_count: { type: 'integer', minimum: 1, description: 'Logical line count of the committed body; CRLF, LF and lone CR each count as one break, a trailing break adds a final empty line, and an empty body has one line.' },
+	}),
 	update_note: {
 		...exactObject({
 			id: string, updated_time: time, revision_id: string, previous_revision_id: nullableString, changed: boolean,
-			body_length: { type: 'number', description: 'Saved body length in UTF-16 code units; included for body_file updates.' },
-			body_size_bytes: { type: 'integer', minimum: 0, description: 'Saved body size in UTF-8 bytes; included for body_file updates.' },
-			body_sha256: { type: 'string', pattern: '^[a-f0-9]{64}$', description: 'SHA-256 of the saved body encoded as UTF-8; included for body_file updates.' },
-			body_total_line_count: { type: 'integer', minimum: 1, description: 'Logical line count of the complete saved body; included for body_file updates.' },
+			body_length: { type: 'number', description: 'Saved body length in UTF-16 code units; included when any body operation is supplied.' },
+			body_size_bytes: { type: 'integer', minimum: 0, description: 'Saved body size in exact UTF-8 bytes; included when any body operation is supplied.' },
+			body_sha256: { type: 'string', pattern: '^[a-f0-9]{64}$', description: 'Lowercase SHA-256 hex of the saved body encoded as UTF-8; included when any body operation is supplied.' },
+			body_total_line_count: { type: 'integer', minimum: 1, description: 'Logical line count of the complete saved body; CRLF, LF and lone CR each count as one break, a trailing break adds a final empty line, and an empty body has one line. Included when any body operation is supplied.' },
 		}, ['id', 'updated_time', 'revision_id', 'previous_revision_id', 'changed']),
 		anyOf: [
 			{ not: { anyOf: [{ required: ['body_length'] }, { required: ['body_size_bytes'] }, { required: ['body_sha256'] }, { required: ['body_total_line_count'] }] } },
