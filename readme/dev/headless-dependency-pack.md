@@ -19,7 +19,7 @@ The supplied successful native builder is **ARM64**. Its `.node` and ELF shared-
 
 Please prepare `joplin-headless-runtime-linux-x64.tar.zst` (or `.tar.gz`) from a **clean build staging directory**, for Linux amd64/x86-64, Node 22.16.0, and glibc no newer than 2.41. Debian 12/bookworm amd64 or Debian 13/trixie amd64 are reasonable builder targets; validate the resulting libraries rather than assuming the distro name is enough. On the ARM64 builder, Docker `--platform linux/amd64` is one possible build environment if available there. Do not send a Docker image as the only artifact: this sandbox needs extracted files, not a running container engine.
 
-Use the already tested dependency versions and vendored Yarn 4.16.0. The current tested real-history core is `10bf74ee79537b697b82db92b6519087fdf3ad51` (equivalent changes to snapshot head `d3f50c9213b58c5e2728b0b217b7c71b51b11e7b`). Record any later imported account-interface commit separately. Do not change the upstream lockfile to manufacture a smaller pack.
+Use the already tested dependency versions and vendored Yarn 4.16.0. The historical original-source core used by the earlier tests is `10bf74ee79537b697b82db92b6519087fdf3ad51`; its mapped public-history commit is `5ddb572501f5430e02ad25840a372984c8c04392`. Those tests were not rerun against the mapped commit. For the equivalent changes in snapshot history, see `d3f50c9213b58c5e2728b0b217b7c71b51b11e7b`. Record any later imported account-interface commit separately. Do not change the upstream lockfile to manufacture a smaller pack.
 
 Suggested archive layout:
 
@@ -94,7 +94,7 @@ tar --zstd -cf joplin-headless-runtime-linux-x64.tar.zst joplin-headless-runtime
 sha256sum joplin-headless-runtime-linux-x64.tar.zst > joplin-headless-runtime-linux-x64.tar.zst.sha256
 ```
 
-Attach the archive and checksum here, or upload them to the an artifact destination selected by the operator and give the filename/file reference. Large archives can be split into 200 MiB chunks for convenience with `split -b 200M -d -a 3`; include the overall hash and hashes for parts. This size is a convenience, not a stated platform upload limit.
+Attach the archive and checksum here, or upload them to an artifact destination selected by the operator and give the filename/file reference. Large archives can be split into 200 MiB chunks for convenience with `split -b 200M -d -a 3`; include the overall hash and hashes for parts. This size is a convenience, not a stated platform upload limit.
 
 ## Optional alternative: offline rebuild material
 

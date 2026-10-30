@@ -5,10 +5,14 @@ PASS: Codex CLI 0.155.1 interoperated with the Phase 2A stdio adapter and existi
 ## Imported source
 
 - Branch: `feat/headless-mcp-stdio`
-- Real-history commit: `fe80f2a00f00293230c93c1f209243b329f3f6a8`
-- Parent: `79ef3977c3ccbd5e2c40720ac1a6e169eac7d40a`
+- Historical original-source commit: `fe80f2a00f00293230c93c1f209243b329f3f6a8`
+- Mapped public-history commit: `3cb948fbd8f8417e37137f912d24218b4ffff59c`
+- Historical original-source parent: `79ef3977c3ccbd5e2c40720ac1a6e169eac7d40a`
+- Mapped public-history parent: `2462f5229bc0f1a77c165d9ac0e56b82093c9881`
 - Corresponding returned commit: `037420aa66115c71033f587543b4ca1192e2a33a`
 - Applied the supplied format patch once: 14 files, 783 insertions, entirely under `extras/headless-service/`. No snapshot-root merge, new implementation fixes, dependency changes or rebuild.
+
+The selected-host results below were observed on the historical original-source commit. They were not rerun against its mapped public-history commit.
 
 ## Actual host observation
 

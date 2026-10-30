@@ -1,9 +1,6 @@
 # Codex — focused Phase 4 acceptance and retained Phase 3 check
 
-Date: 2026-09-21. Import the Phase 4 patch onto a clean branch already containing the repaired
-Phase 3 changes and popup fix `c9101462ef7a79521c352d8bc7b93546b7adeb1f` (or verified equivalents).
-The popup fix is already incorporated in the snapshot baseline. Do not apply it twice.
-No current browser/core/HTTPS acceptance is claimed by the delivery. Preserve unrelated work.
+Date: 2026-09-21. Import the Phase 4 patch onto a clean branch already containing the repaired Phase 3 changes and popup fix from historical original-source commit `c9101462ef7a79521c352d8bc7b93546b7adeb1f`. Its mapped public-history commit is `cc3555f00ffd5ef817ad8bbed894363374a998fa`; use that commit or a verified equivalent as the base. The popup fix is already incorporated in the snapshot baseline. Do not apply it twice. No current browser/core/HTTPS acceptance is claimed by the delivery. Preserve unrelated work.
 
 ## First: close the earlier Phase 3 content observation separately
 

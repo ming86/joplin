@@ -6,9 +6,11 @@ Date: 2026-09-19. All seven real autonomous acceptance checkpoints passed agains
 
 Real-history branch: `feat/headless-encrypted-core`.
 
-- `079889965ca40490f1b398700bac86e677390b26`: existing compiler fixes, equivalent to ChatGPT's `820dba0`.
-- `945094300017cbd6e36f0ca8fef6d9fdde0c6a89`: cancellation timer fix, imported from `0f7ce2a`.
-- `10bf74ee79537b697b82db92b6519087fdf3ad51`: acceptance runner, imported from `d3f50c9`.
+- `079889965ca40490f1b398700bac86e677390b26` (historical original-source ID; mapped public-history commit `f911542941058ce17ff2a2a9df72affcbea3d5ea`): existing compiler fixes, equivalent to ChatGPT's `820dba0`.
+- `945094300017cbd6e36f0ca8fef6d9fdde0c6a89` (historical original-source ID; mapped public-history commit `b7ce0d81f14b140042fdfe0ffbd748483201dd61`): cancellation timer fix, imported from `0f7ce2a`.
+- `10bf74ee79537b697b82db92b6519087fdf3ad51` (historical original-source ID; mapped public-history commit `5ddb572501f5430e02ad25840a372984c8c04392`): acceptance runner, imported from `d3f50c9`.
+
+The build and acceptance results below describe the original source checkout ending at the historical acceptance-runner commit listed above; they were not rerun against the mapped public history.
 
 The format-patch import preserved real repository ancestry and did not duplicate the compiler fixes. Tracked working tree is clean. Full vendored Yarn TypeScript compilation and CLI build passed for the updated source. The stock comparator remains the unmodified `f4ecbed4e6f693be49e1dd64d6e1ec1d74f767e9` build. Existing native environment: Linux ARM64, Node 22.16.0, SQLCipher 4.10.0, sqlite3 5.1.6, TypeScript 5.9.3. Previously passed native and isolated checks were not repeated.
 

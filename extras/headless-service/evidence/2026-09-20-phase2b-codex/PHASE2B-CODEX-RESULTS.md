@@ -1,6 +1,6 @@
 # Phase 2B local-model and Codex results
 
-Completed on 2026-09-20. The delivered Phase 2B increment was imported as `89c624b420de9ba0b585d6bb371b07e5306a028a` on `feat/headless-semantic-search`, parent `fe80f2a00f00293230c93c1f209243b329f3f6a8`. This corresponds to ChatGPT commit `a2924db75480af05ab18c95ad42655f6a341f557`. No application fixes, dependency changes, or repeated full builds were needed.
+Completed on 2026-09-20. The delivered Phase 2B increment was imported into the original source history as `89c624b420de9ba0b585d6bb371b07e5306a028a` (historical source ID) on `feat/headless-semantic-search`, with original-source parent `fe80f2a00f00293230c93c1f209243b329f3f6a8`. Its mapped public-history commit is `1d232127e20c81987f8eeca2251c10b7743ff3d6`, with mapped parent `3cb948fbd8f8417e37137f912d24218b4ffff59c`. This corresponds to ChatGPT commit `a2924db75480af05ab18c95ad42655f6a341f557`. The results below describe the original source history and were not rerun against the mapped public-history commit. No application fixes, dependency changes, or repeated full builds were needed.
 
 ## Results
 

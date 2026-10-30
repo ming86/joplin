@@ -1,8 +1,6 @@
 # Codex — focused Phase 5 account operation
 
-Date: 2026-09-21. Import only the new Phase 5 format patch onto a clean worktree
-based on real-history `52a13c639523447f4aa49c552fe7db421ef25f28` (or a verified
-equivalent). Do not replay Phase 4, the popup fix or the rewritten snapshot root.
+Date: 2026-09-21. Import only the new Phase 5 format patch onto a clean worktree based on the mapped public-history commit `b9692fc83684e00dce96e5e0a34ba01e5854334f` (or a verified equivalent). This is the mapped counterpart of historical original-source commit `52a13c639523447f4aa49c552fe7db421ef25f28`. Do not replay Phase 4, the popup fix or the rewritten snapshot root.
 Read `MULTI-USER.md` and use the already built CLI/native dependencies.
 
 The user explicitly backlogged encrypted/locked-note UI, physical mobile,
