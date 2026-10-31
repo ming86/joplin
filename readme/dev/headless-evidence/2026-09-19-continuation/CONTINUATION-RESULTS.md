@@ -30,8 +30,8 @@ The run used the normal 300-second interval. No headless one-shot sync/decrypt c
 
 One initial attempt stopped before live writes because the relocated stock CLI lacked a workspace dependency. Copying the stock build's required workspace dependencies resolved that staging problem. The successful retry required no application or runner changes.
 
-## Evidence boundary
+## Run record and limits
 
-The long-running tool session detached, so its OS exit code was not directly captured. The final PASS line and seven-checkpoint PASS report were observed, and the runner had stopped. Its success control flow implies normal completion, but this is not direct evidence of the handoff's explicit zero-exit requirement. Do not describe that exit status as directly verified. No repeat run was performed solely to recover it, consistent with the user's request to avoid unnecessary verification.
+The long-running tool session detached, so its OS exit code was not captured directly. The final PASS line and seven-checkpoint PASS report were observed, and the runner had stopped. Its success control flow indicates normal completion, but it does not directly confirm that the process exited with code 0. Do not describe that exit status as directly verified. No repeat run was performed solely to capture it, consistent with the user's request to avoid unnecessary verification.
 
-The included report, checkpoint log and build log contain no account credentials, keys or profile contents. The observed behavior closes the three runtime questions; the only recording limitation is the uncaptured exit status. No new Git bundle is needed because there are no additional source changes to return to ChatGPT.
+The included report, checkpoint log and build log contain no account credentials, keys or profile contents. The observed behavior answers the three runtime questions; the only run-record limitation is the uncaptured exit status. No new Git bundle is needed because there are no additional source changes to return to ChatGPT.

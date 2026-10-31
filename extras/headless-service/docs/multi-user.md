@@ -8,12 +8,7 @@ MCP clients for that account reuse these instances.
 
 ## Boundary and routing
 
-An account is selected by a trusted operator configuration, not by a browser
-parameter, MCP tool argument or global current-user variable. Each account gets
-its own web origin/listener, clipping listener and credentials, MCP Unix socket
-and credential, core endpoint/token, independent profile/DB key, and semantic
-path/key/reference. A single shared login site is not added. This is the manually
-provisioned deployment allowed by the roadmap, not a self-service account system.
+An account is selected by a trusted operator configuration, not by a browser parameter, MCP tool argument or global current-user variable. Each account gets its own web origin/listener, clipping listener and credentials, MCP Unix socket and credential, core endpoint/token, independent profile/DB key, and semantic path/key/reference. A single shared login site is not added. This is the manually provisioned deployment described by the roadmap, not a self-service account system.
 
 The existing web login exchanges the account's web access key for an ephemeral
 HttpOnly session. The clipper still uses its separate notebook-restricted bearer.
@@ -36,24 +31,11 @@ accounts refer to each account's own copy. Shared Joplin notebooks are still
 independently synchronized/indexed according to the respective Joplin account's
 access. Nothing bypasses those accounts by reading a global note index.
 
-The operator and processes running as the service's Unix UID are trusted. This
-is application/account isolation, not a sandbox against a compromised worker,
-root, or hostile code executing under the same UID. CPU/memory quotas and
-stronger host/container isolation can be applied by deployment tooling; they
-are not claimed here. Providers may be shared by deliberate configuration, but
-semantic stores must not be. Configuring both profiles to sync the same Joplin
-identity intentionally gives both that identity's notes; the gateway cannot
-infer that the operator intended different identities from API tokens alone.
+The operator and processes running as the service's Unix UID are trusted. This is application/account isolation, not a sandbox against a compromised worker, root, or hostile code executing under the same UID. Deployment tooling can add CPU/memory quotas and stronger host/container isolation; the service does not implement them. Providers may be shared by deliberate configuration, but semantic stores must not be. Configuring both profiles to sync the same Joplin identity intentionally gives both that identity's notes; the gateway cannot infer that the operator intended different identities from API tokens alone.
 
 ## Files and prerequisites
 
-Use the already built, accepted CLI and SQLCipher binding; no dependency install,
-core format change, model download or E2EE reset is needed for this increment.
-The account files and secret references must be absolute paths. Managed configs
-and secrets are regular files, owned by the service UID, with mode `0600` (or
-stricter). Secret symlinks are refused. Control/socket directories are owned by
-the service UID with mode `0700`, sockets `0600`. This is a file-access policy,
-not a requirement to encrypt every config, static asset or filesystem.
+Use the already built CLI and SQLCipher binding; no dependency install, core format change, model download or E2EE reset is needed for this increment. The account files and secret references must be absolute paths. Managed configs and secrets are regular files, owned by the service UID, with mode `0600` (or stricter). Secret symlinks are refused. Control/socket directories are owned by the service UID with mode `0700`, sockets `0600`. These modes restrict file access; they do not require encrypting every config, static asset or the filesystem.
 
 Start with `scripts/fleet.example.json`, `scripts/fleet-account.example.json` and
 the existing MCP/semantic configuration. Copy the account example for the second
@@ -62,13 +44,7 @@ and independent credentials. A read-only account omits `clipper` and sets
 `allowWrites: false` in its backend configuration. Any interface can be omitted,
 but at least one must be enabled.
 
-The DB key reference points to a **previously generated and retained** 64-hex
-key supplied by an external recovery/secret source, for example an owner-only
-file in a separately populated `/run/secrets` mount. Do not store unlock files
-inside profiles or include them in data backups/return packages. Merely writing
-a key alongside an encrypted DB on durable disk does not provide the intended
-stopped-storage protection. No platform secret manager is mandated; how the
-owner-only runtime files are populated is an operator choice.
+The DB key reference points to a **previously generated and retained** 64-hex key supplied by an external recovery/secret source, for example an owner-only file in a separately populated `/run/secrets` mount. Do not store unlock files inside profiles or include them in data backups/return packages. Merely writing a key alongside an encrypted DB on durable disk does not provide the intended stopped-storage protection. A platform secret manager is optional. The operator chooses how to populate the owner-only runtime files.
 
 The supervisor hashes available secret values to reject reuse across accounts
 and active generations. It therefore transiently reads those credentials; it
@@ -97,16 +73,7 @@ node extras/headless-service/account-core.mjs /private/alice.json decrypt
 node extras/headless-service/account-core.mjs /private/alice.json status
 ```
 
-`import-config` is exactly `config --import`; supply its JSON through stdin from a
-controlled source, with the intended sync target/credentials, matching `api.port`
-and `api.token`. See the existing [headless setup contract](../../../readme/dev/headless-client.md).
-Do not put passwords in arguments, shell history, logs or an ordinary file.
-`sync` and `decrypt` are initial account setup, not periodic service commands.
-The wrapper has no default profile, `e2ee enable`, reset, key-generation, export,
-profile-copy or delete command. The core's existing profile lock still applies.
-Stock CLI output during explicit setup is operator-visible; do not upload raw
-output containing private account data. The background supervisor discards raw
-core output and reads only the fixed API-ready marker.
+`import-config` is exactly `config --import`; supply its JSON through stdin from a controlled source, with the intended sync target/credentials, matching `api.port` and `api.token`. See the existing [headless setup guide](../../../readme/dev/headless-client.md). Do not put passwords in arguments, shell history, logs or an ordinary file. `sync` and `decrypt` are initial account setup, not periodic service commands. The wrapper has no default profile, `e2ee enable`, reset, key-generation, export, profile-copy or delete command. The core's existing profile lock still applies. Stock CLI output during explicit setup is operator-visible; do not upload raw output containing private account data. The background supervisor discards raw core output and reads only the fixed API-ready marker.
 
 For an already configured Phase 4 account, retain its profile, keys, API token,
 semantic database/configuration and retry namespaces. Stop its old standalone
@@ -148,9 +115,7 @@ are gone. Enabling does not resurrect an old session cookie.
 in their existing external files, then that account restarted; all loaded
 sessions/MCP connections are invalidated. Namespace/profile/endpoint/config
 changes require restarting the fleet so cross-account bindings are revalidated.
-Automatic semantic rebuild is forbidden in managed mode. Perform an intentional
-index migration separately, while its owner is stopped, using the established
-semantic procedure, then restore normal `rebuild: false` configuration.
+The fleet rejects managed account configurations with `semantic.rebuild: true`. Perform an intentional index migration separately, while its owner is stopped, using the established semantic procedure, then restore normal `rebuild: false` configuration.
 
 A core crash closes its account interfaces and triggers bounded account-local
 restart (default three cumulative automatic attempts, exponential delay capped
@@ -158,13 +123,7 @@ at 30 seconds). A manual start/restart resets the counter. Missing secrets fail
 that start directly rather than prompting or generating keys. One account's
 startup failure does not prevent other accounts from becoming usable.
 
-Shutdown drains web/clipper/MCP, closes the semantic runtime, then stops the core.
-There are bounded forced-termination fallbacks; stopped state is not a claim of
-a clean SQLCipher checkpoint. Use the core's normal recovery/backup contract.
-The supervisor reaps the account process group if its application worker dies;
-loss of the supervisor's IPC connection asks surviving workers to close their
-core. Use a normal host service manager/process group for host-level containment.
-No custom process supervisor can guarantee graceful cleanup after a host crash.
+Shutdown drains web/clipper/MCP, closes the semantic runtime, then stops the core. There are bounded forced-termination fallbacks; a stopped state does not guarantee a clean SQLCipher checkpoint. Use the core's normal recovery and backup procedure. The supervisor reaps the account process group if its application worker dies; loss of the supervisor's IPC connection asks surviving workers to close their core. Use a normal host service manager/process group for host-level containment. No custom process supervisor can guarantee graceful cleanup after a host crash.
 
 A hard kill may leave `fleet.lock`, a control socket or an account MCP socket.
 These paths are **not automatically unlinked or taken over**. Before removing
@@ -196,11 +155,11 @@ remote OAuth endpoint. All existing protocol/tool limits remain in [mcp.md](mcp.
 Remote stdio transport, operator permissions and credential provisioning must be
 configured deliberately; this increment does not deploy a public MCP listener.
 
-## Validation boundary
+## Tests and acceptance
 
-`tests/fleet.test.mjs` exercises actual supervisor/account/core subprocesses, web/clipper HTTP and authenticated MCP bridge processes against explicitly simulated, persistent synthetic cores. It tests cross-account rejection, identical IDs, independent writes/restarts, key failure, cookie isolation, revoke/re-enable, credential rotation, core/worker crashes and parent disconnect. Those fixture files are ordinary JSON, **not encrypted Joplin databases**. Existing native SQLCipher gates remain separately reported, never relabeled as passing fixtures.
+`tests/fleet.test.mjs` exercises actual supervisor/account/core subprocesses, web/clipper HTTP and authenticated MCP bridge processes against explicitly simulated, persistent synthetic cores. It tests cross-account rejection, identical IDs, independent writes/restarts, key failure, cookie isolation, revoke/re-enable, credential rotation, core/worker crashes and parent disconnect. Those fixture files are ordinary JSON, **not encrypted Joplin databases**. Existing native SQLCipher test results are reported separately from these fixture test results.
 
-**Manual two-account acceptance passed on 2026-09-21.** The final entries in the local reports `INTERFACE-RESULTS.md`, `LIFECYCLE-RESULTS.md`, and `STOCK-RECEIPT-RESULTS.md` record per-account web, clipper, and MCP writes and isolation; keyword, semantic, and hybrid retrieval; independent restart; missing-key fail-closed behavior and recovery; durable disable/re-enable; and separate normal-mode stock-client sync, existing-key decryption, and plaintext reads of each account's synthetic note. The stock receipt used a separately built unmodified Joplin client. This targeted run used disposable accounts and synthetic data; it does not establish behavior for other accounts or content, deployed ingress, physical devices, locked-note UI, or PWA installation.
+**Manual two-account acceptance checks passed on 2026-09-21.** The final entries in the local reports `INTERFACE-RESULTS.md`, `LIFECYCLE-RESULTS.md`, and `STOCK-RECEIPT-RESULTS.md` record per-account web, clipper, and MCP writes and isolation; keyword, semantic, and hybrid retrieval; independent restart; missing-key fail-closed behavior and recovery; durable disable/re-enable; and separate normal-mode stock-client sync, existing-key decryption, and plaintext reads of each account's synthetic note. The stock receipt used a separately built unmodified Joplin client. This targeted run used disposable accounts and synthetic data; it does not establish behavior for other accounts or content, deployed ingress, physical devices, locked-note UI, or PWA installation.
 
 The interface run initially hit a semantic-index propagation delay after a write. Its final checks passed after the acceptance runner used a bounded post-write wait; earlier failures remain recorded in `INTERFACE-RESULTS.md`. A `ready` state with zero pending items alone can predate the semantic poll that notices a newly written note, so allow propagation before asserting search results.
 

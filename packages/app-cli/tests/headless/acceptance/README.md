@@ -1,12 +1,12 @@
 # Remaining Phase 1 real-runtime acceptance
 
-This runner covers the remaining gaps from `chatgpt-phase1-unblock.zip`: autonomous synchronization/decryption while `serve` remains alive, network outage/recovery, and restoration of a **complete** stopped profile with a note that was never synchronized. It does not replace the already supplied SQLCipher/native and workspace-build evidence.
+This runner covers the remaining gaps from `chatgpt-phase1-unblock.zip`: autonomous synchronization/decryption while `serve` remains alive, network outage/recovery, and restoration of a **complete** stopped profile with a note that was never synchronized. It does not replace the supplied SQLCipher/native and workspace-build results.
 
 ## Preconditions
 
 Run on Linux in an environment with Node 22.16.0 or a compatible tested Node 22 release, both compiled CLI entry points and their installed dependencies, and the tested SQLCipher-enabled `sqlite3` binding. Both entry points, source profiles, scratch directory and key file must be accessible in the same environment/network namespace as the runner. The stock CLI must be an unmodified build of the corresponding upstream commit, not a second invocation of the modified CLI. Do not point at a different machine's container path.
 
-Use the **existing disposable test account**, already enabled for E2EE in the supplied evidence. Stop the original headless and stock clients before copying. Keep their private recovery state. The runner deliberately does **not** call `e2ee enable`, `e2ee disable`, generate a replacement master key, reset provisioning, or require the account password in its configuration.
+Use the **existing disposable test account**, already enabled for E2EE in the supplied test results. Stop the original headless and stock clients before copying. Keep their private recovery state. The runner deliberately does **not** call `e2ee enable`, `e2ee disable`, generate a replacement master key, reset provisioning, or require the account password in its configuration.
 
 Source profiles must use Joplin Server target `9`, the expected canonical server URL and username, and the same existing active E2EE key. Their previously working synchronization and decryption credentials must remain available in their profile databases. Profiles whose credentials exist only in an external keychain are not supported by this test. Separate independent root profiles are required. Other targets, preexisting network proxies, redirects, profile symlinks and concurrent original clients are intentionally outside this first runner's scope, not new product restrictions.
 
@@ -16,7 +16,7 @@ The archive contains build recipes and sanitized results, **not** a compiled wor
 
 Copy `config.example.json` to a private location and replace its placeholder paths, server URL and username. `workDir` must not exist and its parent must exist. It cannot be inside either source profile. Set both confirmation booleans to true only for a disposable account whose original clients are stopped.
 
-`databaseKeyFile` must contain the **existing** headless database key as 64 hexadecimal characters, with an optional newline. Use the value from the retained private recovery material; do not generate a new key or change its format. The file belongs outside the source profiles and returned evidence. The runner opens it read-only for each headless process and supplies its descriptor as FD3; the key is never passed as a command-line argument or environment value.
+`databaseKeyFile` must contain the **existing** headless database key as 64 hexadecimal characters, with an optional newline. Use the value from the retained private recovery material; do not generate a new key or change its format. The file belongs outside the source profiles and returned results. The runner opens it read-only for each headless process and supplies its descriptor as FD3; the key is never passed as a command-line argument or environment value.
 
 ```sh
 chmod 600 /private/acceptance.json /run/secrets/existing-headless-database-key.hex
@@ -49,9 +49,9 @@ Success requires exit status zero, `PASS autonomous-acceptance` and an `acceptan
 
 The report and console checkpoint names are suitable for sharing after review. **Do not share** the configuration, raw database key, either source profile, scratch/backup/restored profiles, raw command output, or `live-headless-state.json`. `workDir` contains the stock comparator's ordinary plaintext database as well as encrypted headless copies. These are private validation artifacts, not a new production encryption requirement.
 
-Two synchronized synthetic notes and their notebook remain in the disposable remote account. The final unsynchronized restore canary remains only in the retained private test profiles. The runner does not delete remote data, reset the original clients, rewrite private recovery files or remove failed-run evidence. Review and clean up the synthetic notebook separately when appropriate.
+Two synchronized synthetic notes and their notebook remain in the disposable remote account. The final unsynchronized restore canary remains only in the retained private test profiles. The runner does not delete remote data, reset the original clients, rewrite private recovery files or remove failed-run files. Review and clean up the synthetic notebook separately when appropriate.
 
-Record the actual rebuilt source revisions and native versions alongside the report. A passing report is evidence about those binaries, not every future rebase. The runner itself cannot cryptographically attest that an arbitrary supplied `stockCli` was built unmodified; the builder must identify that build.
+Record the actual rebuilt source revisions and native versions alongside the report. A passing report records results for those binaries, not every future rebase. The runner itself cannot cryptographically verify that an arbitrary supplied `stockCli` was built unmodified; the builder must identify that build.
 
 ## Local tests of the runner
 
@@ -60,4 +60,4 @@ node --test packages/app-cli/tests/headless/acceptance.test.cjs
 node --test packages/app-cli/tests/headless/scheduling.test.cjs
 ```
 
-These tests cover the real loopback proxy, file-descriptor handoff, copying, validation, shutdown and scheduling boundaries. One test drives the entire runner with **simulated CLIs**, which reject any attempted headless `sync`/`e2ee` command. That self-test is **not** native encryption, real FTS, real synchronization or real E2EE evidence. The actual runtime gate is the separate `run.cjs` command above.
+These tests cover the real loopback proxy, file-descriptor handoff, copying, validation, shutdown and scheduling boundaries. One test drives the entire runner with **simulated CLIs**, which reject any attempted headless `sync`/`e2ee` command. That self-test does **not** test native encryption, real FTS, real synchronization or real E2EE. Run the separate `run.cjs` command above for actual runtime results.

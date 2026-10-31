@@ -4,7 +4,7 @@ Decision: 2026-09-21. At the user's request these observations are backlog items
 not prerequisites for beginning or delivering Phase 5. The accepted local Phase 3
 and Phase 4 workflows remain accepted. Deferred does not mean tested or passed.
 
-| ID | Observation | Existing evidence and eventual check |
+| ID | Observation | Current observation and eventual check |
 | --- | --- | --- |
 | B01 | Encrypted/locked-note UI behavior | Unobserved. Later use a safe disposable fixture; never change existing E2EE keys merely to manufacture one. |
 | B02 | Physical mobile device behavior | Desktop and phone-sized browser emulation passed. Actual hardware remains unobserved. |

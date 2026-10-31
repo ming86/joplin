@@ -62,7 +62,7 @@ Use a second directory and an empty temporary HOME, with no test profiles or rea
 From the relocated tree, using the x64 Node 22.16.0 runtime:
 
 1. Load the sqlite3 package and query `PRAGMA cipher_version`; it must return the expected SQLCipher version rather than an empty result from ordinary SQLite.
-2. Run the existing native gate with `JOPLIN_TEST_SQLITE_MODULE` pointing at the **relocated** package. It uses disposable local data, not the E2EE account.
+2. Run the existing native test with `JOPLIN_TEST_SQLITE_MODULE` pointing at the **relocated** package. It uses disposable local data, not the E2EE account.
 3. Run the compiled CLI's `--version` or `help` using a disposable HOME/profile to catch missing dynamic workspace imports. Keep `JOPLIN_HEADLESS` unset for this ordinary help invocation. Then verify the headless isolated tests resolve their TypeScript dependency.
 4. Verify the included TypeScript reports 5.9.3. If supplying a rebuild-capable pack, also demonstrate the exact intended compile command from the relocated tree without package downloads.
 
@@ -84,7 +84,7 @@ The production override `JOPLIN_HEADLESS_SQLITE_MODULE` is confirmed in `package
 
 Record `git rev-parse HEAD`, `git rev-parse HEAD^{tree}`, `sha256sum yarn.lock`, Node `process.versions`, `uname -m`, distro/glibc version, Yarn/TypeScript versions, SQLCipher/sqlite3 versions, native addon path and `ldd` output. State whether files are prebuilt runtime, rebuild support, or both. Retain relevant package licenses.
 
-Stage no `.git` history (we already have the bundles), private `.npmrc`, auth-bearing `.yarnrc.yml`, `.env*`, credentials, user profiles/databases, test-account state, API tokens, E2EE keys, private logs, browser profiles or model weights. Use the original repository's nonsecret Yarn configuration or a reviewed sanitized equivalent. This is a packaging boundary, not a demand to encrypt every dependency file.
+Stage no `.git` history (we already have the bundles), private `.npmrc`, auth-bearing `.yarnrc.yml`, `.env*`, credentials, user profiles/databases, test-account state, API tokens, E2EE keys, private logs, browser profiles or model weights. Use the original repository's nonsecret Yarn configuration or a reviewed sanitized equivalent. These packaging instructions do not require encrypting every dependency file.
 
 From the parent of the reviewed clean directory:
 

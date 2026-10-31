@@ -74,4 +74,4 @@ Set the core profile's `api.port` to the port used by the MCP `baseUrl`. When co
 
 `GET /healthz` is an unauthenticated liveness check: HTTP 200 means the MCP listener is running. `GET /readyz` probes the configured core account and returns 503 if the API cannot respond. A ready response does not show that synchronization or decryption has completed. The image has no supervisor; each container runs one selected role.
 
-This guide documents the image and runtime contract. Host-specific service units, secret provisioning and backup procedures belong in the deployment repository.
+This guide describes the image, its configuration and runtime behavior. Host-specific service units, secret setup and backup procedures belong in the deployment repository.

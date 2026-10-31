@@ -1,6 +1,6 @@
 # Thin, single-account web frontend
 
-Local browser/core acceptance passed on 2026-09-21. The real-browser, stock-client and edge observations are recorded in the local reports `BROWSER-RESULTS.md`, `STOCK-WEB-RESULTS.md`, and `EDGE-RESULTS.md`. Encrypted/locked-note UI, physical mobile, deployed HTTPS, and actual PWA installation/relaunch remain unobserved and are deferred in [backlog.md](../backlog.md). This local workflow does not establish atomic concurrent-write protection.
+The local browser/core acceptance checks passed on 2026-09-21. The real-browser, stock-client and edge observations are recorded in the local reports `BROWSER-RESULTS.md`, `STOCK-WEB-RESULTS.md`, and `EDGE-RESULTS.md`. Encrypted/locked-note UI, physical mobile, deployed HTTPS, and actual PWA installation/relaunch remain unobserved and are deferred in [backlog.md](../backlog.md). This local workflow does not establish atomic concurrent-write protection.
 
 ## What this increment provides
 
@@ -101,13 +101,7 @@ wrong incoming Host into the allowed one as an authentication shortcut. Disable 
 retries of write POSTs and response caching. Do not log cookies, credentials, request bodies or
 note responses. Web-key login itself must travel over HTTPS remotely.
 
-The gateway checks exact Host and request Origin, requires a same-origin custom header for every
-API call and grants no CORS access. HTTPS responses use Secure `__Host-` cookies. Static files are
-an explicit allowlist; arbitrary filesystem and Data API routes are not exposed. API responses are
-`Cache-Control: no-store`; static shell assets are revalidated. CSP restricts scripts and network
-requests to the application, denies framing of the app and allows only the fixed preview stylesheet
-hash. These are implemented controls, not evidence that a real external TLS route has been tested.
-Any configured proxy/edge provider that terminates TLS can see the transported note content.
+The gateway checks exact Host and request Origin, requires a same-origin custom header for every API call and grants no CORS access. HTTPS responses use Secure `__Host-` cookies. Static files are an explicit allowlist; arbitrary filesystem and Data API routes are not exposed. API responses are `Cache-Control: no-store`; static shell assets are revalidated. CSP restricts scripts and network requests to the application, denies framing of the app and allows only the fixed preview stylesheet hash. These controls are implemented, but a real external TLS route has not been tested. Any configured proxy/edge provider that terminates TLS can see the transported note content.
 
 ## Reading, editing and preview boundaries
 
@@ -184,7 +178,7 @@ They exercise the production web entry/adapter and actual pinned Markdown parser
 Joplin persistence/E2EE, a real browser's security enforcement, or a live embedding model. Existing
 native tests require the existing documented native runtime variables. Skips must remain recorded.
 
-`tests/web-browser.py` is a permitted-Chromium acceptance runner against a synthetic HTTP core. It was blocked before navigation in this sandbox (`ERR_BLOCKED_BY_ADMINISTRATOR`); its assertions are not claimed passed. This is separate from the manual local browser/core acceptance summarized above.
+`tests/web-browser.py` is a Chromium acceptance runner against a synthetic HTTP core. It was blocked before navigation in this sandbox (`ERR_BLOCKED_BY_ADMINISTRATOR`), so its assertions did not run. This is separate from the manual local browser/core acceptance summarized above.
 
 References for deployment behavior: MDN's PWA installability guide and Set-Cookie reference:
 https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/Guides/Making_PWAs_installable
