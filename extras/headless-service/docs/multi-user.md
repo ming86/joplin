@@ -28,7 +28,7 @@ other's sessions. Cookies are **not** confidential between ports of the same
 host. All loopback services in that topology must be trusted. Use distinct
 HTTPS hostnames and the existing host-only Secure cookie policy for deployment,
 not mutually untrusted applications on different ports of one hostname.
-The actual ingress/device/install checks are [backlogged](../BACKLOG.md).
+The actual ingress/device/install checks are [backlogged](../backlog.md).
 
 All interfaces remain allowlisted. Account A's credentials are rejected at B's
 endpoint. A guessed B note ID is looked up only in A's core; identical IDs in two
@@ -192,7 +192,7 @@ node extras/headless-service/mcp-connect.mjs /private/alice-mcp-connection.json
 Configure that command in the MCP host instead of starting `mcp.mjs` against the
 same index. The bridge does not open a profile/index or know the DB/E2EE key. The
 handshake is local transport authentication, not a new public MCP protocol or
-remote OAuth endpoint. All existing protocol/tool limits remain in [MCP.md](MCP.md).
+remote OAuth endpoint. All existing protocol/tool limits remain in [mcp.md](mcp.md).
 Remote stdio transport, operator permissions and credential provisioning must be
 configured deliberately; this increment does not deploy a public MCP listener.
 
@@ -204,7 +204,7 @@ configured deliberately; this increment does not deploy a public MCP listener.
 
 The interface run initially hit a semantic-index propagation delay after a write. Its final checks passed after the acceptance runner used a bounded post-write wait; earlier failures remain recorded in `INTERFACE-RESULTS.md`. A `ready` state with zero pending items alone can predate the semantic poll that notices a newly written note, so allow propagation before asserting search results.
 
-The four intentionally deferred observations remain in [BACKLOG.md](../BACKLOG.md). They are outside the passed local two-account acceptance.
+The four intentionally deferred observations remain in [backlog.md](../backlog.md). They are outside the passed local two-account acceptance.
 
 Primary runtime references checked for this implementation: Node v22.16.0
 child_process (extra descriptors, IPC, process groups), net (Unix sockets), fs

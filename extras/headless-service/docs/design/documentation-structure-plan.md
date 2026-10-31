@@ -1,6 +1,6 @@
 # Headless service documentation structure plan
 
-**Status: implementation and independent review complete; ready to commit.** The user approved this documentation cleanup on 2026-10-31. This document records its scope, decisions, and review history.
+**Status: original documentation cleanup committed; authorized lowercase filename follow-up implemented and pending commit.** The user approved the original documentation cleanup on 2026-10-31. This document preserves that historical plan and records the later filename follow-up.
 
 ## Purpose and scope
 
@@ -52,7 +52,9 @@ Apply that rule to the current records as follows:
 
 Before editing semantic-search wording, reconcile the service README's completed-indexing statement with the pending full-indexing or recovery language in `MCP.md`. Verify that they describe the same scope and evidence; do not promote private deployment values into public docs. If the evidence leaves a material uncertainty about what the docs should claim, surface that decision under the existing user-consultation policy.
 
-## Planned organization
+## Original planned organization
+
+The tree below records the original approved plan before the lowercase filename follow-up. Its uppercase filenames remain here as historical plan details.
 
 After implementation, the relevant structure should be:
 
@@ -113,4 +115,12 @@ Independent rubber-duck review of the completed cleanup on 2026-10-31 found one 
 
 ## Lifecycle of this plan
 
-This plan remains as the review record for this documentation cleanup. Durable architectural decisions now live in the service README and root guidance; this plan preserves the scope, implementation notes, and review history.
+This plan is retained for review of the documentation cleanup and its filename follow-up. Durable architectural decisions now live in the service README and root guidance. After the follow-up is reviewed and recorded in Git, remove this plan if it no longer serves a purpose; it is not intended as a permanent archive by default.
+
+## Follow-up: lowercase current filenames (2026-10-31)
+
+The user authorized lowercasing the current documentation filenames on 2026-10-31, after the original cleanup was committed. The filesystem renames and current Markdown link updates are implemented; this follow-up is pending commit.
+
+Current names are `backlog.md`, `docs/mcp.md`, `docs/semantic.md`, `docs/multi-user.md`, `docs/web.md`, `docs/clipping.md`, `docs/design/desktop-backend-design.md`, and `docs/design/documentation-structure-plan.md`. `README.md` and `AGENTS.md` retain their conventional uppercase names. Dated evidence filenames are unchanged.
+
+The uppercase paths above remain as historical original-plan references; the maintained service documentation now links to the current lowercase paths.

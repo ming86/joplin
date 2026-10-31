@@ -1,6 +1,6 @@
 # Thin, single-account web frontend
 
-Local browser/core acceptance passed on 2026-09-21. The real-browser, stock-client and edge observations are recorded in the local reports `BROWSER-RESULTS.md`, `STOCK-WEB-RESULTS.md`, and `EDGE-RESULTS.md`. Encrypted/locked-note UI, physical mobile, deployed HTTPS, and actual PWA installation/relaunch remain unobserved and are deferred in [BACKLOG.md](../BACKLOG.md). This local workflow does not establish atomic concurrent-write protection.
+Local browser/core acceptance passed on 2026-09-21. The real-browser, stock-client and edge observations are recorded in the local reports `BROWSER-RESULTS.md`, `STOCK-WEB-RESULTS.md`, and `EDGE-RESULTS.md`. Encrypted/locked-note UI, physical mobile, deployed HTTPS, and actual PWA installation/relaunch remain unobserved and are deferred in [backlog.md](../backlog.md). This local workflow does not establish atomic concurrent-write protection.
 
 ## What this increment provides
 
@@ -166,7 +166,7 @@ note, comparison and search state; clipboard contents remain outside the app's c
 The shell includes a web manifest, 192/512 icons from the repository's existing icon, responsive CSS
 and an install prompt button where the browser supplies that event. There is deliberately no service
 worker or promised offline shell/notes. A manifest and icons are not an observed OS installation.
-The 2026-09-21 local run observed desktop and phone-sized browser layouts. Physical-device behavior, deployed HTTPS, actual installation/relaunch, and locked-note UI remain unobserved in [BACKLOG.md](../BACKLOG.md).
+The 2026-09-21 local run observed desktop and phone-sized browser layouts. Physical-device behavior, deployed HTTPS, actual installation/relaunch, and locked-note UI remain unobserved in [backlog.md](../backlog.md).
 
 ## Tests
 

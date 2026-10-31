@@ -24,7 +24,7 @@ Run as before:
 node /absolute/repo/extras/headless-service/mcp.mjs /private/mcp-semantic.json
 ```
 
-The process asynchronously polls and indexes while serving MCP. It is **one semantic DB owner per account**: do not launch several such MCP processes against the same DB. Additional read-only MCP configurations without semantic enabled can still use core keyword search. The [managed-account gateway](MULTI-USER.md) routes requests to the account worker that owns its semantic engine.
+The process asynchronously polls and indexes while serving MCP. It is **one semantic DB owner per account**: do not launch several such MCP processes against the same DB. Additional read-only MCP configurations without semantic enabled can still use core keyword search. The [managed-account gateway](multi-user.md) routes requests to the account worker that owns its semantic engine.
 
 On orderly shutdown the indexer is cancelled and its DB/lease closed. After an unclean kill a `semantic.sqlite.lock/owner.json` directory may remain. Confirm that no process owns that DB before manually removing this directory; there is no unsafe automatic takeover of a possibly live owner. Never remove the actual DB to recover just a stale lease.
 
