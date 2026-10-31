@@ -80,6 +80,8 @@ The 2026-10-24 check used 20 synthetic chunks and 10 English, Chinese and Malay 
 
 Status distinguishes unavailable, indexing, ready and degraded, and includes pending/indexed/failed counts, `lastReconciledAt` for the latest initial, manual, or reset full scan, known successful usage and retry time. A ready index does not show that Joplin has synchronized every remote change, and it does not guarantee that the provider will remain available. Provider failures on an individual query are reflected in that result. Usage reports known successful response tokens, prepared bytes and successful calls; it excludes tokens the provider may charge for failed/ambiguous requests. The checks did not measure whether a corpus fits a provider's free tier or what it would cost.
 
+`ready` and zero pending notes describe changes the indexer has observed and processed. A newly saved note may not appear in those counts or semantic results until a later event-feed poll observes it and embedding work completes. The worker waits for the current indexing cycle to finish before starting its next poll interval, so the five-second default is not an end-to-end freshness guarantee.
+
 ## Tests and checks against a live provider
 
 The native tests use the real encrypted Joplin core and real SQLCipher storage, but a deterministic HTTP embedding fixture. They validate wiring/consistency/encryption, not live model quality. Existing core/MCP tests remain regressions.
