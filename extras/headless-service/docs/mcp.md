@@ -236,7 +236,7 @@ The native test creates fresh disposable local profiles, synthetic keys/tokens a
 
 That normal-mode client uses the **same compiled binary with headless mode disabled**, not an independently built unmodified upstream binary. The sync target is a local filesystem, not a new Joplin Server validation. Existing builder evidence for the earlier stock-client/Server round trip is carried forward, not relabeled as a new local run.
 
-The test/reference client in `scripts/lib/stdio-client.mjs` is deliberately separate from the server implementation and runs it as a subprocess. It is **not the official SDK**. The read-only Codex CLI observation passed; its report is in [the Phase 2A evidence](../evidence/2026-09-20-codex/PHASE2A-CODEX-RESULTS.md). Deployed HTTP 2026-07-28 requests and the connected ChatGPT file workflows described above have also been observed. These checks cover only the named hosts and operations; they do not establish that every MCP client or SDK interoperates.
+The test/reference client in `scripts/lib/stdio-client.mjs` is deliberately separate from the server implementation and runs it as a subprocess. It is **not the official SDK**. Deployed HTTP 2026-07-28 requests and the connected ChatGPT file workflows described above have also been observed. Those checks cover only the named hosts and operations; they do not establish that every MCP client or SDK interoperates.
 
 ## Protocol references
 

@@ -1,6 +1,6 @@
 # Headless service documentation structure plan
 
-**Status: original documentation cleanup committed; authorized lowercase filename follow-up implemented and pending commit.** The user approved the original documentation cleanup on 2026-10-31. This document preserves that historical plan and records the later filename follow-up.
+**Status: original documentation cleanup and lowercase filename follow-up committed; authorized historical-evidence removal implemented and pending commit.** The user approved the original documentation cleanup on 2026-10-31. This document preserves that historical plan and records later follow-ups.
 
 ## Purpose and scope
 
@@ -124,3 +124,7 @@ The user authorized lowercasing the current documentation filenames on 2026-10-3
 Current names are `backlog.md`, `docs/mcp.md`, `docs/semantic.md`, `docs/multi-user.md`, `docs/web.md`, `docs/clipping.md`, `docs/design/desktop-backend-design.md`, and `docs/design/documentation-structure-plan.md`. `README.md` and `AGENTS.md` retain their conventional uppercase names. Dated evidence filenames are unchanged.
 
 The uppercase paths above remain as historical original-plan references; the maintained service documentation now links to the current lowercase paths.
+
+## Follow-up: historical evidence removal (2026-10-31)
+
+The user approved removal of the three 2026-09-20 Codex result reports on 2026-10-31. Git history preserves those reports. `docs/mcp.md` and `docs/semantic.md` retain the current run guidance, contracts and limits needed to operate and assess the service; links and acceptance claims tied to the removed reports were deleted. The semantic check instructions describe its current full source reconciliation before relevance queries. No dated tool-count or model-run narrative was transferred, and historical results are not presented as current-version validation.

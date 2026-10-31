@@ -1,7 +1,5 @@
 # Semantic search
 
-The Phase 2A read-only selected-host check passed on Codex CLI 0.155.1 with directly observed exit 0. Its exact supplied report is under `../evidence/2026-09-20-codex/`. No fixes were needed. That does not claim write-mode host testing or full MCP conformance.
-
 This increment adds a separate encrypted derived index, an OpenAI-compatible HTTP embedding transport, incremental indexing and semantic/hybrid search. The index is separate from Joplin's core store and leaves the original FTS and E2EE behavior unchanged. It introduces no disk/volume encryption, blanket attachment policy, cloud ingress, LLM chat, reranker or vector server.
 
 ## Operational setup
@@ -28,7 +26,7 @@ The process asynchronously polls and indexes while serving MCP. It is **one sema
 
 On orderly shutdown the indexer is cancelled and its DB/lease closed. After an unclean kill a `semantic.sqlite.lock/owner.json` directory may remain. Confirm that no process owns that DB before manually removing this directory; there is no unsafe automatic takeover of a possibly live owner. Never remove the actual DB to recover just a stale lease.
 
-A missing/wrong key, foreign-account DB, unsupported native binding or incompatible configuration reports semantic unavailable while leaving the private core and keyword interface usable. It does not overwrite the protected index or silently create a plaintext replacement. Ordinary MCP configuration without `semantic` retains Phase 2A behavior.
+A missing/wrong key, foreign-account DB, unsupported native binding or incompatible configuration reports semantic unavailable while leaving the private core and keyword interface usable. It does not overwrite the protected index or silently create a plaintext replacement. Ordinary MCP configuration without `semantic` keeps keyword search available without starting the semantic runtime.
 
 ## Provider and model contract
 
@@ -106,11 +104,9 @@ Then use an approved test corpus and known note IDs, for example:
 node extras/headless-service/scripts/check-semantic.mjs /private/mcp-semantic.json /private/relevance.json
 ```
 
-This **starts the indexer and transmits eligible configured-account notes to the chosen endpoint**. Stop any previous semantic owner first. It does not create/update/delete notes or reset E2EE. It waits for ready, executes real semantic searches through the reference MCP client, checks expected notes in the top 10, prints ranks/timings without note text/IDs, and closes the MCP owner. Save the output and exit code. The deadline is configurable up to one hour; for larger backlogs, let the MCP indexer complete first.
+This **starts the indexer and transmits eligible configured-account notes to the chosen endpoint**. Stop any previous semantic owner first. It performs a full source reconciliation and indexes the resulting work before running the relevance cases, so recently added notes are included when the check completes. It does not create/update/delete notes or reset E2EE. It executes semantic searches through the reference MCP client, checks expected notes in the top 10, prints ranks/timings without note text/IDs, and closes the MCP owner. Save the output and exit code. The deadline is configurable up to one hour; for larger backlogs, let the MCP indexer complete first.
 
 Alternatively `node extras/headless-service/semantic-index.mjs /private/mcp-semantic.json` executes one bounded indexing cycle without stdio hosting. Exit 0 means ready, 2 means more indexing/degraded work, 1 is setup/runtime failure, and 130 means interrupted. The offline engine API also supports `runOnce({ rescan: true })` for an exceptional full repair. Do not run either operation alongside an MCP semantic owner using the same database.
-
-Phase 2A's already-passed read-only protocol check need not be repeated wholesale. The targeted two-account run exercised real semantic/hybrid search and indexing, but did not measure retrieval on production notes, long-input behavior, sustained latency/lag or endpoint durability.
 
 ## Primary interface references
 
