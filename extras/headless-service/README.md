@@ -2,6 +2,10 @@
 
 This implementation has two connected parts: changes in Joplin's native headless CLI/core under `packages/app-cli` and `packages/lib`, and the account-bound service and launchers under `extras/headless-service`. The external service talks to the core's private Data API; native code owns the profile, synchronization and revision-guarded note update. The service package can also be imported as a library, but its lower-level mutation methods do not all provide the MCP revision guarantee described below.
 
+## Where the headless work lives
+
+Preserve Joplin's upstream monorepo layout and existing application behavior. The headless service reuses Joplin's native synchronization, E2EE, and data models instead of building parallel implementations. Service features and adapters live in `extras/headless-service`; `extras/cloudflare-mcp-worker` remains a separate project. Keeping native patches in `packages/app-cli` and `packages/lib` small and focused makes it easier to bring future upstream changes into this fork. A native change is appropriate when the existing API cannot correctly meet a requirement, such as the atomic revision guard for MCP note updates.
+
 The external JavaScript adapters require Node 22.12 or newer and use Node built-ins without third-party adapter dependencies. The native core still needs its normal built runtime and dependencies.
 
 ## Current behavior
