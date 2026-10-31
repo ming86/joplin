@@ -1,6 +1,6 @@
-# Semantic search — Phase 2B
+# Semantic search
 
-The Phase 2A read-only selected-host check passed on Codex CLI 0.155.1 with directly observed exit 0. Its exact supplied report is under `evidence/2026-09-20-codex/`. No fixes were needed. That does not claim write-mode host testing or full MCP conformance.
+The Phase 2A read-only selected-host check passed on Codex CLI 0.155.1 with directly observed exit 0. Its exact supplied report is under `../evidence/2026-09-20-codex/`. No fixes were needed. That does not claim write-mode host testing or full MCP conformance.
 
 This increment adds a separate encrypted derived index, an OpenAI-compatible HTTP embedding transport, incremental indexing and semantic/hybrid search. The index is separate from Joplin's core store and leaves the original FTS and E2EE behavior unchanged. It introduces no disk/volume encryption, blanket attachment policy, cloud ingress, LLM chat, reranker or vector server.
 
@@ -10,7 +10,7 @@ Start with the existing encrypted core and its private API. Copy `scripts/semant
 
 The sample describes one account. For multiple accounts, retain a distinct core profile, API token, semantic database path and semantic key for each account. Keep each account's index in its own derived database.
 
-The semantic worker reads Joplin's local event feed every five seconds and processes persisted note changes and retries. This reads the core's event API; it does not run Joplin synchronization every five seconds. The configured core's remote polling remains 20 seconds and its periodic full sync remains 120 seconds.
+The semantic worker reads Joplin's local event feed every five seconds and processes persisted note changes and retries. This reads the core's event API; it does not run Joplin synchronization every five seconds. The core's remote-poll interval is configured independently; see [the container guide](../deploy/README.md#core-profile-and-key) for its default and completion-based scheduling.
 
 Generate **a separate 32-byte random semantic DB key** as 64 hexadecimal characters plus an optional newline, and deliver it as an owner-only file (`0600`) through your existing secret-delivery mechanism. Keep this key/recovery copy separate from index backups; file permissions alone do not protect a copied key beside its DB. Do not reuse, regenerate or reset the existing Joplin E2EE identity or core database key. The MCP process needs its semantic DB key and the core API token, not the core's database or E2EE key.
 

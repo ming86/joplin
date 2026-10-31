@@ -1,9 +1,6 @@
-# Phase 4 — thin, single-account web frontend
+# Thin, single-account web frontend
 
-Status: implementation and isolated/service/HTTP tests, **not completed Phase 4 acceptance**.
-Actual permitted-browser behavior, the installed Joplin core round trip, a stock-client edit,
-remote HTTPS and OS installation still need the observations in `CODEX-PHASE4-VALIDATION.md`.
-The earlier Phase 3 ordinary-client plaintext check remains separate.
+Local browser/core acceptance passed on 2026-09-21. The real-browser, stock-client and edge observations are recorded in the local reports `BROWSER-RESULTS.md`, `STOCK-WEB-RESULTS.md`, and `EDGE-RESULTS.md`. Encrypted/locked-note UI, physical mobile, deployed HTTPS, and actual PWA installation/relaunch remain unobserved and are deferred in [BACKLOG.md](../BACKLOG.md). This local workflow does not establish atomic concurrent-write protection.
 
 ## What this increment provides
 
@@ -169,7 +166,7 @@ note, comparison and search state; clipboard contents remain outside the app's c
 The shell includes a web manifest, 192/512 icons from the repository's existing icon, responsive CSS
 and an install prompt button where the browser supplies that event. There is deliberately no service
 worker or promised offline shell/notes. A manifest and icons are not an observed OS installation.
-Permitted-browser, mobile layout, HTTPS and install behavior are still acceptance checks.
+The 2026-09-21 local run observed desktop and phone-sized browser layouts. Physical-device behavior, deployed HTTPS, actual installation/relaunch, and locked-note UI remain unobserved in [BACKLOG.md](../BACKLOG.md).
 
 ## Tests
 
@@ -187,10 +184,7 @@ They exercise the production web entry/adapter and actual pinned Markdown parser
 Joplin persistence/E2EE, a real browser's security enforcement, or a live embedding model. Existing
 native tests require the existing documented native runtime variables. Skips must remain recorded.
 
-`tests/web-browser.py` is a permitted-Chromium acceptance runner against a synthetic HTTP core.
-It was blocked before navigation in this sandbox (`ERR_BLOCKED_BY_ADMINISTRATOR`); do not bypass
-browser policy. Its assertions are not claimed passed. It is distinct from the actual-core/stock-client
-check in the Codex guide.
+`tests/web-browser.py` is a permitted-Chromium acceptance runner against a synthetic HTTP core. It was blocked before navigation in this sandbox (`ERR_BLOCKED_BY_ADMINISTRATOR`); its assertions are not claimed passed. This is separate from the manual local browser/core acceptance summarized above.
 
 References for deployment behavior: MDN's PWA installability guide and Set-Cookie reference:
 https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/Guides/Making_PWAs_installable

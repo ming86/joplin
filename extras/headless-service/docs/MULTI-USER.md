@@ -1,4 +1,4 @@
-# Phase 5 — managed independent accounts
+# Managed independent accounts
 
 This increment operates a small, fixed Linux deployment using the existing
 account interfaces. It does not make one Joplin process load multiple profiles.
@@ -28,7 +28,7 @@ other's sessions. Cookies are **not** confidential between ports of the same
 host. All loopback services in that topology must be trusted. Use distinct
 HTTPS hostnames and the existing host-only Secure cookie policy for deployment,
 not mutually untrusted applications on different ports of one hostname.
-The actual ingress/device/install checks are [backlogged](BACKLOG.md).
+The actual ingress/device/install checks are [backlogged](../BACKLOG.md).
 
 All interfaces remain allowlisted. Account A's credentials are rejected at B's
 endpoint. A guessed B note ID is looked up only in A's core; identical IDs in two
@@ -99,7 +99,7 @@ node extras/headless-service/account-core.mjs /private/alice.json status
 
 `import-config` is exactly `config --import`; supply its JSON through stdin from a
 controlled source, with the intended sync target/credentials, matching `api.port`
-and `api.token`. See the existing [headless setup contract](../../readme/dev/headless-client.md).
+and `api.token`. See the existing [headless setup contract](../../../readme/dev/headless-client.md).
 Do not put passwords in arguments, shell history, logs or an ordinary file.
 `sync` and `decrypt` are initial account setup, not periodic service commands.
 The wrapper has no default profile, `e2ee enable`, reset, key-generation, export,
@@ -198,18 +198,13 @@ configured deliberately; this increment does not deploy a public MCP listener.
 
 ## Validation boundary
 
-`tests/fleet.test.mjs` exercises actual supervisor/account/core subprocesses,
-web/clipper HTTP and authenticated MCP bridge processes against explicitly
-simulated, persistent synthetic cores. It tests cross-account rejection, identical
-IDs, independent writes/restarts, key failure, cookie isolation, revoke/re-enable,
-credential rotation, core/worker crashes and parent disconnect. Those fixture
-files are ordinary JSON, **not encrypted Joplin databases**. Existing native
-SQLCipher gates remain separately reported, never relabeled as passing fixtures.
+`tests/fleet.test.mjs` exercises actual supervisor/account/core subprocesses, web/clipper HTTP and authenticated MCP bridge processes against explicitly simulated, persistent synthetic cores. It tests cross-account rejection, identical IDs, independent writes/restarts, key failure, cookie isolation, revoke/re-enable, credential rotation, core/worker crashes and parent disconnect. Those fixture files are ordinary JSON, **not encrypted Joplin databases**. Existing native SQLCipher gates remain separately reported, never relabeled as passing fixtures.
 
-The focused selected-host/native acceptance is in [CODEX-PHASE5-VALIDATION.md](CODEX-PHASE5-VALIDATION.md).
-No previously accepted Phase 1–4 workflow needs a broad rerun. The four deferred
-observations stay in [BACKLOG.md](BACKLOG.md), with no physical-device, HTTPS,
-locked-note UI or PWA-install claim from this phase's process tests.
+**Manual two-account acceptance passed on 2026-09-21.** The final entries in the local reports `INTERFACE-RESULTS.md`, `LIFECYCLE-RESULTS.md`, and `STOCK-RECEIPT-RESULTS.md` record per-account web, clipper, and MCP writes and isolation; keyword, semantic, and hybrid retrieval; independent restart; missing-key fail-closed behavior and recovery; durable disable/re-enable; and separate normal-mode stock-client sync, existing-key decryption, and plaintext reads of each account's synthetic note. The stock receipt used a separately built unmodified Joplin client. This targeted run used disposable accounts and synthetic data; it does not establish behavior for other accounts or content, deployed ingress, physical devices, locked-note UI, or PWA installation.
+
+The interface run initially hit a semantic-index propagation delay after a write. Its final checks passed after the acceptance runner used a bounded post-write wait; earlier failures remain recorded in `INTERFACE-RESULTS.md`. A `ready` state with zero pending items alone can predate the semantic poll that notices a newly written note, so allow propagation before asserting search results.
+
+The four intentionally deferred observations remain in [BACKLOG.md](../BACKLOG.md). They are outside the passed local two-account acceptance.
 
 Primary runtime references checked for this implementation: Node v22.16.0
 child_process (extra descriptors, IPC, process groups), net (Unix sockets), fs
