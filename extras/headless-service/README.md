@@ -58,7 +58,7 @@ The library's `account.createNote` retains the generic Data API creation path. M
 
 `mcp.mjs` provides stdio MCP. `mcp-http.mjs` provides stateless HTTP MCP with a private bearer credential; it defaults to loopback. Neither launcher starts the Joplin core, opens its database, or needs the core DB key or E2EE password. Configure the launcher with the existing private Data API endpoint and token. Both transports are read-only by default; writes require operator configuration. See [mcp.md](docs/mcp.md) for configuration, tool contracts, protocol behavior and smoke commands.
 
-Related entry points are `fleet.mjs` for managed account workers, `web.mjs` for the browser interface, and `clipper.mjs` for selected-text capture. Their boundaries and setup are documented in [multi-user.md](docs/multi-user.md), [web.md](docs/web.md), and [clipping.md](docs/clipping.md). The deferred browser, device, HTTPS and installation observations remain scoped in [backlog.md](backlog.md); they are not prerequisites for the managed-account implementation. The [stock Desktop backend design](docs/design/desktop-backend-design.md) describes a separate proposal to connect an external adapter to unmodified Joplin Desktop; it does not describe this headless service's current runtime.
+Related entry points are `fleet.mjs` for managed account workers, `web.mjs` for the browser interface, and `clipper.mjs` for selected-text capture. Their boundaries and setup are documented in [multi-user.md](docs/multi-user.md), [web.md](docs/web.md), and [clipping.md](docs/clipping.md). The deferred browser, device, HTTPS and installation observations remain scoped in [backlog.md](backlog.md); they are not prerequisites for the managed-account implementation.
 
 ## Local checks
 
