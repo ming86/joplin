@@ -6,6 +6,8 @@ import { privateDirectory, socketPath } from './files.mjs';
 import { ServiceError, requireValue } from '../errors.mjs';
 import { createMcpSession } from '../mcp/session.mjs';
 import { serveStdio } from '../mcp/stdio.mjs';
+import { createPayloadCapacity } from '../payload-capacity.mjs';
+import { createNoteFileResources } from '../mcp/note-file-resources.mjs';
 
 // One bounded first line. Pause before yielding so pipelined MCP bytes cannot
 // disappear between authentication and the existing stdio frame reader.
@@ -50,19 +52,21 @@ export async function listenPrivateSocket(filename, handler, maxConnections = 16
 	} };
 }
 const digest = s => createHash('sha256').update(s).digest();
-export async function startMcpSocket({ socketPath: filename, token, service, allowWrites }) {
+/** Share account payload capacity and export lifetime across authenticated socket connections. */
+export async function startMcpSocket({ socketPath: filename, token, service, allowWrites, payloadCapacity = createPayloadCapacity() }) {
 	requireValue(/^[A-Za-z0-9_-]{32,256}$/.test(token), 'invalid_mcp_credential');
 	const expected = digest(token), transports = new Set();
+	const noteFileResources = createNoteFileResources({ payloadCapacity });
 	const server = await listenPrivateSocket(filename, async socket => {
 		const hello = await firstLine(socket, { maxBytes: 512 });
 		if (!hello || Object.keys(hello).length !== 1 || typeof hello.token !== 'string' || hello.token.length > 256 || !timingSafeEqual(digest(hello.token), expected)) { socket.end('{"authenticated":false}\n'); return; }
 		socket.write('{"authenticated":true}\n');
-		const transport = serveStdio(createMcpSession(service, { allowWrites }), { input: socket, output: socket });
+		const transport = serveStdio(createMcpSession(service, { allowWrites, payloadCapacity, noteFileResources }), { input: socket, output: socket, payloadCapacity });
 		transports.add(transport);
 		socket.once('close', () => { void transport.close(); });
 		transport.done.then(() => { transports.delete(transport); socket.end(); }); socket.resume();
 	});
-	return { async close() { const closing = [...transports].map(t => t.close()); await server.close(); await Promise.allSettled(closing); } };
+	return { async close() { const closing = [...transports].map(t => t.close()); await server.close(); await Promise.allSettled(closing); noteFileResources.close(); } };
 }
 export async function connectPrivateSocket(filename) {
 	socketPath(filename);

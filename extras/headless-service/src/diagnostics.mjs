@@ -6,6 +6,7 @@ const loggedErrors = new WeakSet();
 const diagnosticCodes = new Set([
 	'backend_unavailable', 'backend_request_failed', 'backend_authorization_failed', 'invalid_backend_response',
 	'write_outcome_unknown', 'operation_failed', 'internal_error', 'note_file_download_failed',
+	'resource_capacity_exceeded', 'regex_timeout', 'regex_worker_failed',
 	'semantic_startup_unavailable',
 	'semantic_store_unavailable', 'semantic_store_error', 'invalid_embedding_response',
 	'embedding_space_mismatch', 'invalid_stored_vector',
@@ -25,6 +26,10 @@ export function requestDiagnostics(input = {}) {
 	if (typeof input.path === 'string' && /^\/?[A-Za-z0-9_:/-]+$/.test(input.path) && !input.path.includes('://')) result.path = input.path;
 	for (const key of ['operation', 'stage']) if (fixedName(input[key])) result[key] = input[key];
 	for (const key of ['elapsedMs', 'timeoutMs']) if (Number.isFinite(input[key]) && input[key] >= 0) result[key] = Math.round(input[key]);
+	// Capacity diagnostics describe occupancy, never the buffered payload itself.
+	for (const key of ['usedBytes', 'requestedBytes', 'limitBytes', 'activeCount']) {
+		if (Number.isSafeInteger(input[key]) && input[key] >= 0) result[key] = input[key];
+	}
 	if (Number.isInteger(input.status) && input.status >= 100 && input.status <= 599) result.status = input.status;
 	return result;
 }

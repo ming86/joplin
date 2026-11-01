@@ -3,6 +3,8 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { createMcpSession, modernProtocolVersion, protocolVersions, rpcError, unsupportedProtocolVersion } from './session.mjs';
 import { createNoteFileResources } from './note-file-resources.mjs';
 import { logOperationError } from '../diagnostics.mjs';
+import { createPayloadCapacity } from '../payload-capacity.mjs';
+import { ServiceError } from '../errors.mjs';
 
 /** Preserve the session concurrency limit across otherwise independent POSTs. */
 const maxDispatches = 8;
@@ -93,37 +95,61 @@ function modernHeadersMatch(headers, message) {
 }
 
 /** Read JSON and decode UTF-8 strictly; disconnection only stops body collection. */
-function readBody(req) {
+function readBody(req, requestPayload, signal) {
 	return new Promise((resolve, reject) => {
 		let parts = [];
 		let settled = false;
-		/** Release buffered bytes immediately after a body failure. */
-		function fail(code) {
+		/** Stop retaining chunks after collection finishes or fails. */
+		function clean() {
+			req.removeListener('data', data);
+			req.removeListener('end', end);
+			req.removeListener('aborted', aborted);
+			signal.removeEventListener('abort', aborted);
+		}
+		/** Discard collected storage while preserving the original capacity failure. */
+		function fail(error) {
 			if (settled) return;
 			settled = true;
 			parts = [];
-			reject(new Error(code));
+			clean();
+			req.resume();
+			reject(error);
 		}
-		req.on('data', part => {
-			if (settled) return;
-			parts.push(part);
-		});
-		req.on('error', () => fail('invalid_body'));
-		req.on('aborted', () => fail('invalid_body'));
-		req.on('end', () => {
+		/** Account for each actual chunk before retaining it. */
+		function data(part) {
+			try { requestPayload.reserve(part.length); parts.push(part); }
+			catch (error) { fail(error); }
+		}
+		/** A disconnected collector cannot dispatch an operation. */
+		function aborted() { fail(new Error('invalid_body')); }
+		/** Parse only a complete, strictly decoded UTF-8 body. */
+		function end() {
 			if (settled) return;
 			try {
 				const message = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(parts)));
 				settled = true;
 				parts = [];
+				clean();
 				resolve(message);
-			} catch { fail('invalid_body'); }
-		});
+			} catch (error) { fail(error); }
+		}
+		req.on('data', data);
+		// Retain the error listener through stream closure, including after a rejected body.
+		req.on('error', aborted);
+		req.once('aborted', aborted);
+		req.once('end', end);
+		signal.addEventListener('abort', aborted, { once: true });
+		if (signal.aborted) aborted();
 	});
 }
 
+/** Return the stable capacity failure without misclassifying it as malformed JSON. */
+function capacityError(id, error) {
+	return rpcError(id, -32000, error.message, { code: error.code });
+}
+
 /** Serve stateless MCP JSON POSTs bound to one operator-configured service. */
-export async function startMcpHttpServer({ service, allowWrites = false, bearerToken, listenHost = '127.0.0.1', listenPort = 0, allowedOrigins = [] }) {
+export async function startMcpHttpServer({ service, allowWrites = false, bearerToken, listenHost = '127.0.0.1', listenPort = 0, allowedOrigins = [], payloadCapacity = createPayloadCapacity() }) {
 	if (typeof bearerToken !== 'string' || !bearerToken || /\s/.test(bearerToken)) throw new Error('invalid_mcp_http_token');
 	if (!Number.isInteger(listenPort) || listenPort < 0 || listenPort > 65535) throw new Error('invalid_mcp_http_port');
 	if (typeof listenHost !== 'string' || !listenHost.trim()) throw new Error('invalid_mcp_http_host');
@@ -131,8 +157,10 @@ export async function startMcpHttpServer({ service, allowWrites = false, bearerT
 	const expectedCredential = credentialDigest(`Bearer ${bearerToken}`);
 	const origins = new Set(allowedOrigins);
 	// Share one store across per-POST sessions so exports survive later reads; server shutdown clears it.
-	const noteFileResources = createNoteFileResources();
+	const noteFileResources = createNoteFileResources({ payloadCapacity });
 	const sessions = new Set();
+	const collectors = new Set();
+	let admissions = 0;
 	const probes = new Set();
 	const pending = new Set();
 	let closing = false;
@@ -172,45 +200,69 @@ export async function startMcpHttpServer({ service, allowWrites = false, bearerT
 		if (!/^application\/json(?:\s*;\s*charset\s*=\s*(?:utf-8|"utf-8"))?\s*$/i.test(req.headers['content-type'] ?? '')
 			|| (req.headers['content-encoding'] !== undefined && req.headers['content-encoding'].toLowerCase() !== 'identity')) return respond(res, 415, { error: 'json_required' });
 		if (!acceptsJson(req.headers.accept)) return respond(res, 406, { error: 'json_response_required' });
-		const version = req.headers['mcp-protocol-version'];
-		let message;
-		try { message = await readBody(req); }
-		catch { return respond(res, 400, rpcError(null, -32700, 'Parse error')); }
-		const kind = envelopeKind(message);
-		if (!kind) return respond(res, 400, rpcError(null, -32600, 'Invalid Request'));
-		if (version !== undefined && !protocolVersions.includes(version)) return respond(res, 400, unsupportedProtocolVersion(message.id ?? null, version));
-		const modern = version === modernProtocolVersion || message.params?._meta?.['io.modelcontextprotocol/protocolVersion'] === modernProtocolVersion;
-		if (modern && kind !== 'request') return respond(res, 400, rpcError(message.id ?? null, -32600, 'Invalid Request'));
-		if (version === modernProtocolVersion) {
-			const metadata = message.params?._meta;
-			// The header can select modern behavior even when the body cannot select it in the session.
-			if (!record(metadata) || typeof metadata['io.modelcontextprotocol/protocolVersion'] !== 'string'
-				|| !record(metadata['io.modelcontextprotocol/clientCapabilities'])) {
-				return respond(res, 400, rpcError(message.id ?? null, -32602, 'Invalid request metadata'));
-			}
-		}
-		if (modern && !modernHeadersMatch(req.headers, message)) {
-			return respond(res, 400, rpcError(message.id ?? null, -32020, 'Header mismatch'));
-		}
-		if (version === undefined && message.method !== 'initialize') return respond(res, 400, { error: 'protocol_version_required' });
-		if (kind === 'response') return respond(res, 202);
-		if (closing) return respond(res, 503, { error: 'server_closing' });
-		if (sessions.size >= maxDispatches) return respond(res, 503, { error: 'too_many_requests' });
-		const session = createMcpSession(service, { allowWrites, stateless: true, noteFileResources });
-		sessions.add(session);
+		if (admissions >= maxDispatches) return respond(res, 503, { error: 'too_many_requests' });
+		admissions++;
+		const requestPayload = payloadCapacity.createOwner({ operation: 'http_mcp', stage: 'request_body' });
+		const responsePayload = payloadCapacity.createOwner({ operation: 'http_mcp', stage: 'response' });
+		const collector = new AbortController();
+		collectors.add(collector);
+		// Finish and close both release response storage, but dispatched work may still own it.
+		const responseDone = new Promise(resolve => {
+			if (res.destroyed || res.writableFinished) return resolve();
+			res.once('finish', resolve);
+			res.once('close', resolve);
+		});
 		try {
-			// A disconnected client does not cancel a write; only shutdown closes the session.
-			const response = await session.handle(message);
-			if (kind === 'notification') return respond(res, 202);
-			const json = JSON.stringify(response);
-			const errorCode = response.error?.code;
-			const status = errorCode === -32022 ? 400 : modern && errorCode === -32601 ? 404 : modern && errorCode === -32602 ? 400 : 200;
-			respond(res, status, json);
-		} catch (error) {
-			logOperationError(error, { operation: 'http_mcp' });
-			respond(res, 200, rpcError(message.id ?? null, -32603, 'Internal error'));
+			const version = req.headers['mcp-protocol-version'];
+			let message;
+			try { message = await readBody(req, requestPayload, collector.signal); }
+			catch (error) {
+				if (error instanceof ServiceError && error.code === 'resource_capacity_exceeded') return respond(res, 503, capacityError(null, error));
+				return respond(res, closing ? 503 : 400, closing ? { error: 'server_closing' } : rpcError(null, -32700, 'Parse error'));
+			}
+			finally { collectors.delete(collector); }
+			const kind = envelopeKind(message);
+			if (!kind) return respond(res, 400, rpcError(null, -32600, 'Invalid Request'));
+			if (version !== undefined && !protocolVersions.includes(version)) return respond(res, 400, unsupportedProtocolVersion(message.id ?? null, version));
+			const modern = version === modernProtocolVersion || message.params?._meta?.['io.modelcontextprotocol/protocolVersion'] === modernProtocolVersion;
+			if (modern && kind !== 'request') return respond(res, 400, rpcError(message.id ?? null, -32600, 'Invalid Request'));
+			if (version === modernProtocolVersion) {
+				const metadata = message.params?._meta;
+				// The header can select modern behavior even when the body cannot select it in the session.
+				if (!record(metadata) || typeof metadata['io.modelcontextprotocol/protocolVersion'] !== 'string'
+					|| !record(metadata['io.modelcontextprotocol/clientCapabilities'])) {
+					return respond(res, 400, rpcError(message.id ?? null, -32602, 'Invalid request metadata'));
+				}
+			}
+			if (modern && !modernHeadersMatch(req.headers, message)) {
+				return respond(res, 400, rpcError(message.id ?? null, -32020, 'Header mismatch'));
+			}
+			if (version === undefined && message.method !== 'initialize') return respond(res, 400, { error: 'protocol_version_required' });
+			if (kind === 'response') return respond(res, 202);
+			if (closing) return respond(res, 503, { error: 'server_closing' });
+			const session = createMcpSession(service, { allowWrites, stateless: true, noteFileResources, payloadCapacity });
+			sessions.add(session);
+			try {
+				// A disconnected client does not cancel a write; only shutdown closes the session.
+				const response = await session.handle(message, { requestPayload, responsePayload });
+				if (kind === 'notification') return respond(res, 202);
+				const json = JSON.stringify(response);
+				const errorCode = response.error?.code;
+				const status = errorCode === -32022 ? 400 : modern && errorCode === -32601 ? 404 : modern && errorCode === -32602 ? 400 : 200;
+				respond(res, status, json);
+			} catch (error) {
+				logOperationError(error, { operation: 'http_mcp' });
+				respond(res, 200, error instanceof ServiceError && error.code === 'resource_capacity_exceeded'
+					? capacityError(message.id ?? null, error) : rpcError(message.id ?? null, -32603, 'Internal error'));
+			}
+			finally { session.close(); sessions.delete(session); }
+		} finally {
+			collectors.delete(collector);
+			await responseDone;
+			requestPayload.release();
+			responsePayload.release();
+			admissions--;
 		}
-		finally { session.close(); sessions.delete(session); }
 	}
 
 	const server = http.createServer((req, res) => {
@@ -240,6 +292,7 @@ export async function startMcpHttpServer({ service, allowWrites = false, bearerT
 		close() {
 			if (closePromise) return closePromise;
 			closing = true;
+			for (const collector of collectors) collector.abort();
 			for (const session of sessions) session.close();
 			for (const controller of probes) controller.abort();
 			closePromise = new Promise(resolve => {

@@ -201,7 +201,7 @@ export function createAttachmentClient({ request, baseUrl, token, timeoutMs = 10
 	}
 
 	/** Read bytes only after the resource's encryption and lock state has been checked. */
-	async function readBytes(metadata, signal) {
+	async function readBytes(metadata, signal, payloadOwner) {
 		if (metadata.encryption_applied !== 0 || metadata.encryption_blob_encrypted !== 0 || metadata.is_locked !== 0) {
 			throw new ServiceError('attachment_unavailable');
 		}
@@ -233,8 +233,16 @@ export function createAttachmentClient({ request, baseUrl, token, timeoutMs = 10
 			}
 			throw withDiagnostics(failure, diagnostics);
 		}
-		try { return Buffer.from(await response.arrayBuffer()); }
+		try {
+			const parts = [];
+			for await (const chunk of response.body ?? []) {
+				payloadOwner?.reserve(chunk.length);
+				parts.push(Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength));
+			}
+			return Buffer.concat(parts);
+		}
 		catch (error) {
+			if (error instanceof ServiceError && error.code === 'resource_capacity_exceeded') throw error;
 			const code = signal?.aborted ? 'request_cancelled' : combined.aborted ? 'backend_unavailable' : 'attachment_file_unavailable';
 			throw new ServiceError(code, false, undefined, {
 				cause: error,
@@ -276,11 +284,12 @@ export function createAttachmentClient({ request, baseUrl, token, timeoutMs = 10
 			return getAttachment(resourceId, signal);
 		},
 
-		/** Fetch exact resource bytes and return them as canonical base64 for MCP embedded-resource output. */
-		async readAttachment(resourceId, signal) {
+		/** Fetch exact bytes and reserve binary plus base64 bytes on the optional response owner before encoding. The caller retains the owner through response cleanup. */
+		async readAttachment(resourceId, signal, payloadOwner) {
 			const id = identifier(resourceId);
 			const metadata = await getAttachment(id, signal);
-			const bytes = await readBytes(metadata, signal);
+			const bytes = await readBytes(metadata, signal, payloadOwner);
+			payloadOwner?.reserve(4 * Math.ceil(bytes.length / 3));
 			return {
 				...metadata,
 				filename: metadata.filename || displayFilename(metadata),

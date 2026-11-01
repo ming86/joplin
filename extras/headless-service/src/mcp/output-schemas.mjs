@@ -230,7 +230,7 @@ const coreOutputSchemas = {
 
 /** Every existing structured tool error, including validation-only responses. */
 const errorSchema = object({ error: object({
-	code: { type: 'string', description: 'Stable service error code, or operation_failed for an unexpected failure.' },
+	code: { type: 'string', description: 'Stable service error code, including resource_capacity_exceeded when shared payload capacity is unavailable, regex_timeout when grep exhausts its matching allowance, or regex_worker_failed when its matcher fails. Unexpected failures use operation_failed.' },
 	message: { type: 'string', description: 'Safe public detail when supplied for this tool and error.' },
 	outcomeUnknown: { type: 'boolean', description: 'Whether a write may have committed; omitted for argument validation errors.' },
 	action: { type: 'string', description: 'Inspection advice included when the write outcome is unknown.' },

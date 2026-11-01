@@ -62,11 +62,11 @@ export function createAttachmentService({ backend, permit, accountId }) {
 			if (!attachmentEligible(attachment)) throw new ServiceError('attachment_unavailable');
 			return publicMetadata(attachment, accountId);
 		},
-		/** Return eligible resource metadata and the file content encoded as base64. */
-		async readAttachment(resourceId, signal) {
+		/** Return eligible resource bytes as base64, retaining their optional response owner until caller cleanup. */
+		async readAttachment(resourceId, signal, payloadOwner) {
 			permit('read');
 			const id = attachmentId(resourceId);
-			const attachment = await missingResourceAsUnavailable(() => backend().readAttachment(id, signal));
+			const attachment = await missingResourceAsUnavailable(() => backend().readAttachment(id, signal, payloadOwner));
 			requireValue(attachment?.id === id && typeof attachment.filename === 'string', 'invalid_attachment_response');
 			if (!attachmentEligible(attachment)) throw new ServiceError('attachment_unavailable');
 			requireValue(typeof attachment.contentBase64 === 'string', 'attachment_file_unavailable');

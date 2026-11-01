@@ -1,3 +1,5 @@
+import type { PayloadOwner } from './mcp.mjs';
+
 /** Service failure with a stable code and an optional safe public message. */
 export class ServiceError extends Error {
     /** @param code Stable machine-readable code. @param outcomeUnknown Whether a write may have committed. @param message Safe public message, defaulting to the code. @param options Private cause and diagnostic context, excluded from public error results. */
@@ -739,8 +741,8 @@ export interface JoplinBackend {
     listAttachmentNotes(input: AttachmentNotesInput, signal?: AbortSignal): Promise<AttachmentNotesPage>;
     /** Read metadata for one Joplin resource. */
     getAttachment(resourceId: string, signal?: AbortSignal): Promise<BackendAttachment>;
-    /** Read one resource's current bytes as standard base64. */
-    readAttachment(resourceId: string, signal?: AbortSignal): Promise<BackendAttachment & { contentBase64: string }>;
+    /** Read current resource bytes as base64, charging binary and encoded bytes to the optional owner until caller cleanup. */
+    readAttachment(resourceId: string, signal?: AbortSignal, payloadOwner?: PayloadOwner): Promise<BackendAttachment & { contentBase64: string }>;
     /** Upload a standalone Joplin resource; this does not change a note body. */
     createAttachment(input: CreateAttachmentInput, signal?: AbortSignal): Promise<BackendAttachment>;
     /** Update resource metadata and/or replace the current resource bytes. */
@@ -1114,8 +1116,8 @@ export interface AccountService {
     listAttachmentNotes(input: AttachmentNotesInput, signal?: AbortSignal): Promise<AccountAttachmentNotesPage>;
     /** Read metadata for an eligible, unlocked resource. */
     getAttachment(resourceId: string, signal?: AbortSignal): Promise<AccountAttachment>;
-    /** Read an eligible, unlocked resource and return its bytes as base64. */
-    readAttachment(resourceId: string, signal?: AbortSignal): Promise<ReadableAccountAttachment>;
+    /** Read eligible resource bytes as base64; the optional owner retains their reservations through caller response cleanup. */
+    readAttachment(resourceId: string, signal?: AbortSignal, payloadOwner?: PayloadOwner): Promise<ReadableAccountAttachment>;
     /** Upload a standalone resource; linking it in a note body is a separate update. */
     createAttachment(input: CreateAttachmentInput, signal?: AbortSignal): Promise<AccountAttachment>;
     /** Rename or replace an eligible, unlocked resource. */

@@ -59,20 +59,14 @@ function bodyMetadata(text) {
 }
 
 /** Return an available side without its body, plus metadata or an immutable file export. */
-function completeSide(side, output, sideName, getFileResources) {
+function completeSide(side, output, exported) {
 	if (side.status !== 'available' || !side.note) return { value: { id: side.id, status: side.status } };
 	const { body, ...note } = side.note;
 	if (output === 'metadata') {
 		return { value: { id: side.id, status: side.status, note: { ...note, ...bodyMetadata(body) } } };
 	}
 
-	const extension = side.note.markup_language === 2 ? 'html' : 'md';
-	const mimeType = side.note.markup_language === 2 ? 'text/html; charset=utf-8' : 'text/markdown; charset=utf-8';
-	const { file, resource } = getFileResources().exportText({
-		text: body,
-		filename: `${sideName}-${side.note.id}.${extension}`,
-		mimeType,
-	});
+	const { file, resource } = exported;
 	return { value: { id: side.id, status: side.status, note: { ...note, body_total_line_count: bodyTotalLineCount(body), file } }, resource };
 }
 
@@ -96,7 +90,7 @@ export function registerConflictTools(add, service, { getFileResources } = {}) {
 			offset: { type: 'integer', description: 'UTF-16 code-unit offset applied independently to each available note body. Defaults to 0; returned offsets avoid splitting a surrogate pair.', minimum: 0 },
 			max_chars: { type: 'integer', description: 'Maximum UTF-16 code units returned from each available note body. Omitted or 0 returns the full body from offset; a boundary may include one extra code unit to keep a surrogate pair intact.', minimum: 0 },
 		}, ['id']),
-		async (args, signal) => {
+		async (args, signal, context = {}) => {
 			const output = args.output ?? 'inline';
 			if (output !== 'inline' && ['offset', 'max_chars'].some(key => Object.hasOwn(args, key))) {
 				throw new ServiceError('note_file_slice_conflict');
@@ -111,8 +105,17 @@ export function registerConflictTools(add, service, { getFileResources } = {}) {
 				};
 			}
 
-			const conflict = completeSide(result.conflict, output, 'conflict', getFileResources);
-			const original = completeSide(result.original, output, 'original', getFileResources);
+			const available = [['conflict', result.conflict], ['original', result.original]]
+				.filter(([, side]) => side.status === 'available' && side.note);
+			// Publish both sides together so saturation cannot retain an export whose URI was never returned.
+			const exported = output === 'file' && available.length ? getFileResources().exportTexts(available.map(([name, side]) => ({
+				text: side.note.body,
+				filename: `${name}-${side.note.id}.${side.note.markup_language === 2 ? 'html' : 'md'}`,
+				mimeType: side.note.markup_language === 2 ? 'text/html; charset=utf-8' : 'text/markdown; charset=utf-8',
+			})), context.responsePayload) : [];
+			const bySide = new Map(available.map(([name], index) => [name, exported[index]]));
+			const conflict = completeSide(result.conflict, output, bySide.get('conflict'));
+			const original = completeSide(result.original, output, bySide.get('original'));
 			const metadata = { ...result, conflict: conflict.value, original: original.value };
 			if (output === 'metadata') return metadata;
 

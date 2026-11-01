@@ -5,6 +5,7 @@ import { ServiceError } from './index.mjs';
 import { openMcpRuntime } from './src/semantic/runtime.mjs';
 import { createMcpSession } from './src/mcp/session.mjs';
 import { serveStdio } from './src/mcp/stdio.mjs';
+import { createPayloadCapacity } from './src/payload-capacity.mjs';
 export { createMcpSession } from './src/mcp/session.mjs';
 
 async function main() {
@@ -13,7 +14,8 @@ async function main() {
 		if (process.argv.length !== 3) throw new ServiceError('usage_node_mcp_mjs_absolute_config_path');
 		runtime = await openMcpRuntime(process.argv[2]);
 		const { service, allowWrites } = runtime;
-		const transport = serveStdio(createMcpSession(service, { allowWrites }));
+		const payloadCapacity = createPayloadCapacity();
+		const transport = serveStdio(createMcpSession(service, { allowWrites, payloadCapacity }), { payloadCapacity });
 		const stop = () => { void transport.close(); };
 		process.once('SIGTERM', stop); process.once('SIGINT', stop);
 		const result = await transport.done;

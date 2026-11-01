@@ -72,8 +72,8 @@ function fileUrl(file) {
  * chatgpt-work/DESKTOP-MCP-PARITY-HANDOFF.md.
  */
 function createFileDownloader({ lookup = dnsLookup, request = httpsRequest } = {}) {
-	/** Download a complete file as bytes without decoding or altering its contents. */
-	return async function downloadFile(file, signal) {
+	/** Download exact bytes, charging chunks to the optional owner retained by the caller through its save or response. */
+	return async function downloadFile(file, signal, payloadOwner) {
 		const url = fileUrl(file);
 		if (signal?.aborted) throw new ServiceError('request_cancelled');
 		const startedAt = Date.now();
@@ -116,7 +116,10 @@ function createFileDownloader({ lookup = dnsLookup, request = httpsRequest } = {
 				});
 			}
 			const parts = [];
-			for await (const chunk of response) parts.push(Buffer.from(chunk));
+			for await (const chunk of response) {
+				payloadOwner?.reserve(chunk.length);
+				parts.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+			}
 			return Buffer.concat(parts);
 		} catch (error) {
 			const stage = response ? 'body' : 'request';
@@ -138,6 +141,7 @@ function createFileDownloader({ lookup = dnsLookup, request = httpsRequest } = {
 
 /**
  * Create a client file reader that returns exact bytes, including data that is not valid UTF-8.
+ * The optional third reader argument owns collected bytes until the caller releases it.
  * Optional lookup and request functions override the Node transports for focused tests.
  */
 export function createBinaryFileReader(options = {}) {
@@ -149,12 +153,13 @@ export const readBinaryFile = createBinaryFileReader();
 
 /**
  * Create a strict UTF-8 note-body reader, retain its BOM, and reject malformed text.
+ * The optional third reader argument owns collected bytes until the caller releases it.
  * Optional lookup and request functions override the Node transports for focused tests.
  */
 export function createNoteBodyFileReader(options = {}) {
 	const downloadFile = createFileDownloader(options);
-	return async function readNoteBodyFile(file, signal) {
-		const bytes = await downloadFile(file, signal);
+	return async function readNoteBodyFile(file, signal, payloadOwner) {
+		const bytes = await downloadFile(file, signal, payloadOwner);
 		try {
 			return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
 		} catch {

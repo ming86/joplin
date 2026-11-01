@@ -63,14 +63,15 @@ const contentFile = {
 	description: 'Complete binary file to upload. Use content_file for binary or large files; do not combine it with content_base64.',
 };
 
-/** Require exactly one source and encode downloaded bytes without text decoding. */
-async function attachmentContent(args, readFile, signal) {
+/** Require one source and reserve its base64 representation before encoding or starting a native write. */
+async function attachmentContent(args, readFile, signal, requestPayload) {
 	const hasBase64 = Object.hasOwn(args, 'content_base64');
 	const hasFile = Object.hasOwn(args, 'content_file');
 	if (hasBase64 && hasFile) throw new ServiceError('attachment_content_conflict');
 	if (!hasBase64 && !hasFile) throw new ServiceError('attachment_content_required');
 	if (hasBase64) return args.content_base64;
-	const bytes = await readFile(args.content_file, signal);
+	const bytes = await readFile(args.content_file, signal, requestPayload);
+	requestPayload?.reserve(4 * Math.ceil(bytes.length / 3));
 	return bytes.toString('base64');
 }
 
@@ -85,8 +86,8 @@ export function registerAttachmentTools(add, service, { allowWrites = false, rea
 
 	add('read_attachment', 'Read a readable, unlocked attachment by resource id. Returns resource metadata and the file bytes as an embedded MCP resource.', object({
 		id: { ...attachmentId, description: 'The Joplin resource id.' },
-	}, ['id']), async ({ id }, signal) => {
-		const attachment = await service.readAttachment(id, signal);
+	}, ['id']), async ({ id }, signal, context = {}) => {
+		const attachment = await service.readAttachment(id, signal, context.responsePayload);
 		const metadata = {
 			...attachment,
 			uri: resourceUri(attachment.id, attachment.filename),
@@ -105,8 +106,8 @@ export function registerAttachmentTools(add, service, { allowWrites = false, rea
 		}, ['filename']);
 		createSchema.anyOf = [{ required: ['content_base64'] }, { required: ['content_file'] }];
 		createSchema.not = { required: ['content_base64', 'content_file'] };
-		add('create_attachment', 'Upload a file as a standalone Joplin resource. Use content_file for binary or large files; content_base64 remains available for inline data. Do not combine the two content sources. Returns its resource id and a Markdown link; attach it to a note by inserting the link with update_note.', createSchema, async (args, signal) => {
-			const contentBase64 = await attachmentContent(args, readFile, signal);
+		add('create_attachment', 'Upload a file as a standalone Joplin resource. Use content_file for binary or large files; content_base64 remains available for inline data. Do not combine the two content sources. Returns its resource id and a Markdown link; attach it to a note by inserting the link with update_note.', createSchema, async (args, signal, context = {}) => {
+			const contentBase64 = await attachmentContent(args, readFile, signal, context.requestPayload);
 			const { filename, title, mime } = args;
 			const attachment = await service.createAttachment({ filename, contentBase64, title, mime }, signal);
 			return {
@@ -128,12 +129,12 @@ export function registerAttachmentTools(add, service, { allowWrites = false, rea
 		updateSchema.minProperties = 2;
 		updateSchema.not = { required: ['content_base64', 'content_file'] };
 		add('update_attachment', 'Rename or replace a readable, unlocked attachment. Use content_file for binary or large replacements; content_base64 remains available for inline data. Do not combine the two content sources. Replacing file bytes changes the current resource; Joplin note history does not preserve the previous binary contents.', updateSchema,
-			async (args, signal) => {
+			async (args, signal, context = {}) => {
 				const hasBase64 = Object.hasOwn(args, 'content_base64');
 				const hasFile = Object.hasOwn(args, 'content_file');
 				if (hasBase64 && hasFile) throw new ServiceError('attachment_content_conflict');
 				const { id, title, filename, mime } = args;
-				const contentBase64 = hasFile ? await attachmentContent(args, readFile, signal) : args.content_base64;
+				const contentBase64 = hasFile ? await attachmentContent(args, readFile, signal, context.requestPayload) : args.content_base64;
 				return service.updateAttachment(id, {
 					...(title === undefined ? {} : { title }),
 					...(filename === undefined ? {} : { filename }),
