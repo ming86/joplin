@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createAttachmentService } from '../src/attachments.mjs';
 import { isMcpToolResult, registerAttachmentTools } from '../src/mcp/attachment-tools.mjs';
 import { ServiceError } from '../src/errors.mjs';
+import { createPayloadCapacity } from '../src/payload-capacity.mjs';
 
 const noteId = 'a'.repeat(32);
 const resourceId = 'b'.repeat(32);
@@ -146,4 +147,27 @@ test('update_attachment refuses encrypted resources before changing their bytes 
 	});
 	await assert.rejects(service.updateAttachment(resourceId, { contentBase64: 'AQID' }), error => error.code === 'attachment_unavailable');
 	assert.equal(writes, 0);
+});
+
+
+test('read_attachment passes the response owner through the service to the binary backend', async () => {
+	const capacity = createPayloadCapacity({ limitBytes: 8 });
+	const responsePayload = capacity.createOwner({ operation: 'read_attachment' });
+	const service = createAttachmentService({
+		backend: bindBackend(fakeBackend({
+			async readAttachment(id, signal, owner) {
+				assert.equal(id, resourceId);
+				assert.equal(owner, responsePayload);
+				owner.reserve(8);
+				return { ...metadata, filename: 'diagram.png', contentBase64: 'AAECAw==' };
+			},
+		})),
+		permit() {}, accountId,
+	});
+	const tools = makeTools(service);
+	const result = await tools.get('read_attachment').run({ id: resourceId }, undefined, { responsePayload });
+	assert.equal(result.content[1].resource.blob, 'AAECAw==');
+	assert.equal(capacity.usedBytes, 8);
+	responsePayload.release();
+	assert.equal(capacity.usedBytes, 0);
 });

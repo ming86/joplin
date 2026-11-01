@@ -184,3 +184,19 @@ test('aggregate network failures retain the individual native connection codes',
 	assert.deepEqual(record.errors.slice(-2).map(item => item.code), ['ECONNREFUSED', 'ENETUNREACH']);
 	assert.equal(line.includes(secret), false);
 });
+
+test('capacity diagnostics retain byte counts without retaining private payload fields', t => {
+	const error = new ServiceError('resource_capacity_exceeded', false, 'Payload capacity is unavailable.', {
+		diagnostics: { operation: 'read_note_file', stage: 'response_payload', usedBytes: 12, requestedBytes: 8, limitBytes: 16, activeCount: 2, body: secret, url: secret },
+	});
+	const output = t.mock.method(console, 'error', () => {});
+	assert.equal(logOperationError(error), true);
+	assert.equal(logOperationError(error), false);
+	const line = output.mock.calls[0].arguments[0];
+	const record = JSON.parse(line);
+	assert.equal(record.usedBytes, 12);
+	assert.equal(record.requestedBytes, 8);
+	assert.equal(record.limitBytes, 16);
+	assert.equal(record.activeCount, 2);
+	assert.equal(line.includes(secret), false);
+});

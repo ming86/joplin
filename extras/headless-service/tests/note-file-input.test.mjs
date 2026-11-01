@@ -4,6 +4,7 @@ import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
 import { createBinaryFileReader, createNoteBodyFileReader } from '../src/mcp/note-file-input.mjs';
 import { logOperationError } from '../src/diagnostics.mjs';
+import { createPayloadCapacity } from '../src/payload-capacity.mjs';
 
 /** Build a Node-compatible fake transport that connects through the supplied DNS callback. */
 function transport({ readerFactory = createNoteBodyFileReader, addresses = [{ address: '93.184.216.34', family: 4 }], chunks = [Buffer.from('body')], status = 200, stalled = false, dnsError = null, streamError = null } = {}) {
@@ -194,4 +195,24 @@ test('respects cancellation before downloading and while streaming, closing the 
 	await fails(pending, 'request_cancelled');
 	assert.equal(second.seen.requestDestroyed, true);
 	assert.equal(second.seen.response.destroyed, true);
+});
+
+
+test('download bytes stay owned until consumer cleanup and capacity failure closes the response', async () => {
+	const capacity = createPayloadCapacity({ limitBytes: 6 });
+	const owner = capacity.createOwner({ operation: 'test_download' });
+	const first = transport({ chunks: [Buffer.from('abc'), Buffer.from('def')] });
+	assert.equal(await first.read(file, undefined, owner), 'abcdef');
+	assert.equal(capacity.usedBytes, 6, 'a returned decoded body remains owned by its consumer');
+	owner.release();
+	assert.equal(capacity.usedBytes, 0);
+
+	const partial = capacity.createOwner({ operation: 'test_download' });
+	const second = transport({ chunks: [Buffer.from('abc'), Buffer.from('defg')] });
+	await assert.rejects(second.read(file, undefined, partial), error => error.code === 'resource_capacity_exceeded');
+	assert.equal(second.seen.response.destroyed, true);
+	assert.equal(second.seen.requestDestroyed, true);
+	assert.equal(capacity.usedBytes, 3, 'the caller owns partial bytes until operation cleanup');
+	partial.release();
+	assert.equal(capacity.usedBytes, 0);
 });

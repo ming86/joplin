@@ -2,6 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createAccountRegistry } from '../index.mjs';
 import { account } from './fixtures.mjs';
+import { createGrepService } from '../src/grep.mjs';
+import { createRegexMatcher } from '../src/grep-matching.mjs';
 
 const notebookRoot = 'a'.repeat(32);
 const notebookChild = 'b'.repeat(32);
@@ -46,7 +48,7 @@ function fixture(notes, { snapshots = new Map(), folders } = {}) {
 		},
 	};
 	const service = createAccountRegistry([account()], { makeBackend: () => backend }).forPrincipal('alice', 'alice');
-	return { service, calls };
+	return { service, calls, backend };
 }
 
 test('grep defaults to literal line matching and returns the exact captured body with context', async () => {
@@ -165,4 +167,113 @@ test('grep validates regular expressions, selections, and matching permissions',
 	readOnlyConfig.permissions = ['write'];
 	const denied = createAccountRegistry([readOnlyConfig], { makeBackend: () => ({}) }).forPrincipal('bob', 'bob');
 	await assert.rejects(denied.grepNotes({ pattern: 'x' }), { code: 'operation_not_permitted' });
+});
+
+
+test('regex keeps JavaScript Unicode syntax, bounded pagination, context, and snapshot revisions', async () => {
+	const ids = ['1', '2'].map(value => value.repeat(32));
+	const notes = new Map(ids.map(id => [id, makeNote(id, notebookRoot, 'prefix A😀')]));
+	const snapshots = new Map([
+		[ids[0], makeNote(ids[0], notebookRoot, 'context\r\nprefix Å😀\rprefix β😀\nprefix C😀\n', { revision_id: 'e'.repeat(32) })],
+		[ids[1], makeNote(ids[1], notebookRoot, 'prefix D😀\nprefix E😀', { revision_id: 'f'.repeat(32) })],
+	]);
+	const { service } = fixture(notes, { snapshots });
+	const result = await service.grepNotes({
+		pattern: '(?<=PREFIX )(?<word>\\p{L}+)(?=😀$)', mode: 'regex', case_sensitive: false,
+		page: 2, limit: 2, context_before: 1, context_after: 1,
+	});
+	assert.deepEqual(result.items.map(item => [item.note_id, item.line_number, item.text, item.revision_id]), [
+		[ids[0], 4, 'prefix C😀', 'e'.repeat(32)],
+		[ids[1], 1, 'prefix D😀', 'f'.repeat(32)],
+	]);
+	assert.deepEqual(result.items[0].context_before.map(line => line.text), ['prefix β😀']);
+	assert.deepEqual(result.items[0].context_after.map(line => line.text), ['']);
+	assert.equal(result.hasMore, true);
+});
+
+test('pathological regex times out without blocking the event loop or returning earlier rows', async t => {
+	const ids = ['1', '2'].map(value => value.repeat(32));
+	const notes = new Map(ids.map(id => [id, makeNote(id, notebookRoot, 'a')]));
+	const snapshots = new Map([[ids[1], makeNote(ids[1], notebookRoot, `${'a'.repeat(40)}!`)]]);
+	const { service, backend, calls } = fixture(notes, { snapshots });
+	const timedService = createGrepService({ backend: () => backend, permit() {}, accountId: 'alice', regexTimeoutMs: 150 });
+	const errors = t.mock.method(console, 'error', () => {});
+	let responsive = false;
+	const timer = setTimeout(() => { responsive = true; }, 25);
+	try {
+		await assert.rejects(timedService.grepNotes({ pattern: '^(a+)+$', mode: 'regex' }), error => {
+			assert.equal(error.code, 'regex_timeout');
+			assert.equal(error.diagnostics.stage, 'regex_matching');
+			assert.ok(error.diagnostics.elapsedMs >= 150);
+			return true;
+		});
+	} finally {
+		clearTimeout(timer);
+	}
+	assert.equal(responsive, true);
+	assert.deepEqual(calls.captures, ids);
+	assert.equal(errors.mock.calls.length, 1);
+	assert.equal(JSON.parse(errors.mock.calls[0].arguments[0]).errors[0].code, 'regex_timeout');
+	assert.equal((await service.grepNotes({ pattern: '^a$', mode: 'regex', note_ids: [ids[0]] })).items.length, 1);
+});
+
+test('cancelling pathological preliminary matching releases its worker and later calls succeed', async () => {
+	const id = '3'.repeat(32);
+	const notes = new Map([[id, makeNote(id, notebookRoot, `${'a'.repeat(40)}!`)]]);
+	const { service, calls } = fixture(notes);
+	const cancelled = new AbortController();
+	const matching = service.grepNotes({ pattern: '^(a+)+$', mode: 'regex' }, cancelled.signal);
+	const timer = setTimeout(() => cancelled.abort(new Error('private cancellation reason')), 50);
+	try {
+		await assert.rejects(matching, { code: 'request_cancelled', message: 'request_cancelled' });
+	} finally {
+		clearTimeout(timer);
+	}
+	assert.deepEqual(calls.captures, []);
+	assert.equal((await service.grepNotes({ pattern: '!', mode: 'regex' })).items.length, 1);
+});
+
+test('regex allowance excludes idle backend time between jobs and cancellation closes idle workers', async () => {
+	const cancelled = new AbortController();
+	const matcher = createRegexMatcher({ pattern: '^hit$', caseSensitive: true, signal: cancelled.signal, timeoutMs: 200 });
+	try {
+		assert.deepEqual(await matcher.match({ kind: 'any', body: 'hit' }), { matched: true });
+		await new Promise(resolve => setTimeout(resolve, 250));
+		assert.deepEqual(await matcher.match({ kind: 'page', body: 'hit\r\nhit\rhit\n', skip: 1, take: 1 }), { indices: [1], matchCount: 2 });
+		cancelled.abort();
+		await assert.rejects(matcher.match({ kind: 'any', body: 'hit' }), { code: 'request_cancelled' });
+	} finally {
+		await matcher.close();
+	}
+});
+
+
+test('regex jobs share one cumulative allowance instead of resetting it per body', async t => {
+	t.mock.method(console, 'error', () => {});
+	const matcher = createRegexMatcher({ pattern: '^hit$', caseSensitive: true, timeoutMs: 250 });
+	let completed = 0;
+	try {
+		await assert.rejects(async () => {
+			for (; completed < 100_000; completed++) await matcher.match({ kind: 'any', body: 'hit' });
+			throw new Error('The cumulative matching allowance was never exhausted');
+		}, { code: 'regex_timeout' });
+		assert.ok(completed > 1);
+	} finally {
+		await matcher.close();
+	}
+});
+
+test('unexpected worker failures keep private pattern and message details out of diagnostics', async t => {
+	const errors = t.mock.method(console, 'error', () => {});
+	const matcher = createRegexMatcher({ pattern: 'private-pattern', caseSensitive: true });
+	try {
+		// An invalid internal job makes the worker throw; callers still see a fixed code.
+		await assert.rejects(matcher.match({ kind: 'any' }), { code: 'regex_worker_failed', message: 'regex_worker_failed' });
+		assert.equal(errors.mock.calls.length, 1);
+		const logged = errors.mock.calls[0].arguments[0];
+		assert.equal(JSON.parse(logged).errors[0].code, 'regex_worker_failed');
+		assert.doesNotMatch(logged, /private-pattern|Cannot read properties/);
+	} finally {
+		await matcher.close();
+	}
 });

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createTools } from '../src/mcp/tools.mjs';
 import { ServiceError } from '../src/errors.mjs';
+import { createPayloadCapacity } from '../src/payload-capacity.mjs';
 
 const noteId = 'a'.repeat(32);
 const notebookId = 'b'.repeat(32);
@@ -160,4 +161,33 @@ test('create_note returns an unknown outcome if the committed snapshot body is m
 	assert.equal(result.isError, true);
 	assert.equal(result.structuredContent.error.code, 'write_outcome_unknown');
 	assert.equal(result.structuredContent.error.outcomeUnknown, true);
+});
+
+
+test('file capacity rejection precedes native creation and direct calls release bytes on success and failure', async t => {
+	const capacity = createPayloadCapacity({ limitBytes: 5 });
+	let writes = 0;
+	const tools = fixture(t, {
+		async createNoteWithRevision(args) {
+			writes++;
+			assert.equal(capacity.usedBytes, 4, 'download remains owned while the native write runs');
+			return { id: noteId, revision_id: 'c'.repeat(32), body: args.body };
+		},
+	}, {
+		payloadCapacity: capacity,
+		async readBodyFile(file, signal, owner) {
+			owner.reserve(4);
+			if (file.file_id === 'too-large') owner.reserve(2);
+			return 'body';
+		},
+	});
+	const failed = await tools.call('create_note', { title: 'Title', notebook_id: notebookId, body_file: { ...bodyFile, file_id: 'too-large' } });
+	assert.equal(failed.structuredContent.error.code, 'resource_capacity_exceeded');
+	assert.match(failed.structuredContent.error.message, /capacity/);
+	assert.equal(writes, 0);
+	assert.equal(capacity.usedBytes, 0);
+	const saved = await tools.call('create_note', { title: 'Title', notebook_id: notebookId, body_file: bodyFile });
+	assert.equal(saved.isError, false);
+	assert.equal(writes, 1);
+	assert.equal(capacity.usedBytes, 0);
 });

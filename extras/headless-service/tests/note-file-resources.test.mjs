@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createNoteFileResources } from '../src/mcp/note-file-resources.mjs';
+import { createPayloadCapacity } from '../src/payload-capacity.mjs';
 
 test('text exports preserve exact UTF-8 snapshots, hashes, metadata, and shared expiry lifecycle', () => {
 	let time = 10_000;
@@ -83,4 +84,58 @@ test('text exports require caller-supplied text and contextual file metadata', (
 	} finally {
 		store.close();
 	}
+});
+
+
+test('retained saturation preserves earlier exports and expiry and close release their bytes', () => {
+	let time = 100;
+	const payloadCapacity = createPayloadCapacity({ limitBytes: 32 });
+	const storedCapacity = createPayloadCapacity({ limitBytes: 6 });
+	const store = createNoteFileResources({ now: () => time, lifetimeMs: 100, payloadCapacity, storedCapacity });
+	const input = text => ({ text, filename: 'body.md', mimeType: 'text/markdown' });
+	try {
+		const first = store.exportText(input('café'));
+		assert.equal(storedCapacity.usedBytes, 5, 'stored capacity counts UTF-8 bytes');
+		assert.equal(payloadCapacity.usedBytes, 0, 'direct store calls release temporary response reservations');
+		assert.throws(() => store.exportText(input('xx')), error => error.code === 'resource_capacity_exceeded');
+		assert.equal(storedCapacity.usedBytes, 5);
+		assert.deepEqual(store.list().map(entry => entry.uri), [first.file.uri]);
+		assert.equal(Buffer.from(store.read(first.file.uri).contents[0].blob, 'base64').toString(), 'café');
+		time += 100;
+		assert.deepEqual(store.list(), []);
+		assert.equal(storedCapacity.usedBytes, 0);
+		store.exportText(input('new'));
+		assert.equal(storedCapacity.usedBytes, 3);
+	} finally { store.close(); }
+	assert.equal(storedCapacity.usedBytes, 0);
+});
+
+test('temporary response saturation preserves exports and failed export batches retain no unreturned entries', () => {
+	const payloadCapacity = createPayloadCapacity({ limitBytes: 12 });
+	const storedCapacity = createPayloadCapacity({ limitBytes: 8 });
+	const store = createNoteFileResources({ payloadCapacity, storedCapacity });
+	const input = text => ({ text, filename: 'body.md', mimeType: 'text/markdown' });
+	try {
+		const first = store.exportText(input('old'));
+		const occupied = payloadCapacity.createOwner({ operation: 'other_request' });
+		occupied.reserve(10);
+		assert.throws(() => store.read(first.file.uri), error => error.code === 'resource_capacity_exceeded');
+		assert.equal(storedCapacity.usedBytes, 3);
+		assert.equal(store.list()[0].uri, first.file.uri);
+		assert.throws(() => store.exportText(input('new')), error => error.code === 'resource_capacity_exceeded');
+		assert.equal(storedCapacity.usedBytes, 3, 'response failure also releases the new retained entry');
+		occupied.release();
+		assert.equal(store.read(first.file.uri).contents[0].blob, first.resource.blob);
+		assert.throws(() => store.exportTexts([input('abc'), input('def')]), error => error.code === 'resource_capacity_exceeded');
+		assert.equal(storedCapacity.usedBytes, 3, 'second-entry failure rolls back the entire new batch');
+		assert.deepEqual(store.list().map(entry => entry.uri), [first.file.uri]);
+		assert.equal(payloadCapacity.usedBytes, 0);
+
+		const responseOwner = payloadCapacity.createOwner({ operation: 'read_export' });
+		store.read(first.file.uri, responseOwner);
+		assert.equal(payloadCapacity.usedBytes, 4, 'supplied owners retain base64 bytes through transport cleanup');
+		responseOwner.release();
+	} finally { store.close(); }
+	assert.equal(storedCapacity.usedBytes, 0);
+	assert.equal(payloadCapacity.usedBytes, 0);
 });

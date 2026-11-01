@@ -1,9 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { EventEmitter } from 'node:events';
+import { Readable } from 'node:stream';
 import { createTools } from '../src/mcp/tools.mjs';
 import { createNoteFileResources } from '../src/mcp/note-file-resources.mjs';
 import { ServiceError } from '../src/errors.mjs';
+import { createPayloadCapacity, defaultRetainedExportBytes } from '../src/payload-capacity.mjs';
+import { createNoteBodyFileReader } from '../src/mcp/note-file-input.mjs';
 
 const noteId = 'a'.repeat(32);
 const revisionId = 'b'.repeat(32);
@@ -390,4 +394,127 @@ test('file failures have helpful safe errors and do not reach the native write',
 	assert.match(result.structuredContent.error.message, /fresh accessible file/);
 	assert.equal(result.content[0].text.includes('secret=hidden'), false);
 	assert.equal(saves, 0);
+});
+
+
+test('file updates reject exhausted capacity before saving and retain supplied response ownership after file reads', async t => {
+	const capacity = createPayloadCapacity({ limitBytes: 32 });
+	let writes = 0;
+	const { tools } = fixture(t, {
+		async updateNoteWithRevision() { writes++; return { ...note }; },
+	}, {
+		payloadCapacity: capacity,
+		async readBodyFile(file, signal, owner) { owner.reserve(33); return 'unused'; },
+	});
+	const failed = await tools.call('update_note', { id: noteId, base_revision_id: revisionId, body_file: bodyFile });
+	assert.equal(failed.structuredContent.error.code, 'resource_capacity_exceeded');
+	assert.equal(writes, 0);
+	assert.equal(capacity.usedBytes, 0);
+
+	const requestPayload = capacity.createOwner({ operation: 'read_note', stage: 'request' });
+	const responsePayload = capacity.createOwner({ operation: 'read_note', stage: 'response' });
+	const result = await tools.call('read_note', { id: noteId, output: 'file' }, undefined, { requestPayload, responsePayload });
+	assert.equal(result.isError, false);
+	assert.equal(capacity.usedBytes, 4 * Math.ceil(Buffer.byteLength(note.body) / 3));
+	responsePayload.release();
+	requestPayload.release();
+	assert.equal(capacity.usedBytes, 0);
+});
+
+
+test('a two-megabyte export, file edit, guarded save, and re-export preserve exact bytes with shared accounting', async t => {
+	const payloadCapacity = createPayloadCapacity();
+	const storedCapacity = createPayloadCapacity({ limitBytes: defaultRetainedExportBytes });
+	const store = createNoteFileResources({ payloadCapacity, storedCapacity });
+	const owners = [];
+	t.after(() => { for (const owner of owners) owner.release(); store.close(); });
+	const originalBody = '\uFEFF# Transfer 🔧\r\nMARKER: before\r\n' + 'café 🌿\r\n'.repeat(175000);
+	let saved = { ...note, body: originalBody };
+	let editedBytes;
+	let response;
+	let requestDestroyed = false;
+	let downloads = 0;
+	let writes = 0;
+
+	// Exercise the real HTTPS reader and DNS checks with a local Node transport, including split UTF-8 bytes.
+	const readBodyFile = createNoteBodyFileReader({
+		lookup(host, options, callback) {
+			assert.equal(host, 'files.example.test');
+			assert.deepEqual(options, { all: true, verbatim: true });
+			queueMicrotask(() => callback(null, [{ address: '93.184.216.34', family: 4 }]));
+		},
+		request(url, options, callback) {
+			downloads++;
+			assert.equal(url.protocol, 'https:');
+			const request = new EventEmitter();
+			request.destroy = () => { requestDestroyed = true; };
+			request.end = () => options.lookup(url.hostname, { all: true }, (error, addresses) => {
+				if (error) { request.emit('error', error); return; }
+				assert.deepEqual(addresses, [{ address: '93.184.216.34', family: 4 }]);
+				response = Readable.from([
+					editedBytes.subarray(0, 1), editedBytes.subarray(1, 17),
+					editedBytes.subarray(17, 100003), editedBytes.subarray(100003),
+				]);
+				response.statusCode = 200;
+				callback(response);
+			});
+			return request;
+		},
+	});
+	const tools = createTools({
+		async readNoteWithRevision(id) { assert.equal(id, noteId); return { ...saved }; },
+		async updateNoteWithRevision(id, changes) {
+			assert.equal(id, noteId);
+			assert.equal(changes.base_revision_id, saved.revision_id, 'the exported native revision guards the save');
+			assert.deepEqual(Buffer.from(changes.body, 'utf8'), editedBytes);
+			assert.equal(payloadCapacity.usedBytes, editedBytes.length, 'downloaded bytes stay charged through the native save');
+			writes++;
+			saved = { ...saved, body: changes.body, revision_id: nextRevisionId, previous_revision_id: saved.revision_id, changed: true };
+			return { ...saved };
+		},
+	}, { allowWrites: true, payloadCapacity, noteFileResources: store, readBodyFile });
+
+	// Read the exported file as a client, make one marker edit, and release its response storage.
+	const initialResponse = payloadCapacity.createOwner({ operation: 'read_note', stage: 'response' });
+	owners.push(initialResponse);
+	const initial = await tools.call('read_note', { id: noteId, output: 'file' }, undefined, { responsePayload: initialResponse });
+	assert.equal(initial.isError, false);
+	const originalBytes = Buffer.from(initial.content[1].resource.blob, 'base64');
+	assert.ok(originalBytes.length > 2_000_000 && originalBytes.length < 2_200_000);
+	assert.deepEqual(originalBytes, Buffer.from(originalBody, 'utf8'));
+	assert.equal(payloadCapacity.usedBytes, 4 * Math.ceil(originalBytes.length / 3));
+	editedBytes = Buffer.from(originalBytes.toString('utf8').replace('MARKER: before', 'MARKER: after'), 'utf8');
+	initialResponse.release();
+	assert.equal(payloadCapacity.usedBytes, 0);
+	assert.equal(storedCapacity.usedBytes, originalBytes.length);
+
+	const updated = await tools.call('update_note', {
+		id: noteId, base_revision_id: initial.structuredContent.revision_id, body_file: bodyFile,
+	});
+	assert.equal(updated.isError, false);
+	assert.equal(updated.structuredContent.revision_id, nextRevisionId);
+	assert.equal(updated.structuredContent.body_size_bytes, editedBytes.length);
+	assert.equal(updated.structuredContent.body_sha256, createHash('sha256').update(editedBytes).digest('hex'));
+	assert.equal(downloads, 1);
+	assert.equal(writes, 1);
+	assert.equal(requestDestroyed, true);
+	assert.equal(response.destroyed, true);
+	assert.equal(payloadCapacity.usedBytes, 0, 'direct update cleanup releases its request owner');
+
+	// The committed revision exports the edited bytes, while the earlier URI keeps its original snapshot.
+	const finalResponse = payloadCapacity.createOwner({ operation: 'read_note', stage: 'response' });
+	owners.push(finalResponse);
+	const final = await tools.call('read_note', { id: noteId, output: 'file' }, undefined, { responsePayload: finalResponse });
+	assert.equal(final.isError, false);
+	assert.equal(final.structuredContent.revision_id, nextRevisionId);
+	assert.deepEqual(Buffer.from(final.content[1].resource.blob, 'base64'), editedBytes);
+	assert.equal(final.structuredContent.file.size, editedBytes.length);
+	assert.equal(final.structuredContent.file.sha256, createHash('sha256').update(editedBytes).digest('hex'));
+	assert.equal(payloadCapacity.usedBytes, 4 * Math.ceil(editedBytes.length / 3));
+	finalResponse.release();
+	assert.deepEqual(Buffer.from(store.read(initial.structuredContent.file.uri).contents[0].blob, 'base64'), originalBytes);
+	assert.equal(payloadCapacity.usedBytes, 0);
+	assert.equal(storedCapacity.usedBytes, originalBytes.length + editedBytes.length);
+	store.close();
+	assert.equal(storedCapacity.usedBytes, 0);
 });

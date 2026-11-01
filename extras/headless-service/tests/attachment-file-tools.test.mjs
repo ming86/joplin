@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createTools } from '../src/mcp/tools.mjs';
 import { registerAttachmentTools, embeddedResourcesResult, isMcpToolResult } from '../src/mcp/attachment-tools.mjs';
 import { ServiceError } from '../src/errors.mjs';
+import { createPayloadCapacity } from '../src/payload-capacity.mjs';
 
 const resourceId = 'b'.repeat(32);
 const file = {
@@ -182,5 +183,28 @@ test('file read cancellation and failures happen before attachment writes', asyn
 		tools.get('create_attachment').run({ filename: 'a.bin', content_file: file }),
 		error => error.message === 'download failed',
 	);
+	assert.equal(writes, 0);
+});
+
+
+test('attachment file base64 capacity is reserved before encoding and before either native write', async () => {
+	const capacity = createPayloadCapacity({ limitBytes: 8 });
+	let writes = 0;
+	const tools = createTools({
+		async createAttachment() { writes++; },
+		async updateAttachment() { writes++; },
+	}, {
+		allowWrites: true, payloadCapacity: capacity,
+		async readFile(file, signal, owner) { owner.reserve(4); return Buffer.from('data'); },
+	});
+	for (const [name, args] of [
+		['create_attachment', { filename: 'file.bin', content_file: file }],
+		['update_attachment', { id: resourceId, content_file: file }],
+	]) {
+		const result = await tools.call(name, args);
+		assert.equal(result.structuredContent.error.code, 'resource_capacity_exceeded');
+		assert.match(result.structuredContent.error.message, /capacity/);
+		assert.equal(capacity.usedBytes, 0);
+	}
 	assert.equal(writes, 0);
 });

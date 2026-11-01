@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createAttachmentClient } from '../src/attachment-client.mjs';
 import { logOperationError } from '../src/diagnostics.mjs';
+import { createPayloadCapacity } from '../src/payload-capacity.mjs';
 
 const noteId = 'a'.repeat(32);
 const firstResourceId = 'b'.repeat(32);
@@ -229,7 +230,7 @@ test('binary read failures retain their cause and log only fixed route metadata'
 		});
 
 		const bodyError = new Error(`body contained private text ${token}`);
-		globalThis.fetch = async () => ({ ok: true, status: 200, async arrayBuffer() { throw bodyError; } });
+		globalThis.fetch = async () => new Response(new ReadableStream({ start(controller) { controller.error(bodyError); } }));
 		await assert.rejects(fixture.client.readAttachment(firstResourceId), error => {
 			assert.equal(error.code, 'attachment_file_unavailable');
 			assert.equal(error.cause, bodyError);
@@ -248,4 +249,34 @@ test('binary read failures retain their cause and log only fixed route metadata'
 	} finally {
 		globalThis.fetch = originalFetch;
 	}
+});
+
+
+test('attachment reads charge chunks before retaining bytes and keep binary and base64 owned through response cleanup', async () => {
+	const fixture = createFixture();
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = async () => new Response(new ReadableStream({
+		start(controller) { controller.enqueue(new Uint8Array([0, 1, 2])); controller.enqueue(new Uint8Array([3, 4, 5])); controller.close(); },
+	}));
+	try {
+		const capacity = createPayloadCapacity({ limitBytes: 14 });
+		const owner = capacity.createOwner({ operation: 'read_attachment' });
+		const result = await fixture.client.readAttachment(firstResourceId, undefined, owner);
+		assert.equal(result.contentBase64, Buffer.from([0, 1, 2, 3, 4, 5]).toString('base64'));
+		assert.equal(capacity.usedBytes, 14, 'six binary bytes plus eight encoded bytes remain owned');
+		owner.release();
+		assert.equal(capacity.usedBytes, 0);
+
+		for (const limitBytes of [5, 13]) {
+			const small = createPayloadCapacity({ limitBytes });
+			const partial = small.createOwner({ operation: 'read_attachment' });
+			await assert.rejects(fixture.client.readAttachment(firstResourceId, undefined, partial), error => {
+				assert.equal(error.code, 'resource_capacity_exceeded', 'collection and encoding capacity failures retain their stable error');
+				return true;
+			});
+			assert.equal(small.usedBytes, limitBytes === 5 ? 3 : 6);
+			partial.release();
+			assert.equal(small.usedBytes, 0);
+		}
+	} finally { globalThis.fetch = originalFetch; }
 });

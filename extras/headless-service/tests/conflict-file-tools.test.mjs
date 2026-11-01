@@ -99,7 +99,7 @@ test('metadata and file outputs preserve exact captured bodies without fabricati
 	assert.equal(storeRequests, 0);
 
 	const result = await readConflict.run({ id: conflictId, output: 'file' });
-	assert.equal(storeRequests, 2);
+	assert.equal(storeRequests, 1);
 	for (const [sideName, side, body, mimeType, extension, totalLines] of [
 		['conflict', result.structuredContent.conflict, conflictBody, 'text/markdown; charset=utf-8', 'md', 5],
 		['original', result.structuredContent.original, originalBody, 'text/html; charset=utf-8', 'html', 3],
