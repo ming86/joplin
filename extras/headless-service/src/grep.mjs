@@ -1,4 +1,5 @@
 import { bodyLines } from './body-lines.mjs';
+import { createRegexMatcher } from './grep-matching.mjs';
 import { identifier, requireValue, ServiceError } from './errors.mjs';
 
 /** Recognize a plain input record supplied to the account service. */
@@ -81,8 +82,11 @@ function hasMatchingLine(body, matcher) {
 	return lines.some(line => matcher.test(line.text));
 }
 
-/** Create an account-bound literal or regular-expression line search service. */
-export function createGrepService({ backend, permit, accountId }) {
+/**
+ * Create an account-bound literal or regular-expression line search service.
+ * `regexTimeoutMs` overrides the internal matching allowance for focused tests.
+ */
+export function createGrepService({ backend, permit, accountId, regexTimeoutMs }) {
 	requireValue(typeof backend === 'function' && typeof permit === 'function'
 		&& typeof accountId === 'string' && accountId.length > 0);
 	const core = () => {
@@ -159,64 +163,86 @@ export function createGrepService({ backend, permit, accountId }) {
 			let hasMore = false;
 			let finished = false;
 
-			for (const candidate of candidates) {
-				const id = candidate.id;
-				let current;
-				try { current = await client.getNote(id, signal); }
-				catch (error) {
-					if (unavailableNoteCodes.has(error?.code) && !selectedNoteIds.has(id)) continue;
-					if (unavailableNoteCodes.has(error?.code)) throw new ServiceError('note_unavailable');
-					throw error;
-				}
-				if (!readable(current)) {
-					if (selectedNoteIds.has(id)) throw new ServiceError('note_unavailable');
-					continue;
-				}
-				requireValue(current.id === id && typeof current.body === 'string', 'invalid_backend_response');
-				if (!scopeIncludes(current, selectedNoteIds, selectedNotebookIds, allReadable)) continue;
-				if (!hasMatchingLine(current.body, matcher)) continue;
-
-				let snapshot;
-				try { snapshot = await client.readNoteWithRevision(id, signal); }
-				catch (error) {
-					if (unavailableNoteCodes.has(error?.code) && !selectedNoteIds.has(id)) continue;
-					if (unavailableNoteCodes.has(error?.code)) throw new ServiceError('note_unavailable');
-					throw error;
-				}
-				if (!readable(snapshot)) {
-					if (selectedNoteIds.has(id)) throw new ServiceError('note_unavailable');
-					continue;
-				}
-				requireValue(snapshot.id === id && typeof snapshot.body === 'string'
-					&& typeof snapshot.revision_id === 'string' && /^[a-f0-9]{32}$/.test(snapshot.revision_id), 'invalid_backend_response');
-				if (!scopeIncludes(snapshot, selectedNoteIds, selectedNotebookIds, allReadable)) continue;
-
-				const lines = bodyLines(snapshot.body);
-				for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
-					const line = lines[lineIndex];
-					if (!matcher.test(line.text)) continue;
-					if (matchIndex >= pageEnd) {
-						hasMore = true;
-						finished = true;
-						break;
+			const regex = mode === 'regex' ? createRegexMatcher({
+				pattern: input.pattern, caseSensitive, signal, timeoutMs: regexTimeoutMs,
+			}) : undefined;
+			try {
+				for (const candidate of candidates) {
+					const id = candidate.id;
+					let current;
+					try { current = await client.getNote(id, signal); }
+					catch (error) {
+						if (unavailableNoteCodes.has(error?.code) && !selectedNoteIds.has(id)) continue;
+						if (unavailableNoteCodes.has(error?.code)) throw new ServiceError('note_unavailable');
+						throw error;
 					}
-					if (matchIndex >= offset) {
-						items.push({
-							note_id: id,
-							title: snapshot.title ?? '',
-							notebook_id: snapshot.parent_id || null,
-							revision_id: snapshot.revision_id,
-							...lineResult(line, maxLineChars),
-							context_before: lines.slice(Math.max(0, lineIndex - beforeCount), lineIndex).map(value => lineResult(value, maxLineChars)),
-							context_after: lines.slice(lineIndex + 1, Math.min(lines.length, lineIndex + afterCount + 1)).map(value => lineResult(value, maxLineChars)),
+					if (!readable(current)) {
+						if (selectedNoteIds.has(id)) throw new ServiceError('note_unavailable');
+						continue;
+					}
+					requireValue(current.id === id && typeof current.body === 'string', 'invalid_backend_response');
+					if (!scopeIncludes(current, selectedNoteIds, selectedNotebookIds, allReadable)) continue;
+					const preliminaryMatch = regex
+						? (await regex.match({ kind: 'any', body: current.body })).matched
+						: hasMatchingLine(current.body, matcher);
+					if (!preliminaryMatch) continue;
+
+					let snapshot;
+					try { snapshot = await client.readNoteWithRevision(id, signal); }
+					catch (error) {
+						if (unavailableNoteCodes.has(error?.code) && !selectedNoteIds.has(id)) continue;
+						if (unavailableNoteCodes.has(error?.code)) throw new ServiceError('note_unavailable');
+						throw error;
+					}
+					if (!readable(snapshot)) {
+						if (selectedNoteIds.has(id)) throw new ServiceError('note_unavailable');
+						continue;
+					}
+					requireValue(snapshot.id === id && typeof snapshot.body === 'string'
+						&& typeof snapshot.revision_id === 'string' && /^[a-f0-9]{32}$/.test(snapshot.revision_id), 'invalid_backend_response');
+					if (!scopeIncludes(snapshot, selectedNoteIds, selectedNotebookIds, allReadable)) continue;
+
+					let matchingIndices;
+					if (regex) {
+						// Retain only page rows plus one lookahead, counting skipped matches.
+						const matches = await regex.match({
+							kind: 'page', body: snapshot.body,
+							skip: Math.max(0, offset - matchIndex),
+							take: pageEnd - Math.max(offset, matchIndex) + 1,
 						});
+						matchIndex += matches.matchCount - matches.indices.length;
+						matchingIndices = matches.indices;
 					}
-					matchIndex++;
+					const lines = bodyLines(snapshot.body);
+					for (const lineIndex of matchingIndices ?? lines.keys()) {
+						const line = lines[lineIndex];
+						if (!regex && !matcher.test(line.text)) continue;
+						if (matchIndex >= pageEnd) {
+							hasMore = true;
+							finished = true;
+							break;
+						}
+						if (matchIndex >= offset) {
+							items.push({
+								note_id: id,
+								title: snapshot.title ?? '',
+								notebook_id: snapshot.parent_id || null,
+								revision_id: snapshot.revision_id,
+								...lineResult(line, maxLineChars),
+								context_before: lines.slice(Math.max(0, lineIndex - beforeCount), lineIndex).map(value => lineResult(value, maxLineChars)),
+								context_after: lines.slice(lineIndex + 1, Math.min(lines.length, lineIndex + afterCount + 1)).map(value => lineResult(value, maxLineChars)),
+							});
+						}
+						matchIndex++;
+					}
+					if (finished) break;
 				}
-				if (finished) break;
-			}
 
-			return { accountId, items, page, limit, hasMore };
+				if (regex && signal?.aborted) throw new ServiceError('request_cancelled');
+				return { accountId, items, page, limit, hasMore };
+			} finally {
+				await regex?.close();
+			}
 		},
 	});
 }
