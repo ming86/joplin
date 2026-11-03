@@ -6,7 +6,7 @@ import { logOperationError } from '../diagnostics.mjs';
 import { createPayloadCapacity } from '../payload-capacity.mjs';
 import { ServiceError } from '../errors.mjs';
 
-/** Preserve the session concurrency limit across otherwise independent POSTs. */
+/** Bound active POST work; eight distinct-note edits pass the local encrypted-core workload. This is an operational ceiling, not an MCP limit. */
 const maxDispatches = 8;
 /** Give aborted backends a bounded interval to finish during shutdown. */
 const shutdownMs = 5000;
