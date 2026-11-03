@@ -1,3 +1,4 @@
+import { debuglog } from 'node:util';
 import { bodyLines } from './body-lines.mjs';
 import { createRegexMatcher } from './grep-matching.mjs';
 import { identifier, requireValue, ServiceError } from './errors.mjs';
@@ -8,6 +9,8 @@ const record = value => value !== null && typeof value === 'object' && !Array.is
 const readable = note => note?.encryption_applied === 0 && !note.deleted_time && !note.is_locked;
 /** Error codes that mean a listed note disappeared or became unreadable during this scan. */
 const unavailableNoteCodes = new Set(['not_found', 'note_unavailable']);
+/** Opt-in aggregate diagnostics; NODE_DEBUG=joplin-headless enables these fixed, content-free records. */
+const debug = debuglog('joplin-headless');
 
 /** Validate one selection array and return stable, deduplicated Joplin identifiers. */
 function selectedIds(value) {
@@ -57,6 +60,51 @@ async function notebookScope(client, ids, includeDescendants, signal) {
 		}
 	}
 	return result;
+}
+
+/** Validate a directly selected note, retaining the narrower conflict boundary for notebook unions. */
+async function explicitNote(client, id, selectionMetadata, signal) {
+	let note;
+	try { note = await client.getNote(id, signal, { selectionMetadata }); }
+	catch (error) {
+		if (unavailableNoteCodes.has(error?.code)) throw new ServiceError('note_unavailable');
+		throw error;
+	}
+	if (!readable(note) || selectionMetadata && note.is_conflict) throw new ServiceError('note_unavailable');
+	requireValue(note.id === id && (selectionMetadata || typeof note.body === 'string'), 'invalid_backend_response');
+	return note;
+}
+
+/** Yield candidate bodies one page at a time, retaining direct-note validation and scope ordering. */
+async function* candidateBodies(client, selectedNoteIds, selectedNotebookIds, allReadable, signal, diagnostics) {
+	const directOnly = !allReadable && !selectedNotebookIds.size;
+	// Union selections validate all explicit IDs before enumeration, as the former summary scan did.
+	for (const id of [...selectedNoteIds].sort()) {
+		const started = performance.now();
+		const note = await explicitNote(client, id, !directOnly, signal);
+		diagnostics.explicitReads++;
+		diagnostics.enumerationMs += performance.now() - started;
+		if (directOnly) yield note;
+	}
+	if (directOnly) return;
+	let page = 1;
+	let after_id;
+	for (;;) {
+		if (signal?.aborted) throw new ServiceError('request_cancelled');
+		const pageStarted = performance.now();
+		const result = allReadable
+			? await client.listNotes({ page, limit: 100 }, signal)
+			: await client.listScopedNoteBodies({
+				notebook_ids: [...selectedNotebookIds], note_ids: [...selectedNoteIds], after_id, limit: 100,
+			}, signal);
+		diagnostics.enumerationMs += performance.now() - pageStarted;
+		diagnostics.bodyPages++;
+		diagnostics.candidateNotes += result.items.length;
+		yield* result.items;
+		if (!result.hasMore) return;
+		page++;
+		after_id = result.next_cursor;
+	}
 }
 
 /** Keep a bounded line preview without cutting a UTF-16 surrogate pair in half. */
@@ -135,29 +183,9 @@ export function createGrepService({ backend, permit, accountId, regexTimeoutMs }
 			const selectedNotebookIds = new Set(await notebookScope(client, requestedNotebookIds, includeDescendants, signal));
 			const allReadable = !noteIdsSupplied && !notebookIdsSupplied;
 
-			// A note-only request can validate its explicit IDs directly, without paging all metadata.
-			const directNoteSelection = noteIdsSupplied && requestedNotebookIds.length === 0;
-			let candidates;
-			if (!allReadable && selectedNoteIds.size === 0 && selectedNotebookIds.size === 0) {
-				candidates = [];
-			} else if (directNoteSelection) {
-				candidates = [...selectedNoteIds].sort().map(id => ({ id }));
-			} else {
-				const summaries = new Map();
-				let summaryPage = 1;
-				for (;;) {
-					const result = await client.listNoteSummaries({ page: summaryPage, limit: 100 }, signal);
-					for (const summary of result.items) summaries.set(summary.id, summary);
-					if (!result.hasMore) break;
-					summaryPage++;
-				}
-				for (const id of selectedNoteIds) {
-					if (!readable(summaries.get(id))) throw new ServiceError('note_unavailable');
-				}
-				candidates = [...summaries.values()]
-					.filter(summary => readable(summary) && scopeIncludes(summary, selectedNoteIds, selectedNotebookIds, allReadable))
-					.sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0);
-			}
+			const diagnostics = { bodyPages: 0, candidateNotes: 0, explicitReads: 0, snapshotReads: 0, enumerationMs: 0, snapshotReadMs: 0 };
+			const started = performance.now();
+			const candidates = candidateBodies(client, selectedNoteIds, selectedNotebookIds, allReadable, signal, diagnostics);
 			const items = [];
 			let matchIndex = 0;
 			let hasMore = false;
@@ -167,20 +195,14 @@ export function createGrepService({ backend, permit, accountId, regexTimeoutMs }
 				pattern: input.pattern, caseSensitive, signal, timeoutMs: regexTimeoutMs,
 			}) : undefined;
 			try {
-				for (const candidate of candidates) {
-					const id = candidate.id;
-					let current;
-					try { current = await client.getNote(id, signal); }
-					catch (error) {
-						if (unavailableNoteCodes.has(error?.code) && !selectedNoteIds.has(id)) continue;
-						if (unavailableNoteCodes.has(error?.code)) throw new ServiceError('note_unavailable');
-						throw error;
-					}
+				for await (const current of candidates) {
+					if (signal?.aborted) throw new ServiceError('request_cancelled');
+					const id = current.id;
 					if (!readable(current)) {
 						if (selectedNoteIds.has(id)) throw new ServiceError('note_unavailable');
 						continue;
 					}
-					requireValue(current.id === id && typeof current.body === 'string', 'invalid_backend_response');
+					requireValue(typeof current.body === 'string', 'invalid_backend_response');
 					if (!scopeIncludes(current, selectedNoteIds, selectedNotebookIds, allReadable)) continue;
 					const preliminaryMatch = regex
 						? (await regex.match({ kind: 'any', body: current.body })).matched
@@ -188,12 +210,17 @@ export function createGrepService({ backend, permit, accountId, regexTimeoutMs }
 					if (!preliminaryMatch) continue;
 
 					let snapshot;
-					try { snapshot = await client.readNoteWithRevision(id, signal); }
+					const snapshotStarted = performance.now();
+					try {
+						diagnostics.snapshotReads++;
+						snapshot = await client.readNoteWithRevision(id, signal);
+					}
 					catch (error) {
 						if (unavailableNoteCodes.has(error?.code) && !selectedNoteIds.has(id)) continue;
 						if (unavailableNoteCodes.has(error?.code)) throw new ServiceError('note_unavailable');
 						throw error;
 					}
+					finally { diagnostics.snapshotReadMs += performance.now() - snapshotStarted; }
 					if (!readable(snapshot)) {
 						if (selectedNoteIds.has(id)) throw new ServiceError('note_unavailable');
 						continue;
@@ -242,6 +269,7 @@ export function createGrepService({ backend, permit, accountId, regexTimeoutMs }
 				return { accountId, items, page, limit, hasMore };
 			} finally {
 				await regex?.close();
+				debug('grep scan %j', { ...diagnostics, elapsedMs: performance.now() - started, returnedRows: items.length, hasMore });
 			}
 		},
 	});

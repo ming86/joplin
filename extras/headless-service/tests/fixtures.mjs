@@ -129,8 +129,7 @@ export function backend(id = 'alice') {
 		},
 		async addTagToNote() {},
 		async removeTagFromNote() {},
-		async search() { return { items: [{ ...note, body: id }], hasMore: false }; },
-		async countSearchResults() { return 1; },
+		async search() { return { items: [{ ...note, body: id }], hasMore: false, total: 1 }; },
 		async changes() { return { cursor: '1', items: [], hasMore: false }; },
 	};
 }

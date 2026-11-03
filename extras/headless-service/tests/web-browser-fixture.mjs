@@ -28,7 +28,10 @@ const backend=http.createServer(async(req,res)=>{
 		if(u.pathname==='/folders')result={items:[{id:folderId,title:'Personal notebook',parent_id:''}],has_more:false};
 		else if(u.pathname===`/folders/${folderId}`)result={id:folderId,title:'Personal notebook',deleted_time:0};
 		else if(req.method==='GET'&&(u.pathname==='/notes'||u.pathname===`/folders/${folderId}/notes`))result=page([...records.values()].sort((a,b)=>a.id.localeCompare(b.id)));
-		else if(u.pathname==='/search')result=page([...records.values()].filter(n=>(n.title+' '+n.body).toLowerCase().includes(u.searchParams.get('query').toLowerCase())));
+		else if(u.pathname==='/services/headless'&&body.action==='searchNotes'){
+			const matches=[...records.values()].filter(n=>(n.title+' '+n.body).toLowerCase().includes(body.query.toLowerCase()));
+			const limit=body.limit??20,p=body.page??1;result={items:matches.slice((p-1)*limit,p*limit),total:matches.length,hasMore:p*limit<matches.length};
+		}
 		else if(u.pathname==='/notes'&&req.method==='POST'){
 			if(body.body!=='')throw new Error('User content must not be POSTed to the native creation route');
 			if(records.has(body.id)){res.writeHead(409);res.end('{}');return;}

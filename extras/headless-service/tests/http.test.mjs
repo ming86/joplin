@@ -13,6 +13,10 @@ test('real loopback transport implements a Joplin-shaped read/write/search/event
 		res.setHeader('Content-Type', 'application/json');
 		if (req.method === 'POST' || req.method === 'PUT') {
 			const body = await readJson(req);
+			if (u.pathname === '/services/headless' && body.action === 'searchNotes') {
+				searchQueries.push(body.query);
+				return res.end(JSON.stringify({ items: [stored], hasMore: false, total: 1 }));
+			}
 			writes.push([req.method, u.pathname, body]);
 			if (req.method === 'PUT') assert.deepEqual(Object.keys(body), ['body']);
 			stored = { ...stored, ...body }; return res.end(JSON.stringify(stored));
@@ -21,7 +25,6 @@ test('real loopback transport implements a Joplin-shaped read/write/search/event
 		if (u.pathname === '/folders') return res.end(JSON.stringify({ items: [{ id: folderId, title: 'Notebook', parent_id: '', encryption_applied: 0, deleted_time: 0 }], has_more: false }));
 		if (u.pathname === '/events') return res.end(JSON.stringify({ items: [{ id: 1, item_id: noteId, item_type: 1, type: 1, created_time: 2 }], has_more: false, cursor: '1' }));
 		if (u.pathname === `/notes/${noteId}`) return res.end(JSON.stringify({ ...stored, unexpected_secret: 'not exposed' }));
-		if (u.pathname === '/search') searchQueries.push(u.searchParams.get('query'));
 		return res.end(JSON.stringify({ items: [stored], has_more: false }));
 	});
 	const c = account(); c.joplin.baseUrl = url;
@@ -33,12 +36,63 @@ test('real loopback transport implements a Joplin-shaped read/write/search/event
 	assert.equal((await svc.search({ query: 'updated', mode: 'hybrid' })).items[0].body, 'updated');
 	const longQuery = 'q'.repeat(10001);
 	assert.equal((await svc.search({ query: longQuery, mode: 'keyword' })).total, 1);
-	assert.deepEqual(searchQueries, ['updated', 'updated', longQuery, longQuery]);
+	assert.deepEqual(searchQueries, ['updated', longQuery]);
 	assert.equal((await svc.listNotes()).items.length, 1);
 	assert.equal((await svc.changes('0')).cursor, '1');
 	assert.deepEqual(writes.map(([method]) => method), ['POST', 'PUT', 'PUT']);
 	assert.equal(writes[0][2].body, '', 'POST carries no user-supplied Markdown body');
 	assert.deepEqual(writes.slice(1).map(([, , body]) => body), [{ body: 'hello' }, { body: 'updated' }]);
+});
+
+test('grep adapter pages scoped bodies and keeps conflict metadata private to explicit selection reads', async t => {
+	const requests = [];
+	const url = await server(t, async (req, res) => {
+		const target = new URL(req.url, 'http://local');
+		res.setHeader('Content-Type', 'application/json');
+		if (req.method === 'GET') {
+			requests.push({ fields: target.searchParams.get('fields') });
+			return res.end(JSON.stringify({ ...note, is_conflict: 1, private_field: 'excluded' }));
+		}
+		const body = await readJson(req);
+		requests.push(body);
+		assert.equal(target.pathname, '/services/headless');
+		return res.end(JSON.stringify({ items: [{ ...note, is_conflict: 0, private_field: 'excluded' }], hasMore: true, next_cursor: noteId }));
+	});
+	const client = createJoplinClient({ baseUrl: url, token: 'private' });
+	assert.equal(Object.hasOwn(await client.getNote(noteId), 'is_conflict'), false);
+	const selected = await client.getNote(noteId, undefined, { selectionMetadata: true });
+	assert.equal(selected.is_conflict, 1);
+	assert.equal(Object.hasOwn(selected, 'private_field'), false);
+	const result = await client.listScopedNoteBodies({ notebook_ids: [folderId], note_ids: [noteId], after_id: noteId, limit: 2 });
+	assert.equal(result.items[0].body, note.body);
+	assert.equal(Object.hasOwn(result.items[0], 'is_conflict'), false);
+	assert.equal(result.next_cursor, noteId);
+	assert.equal(result.hasMore, true);
+	assert.equal(requests[0].fields.includes('is_conflict'), false);
+	assert.equal(requests[1].fields, 'id,encryption_applied,deleted_time,is_locked,is_conflict');
+	assert.deepEqual(requests[2], { action: 'listScopedNoteBodies', notebook_ids: [folderId], note_ids: [noteId], after_id: noteId, limit: 2 });
+});
+
+test('grep notebook unions validate locked explicit IDs without requesting their forbidden bodies', async t => {
+	const noteReads = [];
+	const url = await server(t, async (req, res) => {
+		const target = new URL(req.url, 'http://local');
+		res.setHeader('Content-Type', 'application/json');
+		if (target.pathname === '/folders') return res.end(JSON.stringify({
+			items: [{ id: folderId, title: 'Notebook', parent_id: '', encryption_applied: 0, deleted_time: 0 }], has_more: false,
+		}));
+		assert.equal(target.pathname, `/notes/${noteId}`);
+		const fields = target.searchParams.get('fields').split(',');
+		noteReads.push(fields);
+		if (fields.includes('body')) { res.writeHead(403); return res.end('{}'); }
+		return res.end(JSON.stringify({ id: noteId, encryption_applied: 0, deleted_time: 0, is_locked: 1, is_conflict: 0 }));
+	});
+	const config = account(); config.joplin.baseUrl = url;
+	const service = createAccountRegistry([config]).forPrincipal('alice', 'alice');
+	await assert.rejects(service.grepNotes({ pattern: 'hit', notebook_ids: [folderId], note_ids: [noteId] }), code('note_unavailable'));
+	assert.equal(noteReads.length, 1);
+	assert.equal(noteReads[0].includes('body'), false);
+	await assert.rejects(service.grepNotes({ pattern: 'hit', note_ids: [noteId] }), code('backend_authorization_failed'));
 });
 
 test('Joplin note adapter carries due and source URL fields through split-body creates and reads origin metadata', async t => {

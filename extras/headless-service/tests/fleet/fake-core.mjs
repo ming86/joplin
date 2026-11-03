@@ -27,7 +27,11 @@ const server = http.createServer(async (req, res) => {
   if (req.method !== 'GET') { const parts=[]; for await (const b of req) parts.push(b); body=JSON.parse(Buffer.concat(parts)); }
   let result;
   if (u.pathname === '/services/headless' && req.method === 'POST') {
-   if (body.action === 'readNote') {
+   if (body.action === 'searchNotes') {
+    const matches = [...notes.values()].filter(n => (n.title + n.body).includes(body.query));
+    const limit = body.limit ?? 20, pageNumber = body.page ?? 1;
+    result = { items: matches.slice((pageNumber - 1) * limit, pageNumber * limit), total: matches.length, hasMore: pageNumber * limit < matches.length };
+   } else if (body.action === 'readNote') {
     const n = notes.get(body.id);
     if (!n) { res.writeHead(404); return res.end('{}'); }
     result = { ...n, revision_id: revisions.get(body.id) };

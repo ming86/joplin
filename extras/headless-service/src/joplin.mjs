@@ -343,8 +343,16 @@ export function createJoplinClient(config) {
 			// Metadata-only enumeration avoids accumulating many large bodies in one response.
 			return request('notes', { ...pagination(options), order_by: 'id', order_dir: 'ASC', fields: 'id' }, 'GET', undefined, signal, { validateResult: data => pageResult(data, noteResult) });
 		},
-		async getNote(id, signal) {
-			return request(`notes/${identifier(id)}`, { fields: noteFields }, 'GET', undefined, signal, { validateResult: noteResult });
+		/** Read public note fields, or metadata without a body for grep union availability checks. */
+		async getNote(id, signal, { selectionMetadata = false } = {}) {
+			return request(`notes/${identifier(id)}`, { fields: selectionMetadata ? 'id,encryption_applied,deleted_time,is_locked,is_conflict' : noteFields }, 'GET', undefined, signal, {
+				validateResult(data) {
+					const result = noteResult(data);
+					if (!selectionMetadata) return result;
+					requireValue(data.is_conflict === 0 || data.is_conflict === 1, 'invalid_backend_response');
+					return { ...result, is_conflict: data.is_conflict };
+				},
+			});
 		},
 		/** Creates a note without passing user Markdown through the media-extracting POST route. */
 		async createNote(input, signal) {
@@ -418,31 +426,34 @@ export function createJoplinClient(config) {
 				return { id: data.id, title: data.title, parent_id: data.parent_id || null };
 			} });
 		},
+		/** Run native ranked keyword search once and return its page with the exact eligible total. */
 		async search(query, options, signal) {
 			requireValue(typeof query === 'string' && query.trim().length > 0, 'invalid_query');
-			return request('search', { query, ...pagination(options), type: 'note', fields: noteFields }, 'GET', undefined, signal, { validateResult: data => pageResult(data, noteResult) });
+			return request('services/headless', {}, 'POST', { action: 'searchNotes', query, ...pagination(options) }, signal, {
+				writeOperation: false,
+				validateResult(data) {
+					requireValue(data && Array.isArray(data.items) && typeof data.hasMore === 'boolean'
+						&& Number.isSafeInteger(data.total) && data.total >= 0, 'invalid_backend_response');
+					return { items: data.items.map(noteResult), total: data.total, hasMore: data.hasMore };
+				},
+			});
 		},
-		/** Counts all eligible keyword matches using metadata-only search pages. */
-		async countSearchResults(query, signal) {
-			requireValue(typeof query === 'string' && query.trim().length > 0, 'invalid_query');
-			let count = 0;
-			let page = 1;
-			let hasMore = true;
-			while (hasMore) {
-				const result = await request('search', {
-					query,
-					type: 'note',
-					fields: 'id,encryption_applied,deleted_time,is_locked',
-					limit: 100,
-					page,
-				}, 'GET', undefined, signal, { validateResult: data => pageResult(data, noteResult) });
-				for (const note of result.items) {
-					if (note.encryption_applied === 0 && !note.deleted_time && !note.is_locked) count++;
-				}
-				hasMore = result.hasMore;
-				page++;
-			}
-			return count;
+		/** Read one ID-ordered body page for a resolved notebook and explicit-note union. */
+		async listScopedNoteBodies({ notebook_ids, note_ids, after_id, limit = 100 }, signal) {
+			requireValue(Array.isArray(notebook_ids) && Array.isArray(note_ids), 'invalid_grep_input');
+			const values = {
+				notebook_ids: notebook_ids.map(identifier), note_ids: note_ids.map(identifier),
+				...(after_id === undefined ? {} : { after_id: identifier(after_id) }),
+				limit: pagination({ limit }).limit,
+			};
+			return request('services/headless', {}, 'POST', { action: 'listScopedNoteBodies', ...values }, signal, {
+				writeOperation: false,
+				validateResult(data) {
+					requireValue(data && Array.isArray(data.items) && typeof data.hasMore === 'boolean'
+						&& (data.hasMore ? typeof data.next_cursor === 'string' && /^[a-f0-9]{32}$/.test(data.next_cursor) : data.next_cursor === null), 'invalid_backend_response');
+					return { items: data.items.map(noteResult), hasMore: data.hasMore, next_cursor: data.next_cursor };
+				},
+			});
 		},
 		async changes(cursor, signal) {
 			requireValue(cursor === undefined || (typeof cursor === 'string' && /^\d+$/.test(cursor)), 'invalid_cursor');

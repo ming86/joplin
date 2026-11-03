@@ -355,7 +355,6 @@ export function createAccountRegistry(configurations, factories = {}) {
 					requireValue(!options.notebookId, 'notebook_filter_requires_semantic_engine');
 					if (mode === 'semantic') return { accountId, requestedMode: mode, executedMode: null, semantic: semanticStatus, items: [], hasMore: false };
 					const result = await backend().search(query, options, signal);
-					const total = backend().countSearchResults ? await backend().countSearchResults(query, signal) : undefined;
 					return {
 						accountId,
 						requestedMode: mode,
@@ -363,7 +362,7 @@ export function createAccountRegistry(configurations, factories = {}) {
 						semantic: semanticStatus,
 						items: result.items.filter(eligible).map(note => ({ ...identity(note), provenance: 'keyword' })),
 						hasMore: result.hasMore,
-						...(total === undefined ? {} : { total }),
+						total: result.total,
 					};
 				},
 				/** Return ranked matching chunks without exposing the local account binding ID. */

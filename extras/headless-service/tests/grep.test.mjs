@@ -14,7 +14,7 @@ const revisionId = 'd'.repeat(32);
 function makeNote(id, parent_id, body, values = {}) {
 	return {
 		id, parent_id, body, title: `Note ${id[0]}`,
-		encryption_applied: 0, deleted_time: 0, is_locked: 0,
+		encryption_applied: 0, deleted_time: 0, is_locked: 0, is_conflict: 0,
 		revision_id: revisionId,
 		...values,
 	};
@@ -23,12 +23,21 @@ function makeNote(id, parent_id, body, values = {}) {
 /** Build the public account service over a controllable Joplin backend. */
 function fixture(notes, { snapshots = new Map(), folders } = {}) {
 	const ordered = [...notes.values()].sort((left, right) => left.id.localeCompare(right.id));
-	const calls = { captures: [], summaryReads: 0 };
+	const calls = { captures: [], summaryReads: 0, bodyPages: 0, scopedPages: 0, gets: [] };
 	const backend = {
-		async listNoteSummaries({ page, limit }) {
-			calls.summaryReads++;
+		async listNotes({ page, limit }) {
+			calls.bodyPages++;
+			const listed = ordered.filter(note => !note.is_conflict);
 			const start = (page - 1) * limit;
-			return { items: ordered.slice(start, start + limit).map(({ body, ...note }) => ({ ...note })), hasMore: start + limit < ordered.length };
+			return { items: listed.slice(start, start + limit).map(note => ({ ...note })), hasMore: start + limit < listed.length };
+		},
+		async listScopedNoteBodies({ notebook_ids, note_ids, after_id, limit }) {
+			calls.scopedPages++;
+			const listed = ordered.filter(note => !note.is_conflict && (!after_id || note.id > after_id)
+				&& (notebook_ids.includes(note.parent_id) || note_ids.includes(note.id)));
+			const items = listed.slice(0, limit).map(note => ({ ...note }));
+			const hasMore = listed.length > limit;
+			return { items, hasMore, next_cursor: hasMore ? items.at(-1).id : null };
 		},
 		async listAllNotebooks() {
 			return folders ?? [
@@ -38,6 +47,7 @@ function fixture(notes, { snapshots = new Map(), folders } = {}) {
 			];
 		},
 		async getNote(id) {
+			calls.gets.push(id);
 			const note = notes.get(id);
 			if (!note) throw Object.assign(new Error('not found'), { code: 'not_found' });
 			return { ...note };
@@ -77,7 +87,72 @@ test('grep defaults to literal line matching and returns the exact captured body
 		}],
 	});
 	assert.deepEqual(calls.captures, [id]);
-	assert.equal(calls.summaryReads, 1);
+	assert.equal(calls.bodyPages, 1);
+	assert.deepEqual(calls.gets, []);
+});
+
+test('body enumeration scans successive pages for no hits and stops after an early lookahead', async () => {
+	const notes = new Map(Array.from({ length: 205 }, (_, index) => {
+		const id = (index + 1).toString(16).padStart(32, '0');
+		return [id, makeNote(id, notebookRoot, 'hit')];
+	}));
+	const noHits = fixture(notes);
+	assert.deepEqual((await noHits.service.grepNotes({ pattern: 'missing' })).items, []);
+	assert.equal(noHits.calls.bodyPages, 3);
+	assert.deepEqual(noHits.calls.gets, []);
+	assert.deepEqual(noHits.calls.captures, []);
+
+	const early = fixture(notes);
+	const result = await early.service.grepNotes({ pattern: 'hit', limit: 1 });
+	assert.equal(result.items.length, 1);
+	assert.equal(result.hasMore, true);
+	assert.equal(early.calls.bodyPages, 1);
+	assert.equal(early.calls.captures.length, 2);
+	assert.deepEqual(early.calls.gets, []);
+});
+
+test('scoped body pages retain ID order without enumerating unrelated notebook bodies', async () => {
+	const notes = new Map(Array.from({ length: 205 }, (_, index) => {
+		const id = (index + 1).toString(16).padStart(32, '0');
+		return [id, makeNote(id, notebookRoot, index === 204 ? 'hit' : 'none')];
+	}));
+	const outsideId = 'f'.repeat(32);
+	notes.set(outsideId, makeNote(outsideId, notebookOther, 'hit'));
+	const { service, calls } = fixture(notes);
+	const result = await service.grepNotes({ pattern: 'hit', notebook_ids: [notebookRoot], include_descendants: false });
+	assert.deepEqual(result.items.map(item => item.note_id), [(205).toString(16).padStart(32, '0')]);
+	assert.equal(calls.scopedPages, 3);
+	assert.equal(calls.bodyPages, 0);
+	assert.deepEqual(calls.gets, []);
+});
+
+test('explicit IDs retain direct availability checks and the notebook union conflict boundary', async () => {
+	const id = '1'.repeat(32);
+	const conflictId = '2'.repeat(32);
+	const missingId = '3'.repeat(32);
+	const notes = new Map([
+		[id, makeNote(id, notebookRoot, 'hit')],
+		[conflictId, makeNote(conflictId, notebookRoot, 'hit', { is_conflict: 1 })],
+	]);
+	const { service } = fixture(notes);
+	assert.deepEqual((await service.grepNotes({ pattern: 'hit', note_ids: [conflictId] })).items.map(item => item.note_id), [conflictId]);
+	assert.deepEqual((await service.grepNotes({ pattern: 'hit', notebook_ids: [notebookRoot] })).items.map(item => item.note_id), [id]);
+	await assert.rejects(service.grepNotes({ pattern: 'hit', notebook_ids: [notebookRoot], note_ids: [conflictId] }), { code: 'note_unavailable' });
+	await assert.rejects(service.grepNotes({ pattern: 'hit', notebook_ids: [notebookRoot], note_ids: [missingId], limit: 1 }), { code: 'note_unavailable' });
+});
+
+test('captured scope and readability changes omit incidental notes but reject explicit unavailable notes', async () => {
+	const id = '1'.repeat(32);
+	const notes = new Map([[id, makeNote(id, notebookRoot, 'hit')]]);
+	const moved = fixture(notes, { snapshots: new Map([[id, makeNote(id, notebookOther, 'hit')]]) });
+	assert.deepEqual((await moved.service.grepNotes({ pattern: 'hit', notebook_ids: [notebookRoot] })).items, []);
+	const hidden = fixture(notes, { snapshots: new Map([[id, makeNote(id, notebookRoot, 'hit', { is_locked: 1 })]]) });
+	assert.deepEqual((await hidden.service.grepNotes({ pattern: 'hit' })).items, []);
+	await assert.rejects(hidden.service.grepNotes({ pattern: 'hit', note_ids: [id] }), { code: 'note_unavailable' });
+	const gone = fixture(notes);
+	gone.backend.readNoteWithRevision = async () => { throw Object.assign(new Error('gone'), { code: 'not_found' }); };
+	assert.deepEqual((await gone.service.grepNotes({ pattern: 'hit' })).items, []);
+	await assert.rejects(gone.service.grepNotes({ pattern: 'hit', note_ids: [id] }), { code: 'note_unavailable' });
 });
 
 test('regex mode matches per line and repeated occurrences still produce one row', async () => {

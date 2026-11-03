@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createAccountRegistry } from '../index.mjs';
 import { createMcpSession } from '../mcp.mjs';
-import { account, backend, folderId, initialRevisionId, note, noteId, readJson, server } from './fixtures.mjs';
+import { account, backend, folderId, headlessStatus, initialRevisionId, note, noteId, readJson, server } from './fixtures.mjs';
 
 const movedNotebookId = 'c'.repeat(32);
 const workTagId = 'd'.repeat(32);
@@ -174,8 +174,7 @@ test('MCP note, search, and tag fields accept values beyond the former arbitrary
 	};
 	b.getNote = async () => ({ ...note, body: find });
 	b.updateNote = async (_id, input) => { updatePatch = input; return { ...note, ...input }; };
-	b.search = async value => { searched = value; return { items: [{ ...note, body: 'match' }], hasMore: false }; };
-	b.countSearchResults = async () => 1;
+	b.search = async value => { searched = value; return { items: [{ ...note, body: 'match' }], hasMore: false, total: 1 }; };
 	b.createTag = async tagTitle => ({ id: tagTitle.length.toString(16).padStart(32, '0'), title: tagTitle });
 	b.addTagToNote = async () => {};
 	b.getNoteTags = async () => [];
@@ -781,37 +780,21 @@ test('real Data API notebook and tag scans page through results and omit unavail
 	} finally { session.close(); }
 });
 
-test('keyword search returns an exact eligible total without changing the requested result page', async t => {
-	const metadataPages = [];
-	let requestedPage;
-	const safeOne = { id: '1'.repeat(32), encryption_applied: 0, deleted_time: 0, is_locked: 0 };
-	const encrypted = { id: '2'.repeat(32), encryption_applied: 1, deleted_time: 0, is_locked: 0 };
-	const deleted = { id: '3'.repeat(32), encryption_applied: 0, deleted_time: 42, is_locked: 0 };
-	const locked = { id: '4'.repeat(32), encryption_applied: 0, deleted_time: 0, is_locked: 1 };
-	const safeTwo = { id: '5'.repeat(32), encryption_applied: 0, deleted_time: 0, is_locked: 0 };
+test('keyword search requests one native page with its eligible total and retains page membership', async t => {
+	const requests = [];
+	const safeId = '5'.repeat(32);
 	const url = await server(t, async (req, res) => {
 		const target = new URL(req.url, 'http://localhost');
 		assert.equal(target.searchParams.get('token'), 'alice-private-token');
-		assert.equal(req.method, 'GET');
-		const requestBody = [];
-		for await (const chunk of req) requestBody.push(chunk);
-		assert.equal(Buffer.concat(requestBody).length, 0, 'search requests carry no HTTP body');
+		assert.equal(req.method, 'POST');
+		assert.equal(target.pathname, '/services/headless');
+		const body = await readJson(req);
 		res.setHeader('Content-Type', 'application/json');
-		assert.equal(target.pathname, '/search');
-		if (target.searchParams.get('fields') === 'id,encryption_applied,deleted_time,is_locked') {
-			const page = Number(target.searchParams.get('page'));
-			metadataPages.push({ page, fields: target.searchParams.get('fields') });
-			const items = page === 1 ? [safeOne, encrypted, deleted, locked] : [safeTwo];
-			return res.end(JSON.stringify({ items, has_more: page === 1 }));
-		}
-		requestedPage = {
-			page: Number(target.searchParams.get('page')),
-			limit: Number(target.searchParams.get('limit')),
-			fields: target.searchParams.get('fields'),
-		};
+		if (body.action === 'status') return res.end(JSON.stringify(headlessStatus));
+		requests.push(body);
 		return res.end(JSON.stringify({
-			items: [{ ...note, id: safeTwo.id, title: 'Requested page', body: 'needle in this result' }],
-			has_more: true,
+			items: [{ ...note, id: safeId, title: 'Requested page', body: 'needle in this result' }],
+			hasMore: true, total: 2,
 		}));
 	});
 	const config = account(); config.joplin.baseUrl = url;
@@ -820,17 +803,12 @@ test('keyword search returns an exact eligible total without changing the reques
 	await ready(session);
 	try {
 		const result = (await invoke(session, 'search_notes', { query: 'needle', page: 2, limit: 1 })).structuredContent;
-		assert.equal(result.total, 2, 'the total counts readable matches from every metadata page');
-		assert.deepEqual(result.results.map(item => item.id), [safeTwo.id], 'results remain limited to the requested search page');
+		assert.equal(result.total, 2);
+		assert.deepEqual(result.results.map(item => item.id), [safeId]);
 		assert.equal(Object.hasOwn(result, 'items'), false);
 		assert.equal(result.results[0].snippet, 'needle in this result');
 		assert.equal(result.hasMore, true);
-		assert.deepEqual(metadataPages, [
-			{ page: 1, fields: 'id,encryption_applied,deleted_time,is_locked' },
-			{ page: 2, fields: 'id,encryption_applied,deleted_time,is_locked' },
-		]);
-		assert.deepEqual(requestedPage, { page: 2, limit: 1, fields: 'id,parent_id,title,body,created_time,updated_time,is_todo,todo_due,todo_completed,source,source_application,source_url,markup_language,encryption_applied,deleted_time,is_locked' });
-		assert.ok(metadataPages.every(({ fields }) => !fields.split(',').includes('body')));
+		assert.deepEqual(requests, [{ action: 'searchNotes', query: 'needle', page: 2, limit: 1 }]);
 	} finally { session.close(); }
 });
 

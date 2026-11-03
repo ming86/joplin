@@ -684,7 +684,11 @@ export interface JoplinBackend {
     getClipRecord?(id: string, signal?: AbortSignal): Promise<WebCreationRecord>;
     createWebPlaceholder?(input: WebPlaceholder, signal?: AbortSignal): Promise<{ id: string }>;
     listIndexNotes?(options?: PageOptions, signal?: AbortSignal): Promise<Page<Note>>;
-    getNote(id: string, signal?: AbortSignal): Promise<Note>;
+    /** Read public note fields, or body-free availability metadata for grep union validation. */
+    getNote(id: string, signal?: AbortSignal, options?: {
+        /** Omit the body and include private is_conflict for internal selection checks. */
+        selectionMetadata?: boolean;
+    }): Promise<Note & { is_conflict?: number }>;
     /** Create a note and its first native revision in one core transaction, when supported. */
     createNoteWithRevision?(input: RevisionNoteCreateInput, signal?: AbortSignal): Promise<CreatedRevisionNote>;
     /** Read current note data and capture its native revision id for a protected update. */
@@ -747,9 +751,22 @@ export interface JoplinBackend {
     createAttachment(input: CreateAttachmentInput, signal?: AbortSignal): Promise<BackendAttachment>;
     /** Update resource metadata and/or replace the current resource bytes. */
     updateAttachment(resourceId: string, input: UpdateAttachmentInput, signal?: AbortSignal): Promise<BackendAttachment>;
-    search(query: string, options?: PageOptions, signal?: AbortSignal): Promise<Page<Note>>;
-    /** Count all eligible keyword matches without fetching note bodies. */
-    countSearchResults?(query: string, signal?: AbortSignal): Promise<number>;
+    /** Run native ranked keyword search once; total counts readable results independently of page membership. */
+    search(query: string, options?: PageOptions, signal?: AbortSignal): Promise<Page<Note> & { total: number }>;
+    /** Read an ID-ordered page of readable non-conflict bodies in a resolved notebook/explicit-note union. */
+    listScopedNoteBodies(input: {
+        /** Resolved notebook IDs, including descendants chosen by the caller. */
+        notebook_ids: string[];
+        /** Explicit IDs unioned with the notebooks, validated by the caller before enumeration. */
+        note_ids: string[];
+        /** Exclusive note-ID continuation cursor. */
+        after_id?: string;
+        /** Number of notes to read, from 1 through 100; defaults to 100. */
+        limit?: number;
+    }, signal?: AbortSignal): Promise<Page<Note> & {
+        /** Last returned note ID, or null when no page follows. */
+        next_cursor: string | null;
+    }>;
     changes(cursor?: string, signal?: AbortSignal): Promise<Page<Change> & { cursor: string }>;
 }
 export interface SemanticStatus {

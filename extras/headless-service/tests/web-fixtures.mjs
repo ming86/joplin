@@ -29,7 +29,7 @@ export function webFixture({ allowWrites = true, render = body => body, records 
 			const n = notes.get(id); Object.assign(n, input); n.updated_time++;
 			await hooks.afterUpdate?.(n); return { ...n };
 		},
-		async search(query) { return { items: [...notes.values()].filter(n => (n.title + n.body).includes(query)), hasMore: false }; },
+		async search(query) { const items = [...notes.values()].filter(n => (n.title + n.body).includes(query)); return { items, hasMore: false, total: items.length }; },
 	};
 	const c = config(); c.permissions = allowWrites ? ['read', 'write'] : ['read'];
 	const registry = createAccountRegistry([c], { makeBackend: () => backend, makeSemanticBackend });
