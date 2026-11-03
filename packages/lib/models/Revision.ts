@@ -5,6 +5,7 @@ const DiffMatchPatch = require('diff-match-patch');
 import * as ArrayUtils from '../ArrayUtils';
 import JoplinError from '../JoplinError';
 import time from '../time';
+import { reportHeadlessPerformance } from '../services/HeadlessPerformance';
 import isNoteLockEnabled from '../services/noteLock/isNoteLockEnabled';
 const { sprintf } = require('sprintf-js');
 
@@ -378,85 +379,72 @@ export default class Revision extends BaseItem {
 		);
 	}
 
+	/** Prune each item's history under its own lock, using one cutoff for the whole run. */
 	public static async deleteOldRevisions(ttl: number) {
-		// When deleting old revisions, we need to make sure that the oldest surviving revision
-		// is a "merged" one (as opposed to a diff from a now deleted revision). So every time
-		// we deleted a revision, we need to find if there's a corresponding surviving revision
-		// and modify that revision into a "merged" one.
-
 		const cutOffDate = Date.now() - ttl;
-		const allOldRevisions: RevisionEntity[] = await this.modelSelectAll(
-			'SELECT * FROM revisions WHERE item_updated_time < ? ORDER BY item_updated_time ASC',
+		const items = await this.db().selectAll<{ item_type: ModelType; item_id: string }>(
+			'SELECT item_type, item_id FROM revisions WHERE item_updated_time < ? GROUP BY item_type, item_id ORDER BY MIN(item_updated_time) ASC',
 			[cutOffDate],
 		);
+		for (const item of items) {
+			await this.revisionService().withRevisionLock(item.item_id, async () => {
+				try {
+					await this.deleteOldRevisionsForItem_(item.item_type, item.item_id, cutOffDate);
+				} catch (error) {
+					if (error.code === 'revision_encrypted') {
+						this.logger().info(`Aborted deletion of old revisions for item "${item.item_id}" because one of the revisions is still encrypted`, error);
+					} else {
+						throw error;
+					}
+				}
+			}, item.item_type);
+		}
+	}
 
-		const itemIdToOldRevisions = new Map<string, RevisionEntity[]>();
-		for (const rev of allOldRevisions) {
-			const itemId = rev.item_id;
-			if (!itemIdToOldRevisions.has(itemId)) {
-				itemIdToOldRevisions.set(itemId, []);
+	/** Reread, reconstruct, delete and rebase one item while its caller holds the history lock. */
+	private static async deleteOldRevisionsForItem_(itemType: ModelType, itemId: string, cutOffDate: number) {
+		// Candidate enumeration happens before locking. Reload all rows here so captures or
+		// clears that completed while waiting cannot leave stale ancestry in the rebase.
+		const oldRevisions: RevisionEntity[] = await this.modelSelectAll(
+			'SELECT * FROM revisions WHERE item_updated_time < ? AND item_type = ? AND item_id = ? ORDER BY item_updated_time ASC',
+			[cutOffDate, itemType, itemId],
+		);
+		if (!oldRevisions.length) return;
+		const firstKeptRev = await this.modelSelectOne(
+			'SELECT * FROM revisions WHERE item_updated_time >= ? AND item_type = ? AND item_id = ? ORDER BY item_updated_time ASC LIMIT 1',
+			[cutOffDate, itemType, itemId],
+		);
+		const queries: StringOrSqlQuery[] = [];
+		if (!firstKeptRev) {
+			if (oldRevisions.some(revision => revision.encryption_applied)) {
+				throw new JoplinError('One of the revision to be deleted is encrypted', 'revision_encrypted');
 			}
-			itemIdToOldRevisions.get(itemId).push(rev);
+		} else {
+			const revsToMerge = await this.findAllRevisionsToKeep(itemType, itemId, cutOffDate);
+			for (const keptRev of revsToMerge) {
+				// mergeDiffs preserves native encrypted-history failure behavior.
+				const merged = await this.mergeDiffs(keptRev, oldRevisions);
+				queries.push({
+					sql: 'UPDATE revisions SET title_diff = ?, body_diff = ?, metadata_diff = ?, updated_time = ?, parent_id = ? WHERE id = ?',
+					params: [this.createTextPatch('', merged.title), this.createTextPatch('', merged.body), this.createObjectPatch({}, merged.metadata), time.unixMs(), '', keptRev.id],
+				});
+			}
 		}
 
-		const deleteOldRevisionsForItem = async (itemType: ModelType, itemId: string, oldRevisions: RevisionEntity[]) => {
-			const firstKeptRev = await this.modelSelectOne(
-				'SELECT * FROM revisions WHERE item_updated_time >= ? AND item_type = ? AND item_id = ? ORDER BY item_updated_time ASC LIMIT 1',
-				[cutOffDate, itemType, itemId],
-			);
-			const queries: StringOrSqlQuery[] = [];
-			if (!firstKeptRev) {
-				const hasEncrypted = await this.modelSelectOne(
-					'SELECT * FROM revisions WHERE encryption_applied = 1 AND item_updated_time < ? AND item_id = ?',
-					[cutOffDate, itemId],
-				);
-				if (hasEncrypted) {
-					throw new JoplinError('One of the revision to be deleted is encrypted', 'revision_encrypted');
-				}
-			} else {
-				const revsToMerge = await this.findAllRevisionsToKeep(itemType, itemId, cutOffDate);
-
-				for (const keptRev of revsToMerge) {
-					// Note: we don't need to check for encrypted rev here because
-					// mergeDiff will already throw the revision_encrypted exception
-					// if a rev is encrypted.
-					const merged = await this.mergeDiffs(keptRev, oldRevisions);
-
-					const titleDiff = this.createTextPatch('', merged.title);
-					const bodyDiff = this.createTextPatch('', merged.body);
-					const metadataDiff = this.createObjectPatch({}, merged.metadata);
-					queries.push({
-						sql: 'UPDATE revisions SET title_diff = ?, body_diff = ?, metadata_diff = ?, updated_time = ?, parent_id = ? WHERE id = ?',
-						params: [titleDiff, bodyDiff, metadataDiff, time.unixMs(), '', keptRev.id],
-					});
-				}
-			}
-
-			await this.batchDelete(oldRevisions.map(item => item.id), { sourceDescription: 'Revision.deleteOldRevisions' });
-			if (queries.length) {
-				await this.db().transactionExecBatch(queries);
-			}
-		};
-
-		for (const [itemId, oldRevisions] of itemIdToOldRevisions.entries()) {
-			if (!oldRevisions.length) {
-				throw new Error('Invalid state: There must be at least one old revision per item to be processed.');
-			}
-
-			const latestOldRevision = oldRevisions[oldRevisions.length - 1];
-
+		// Native deletion records sync tombstones and emits local-change notifications.
+		// Keep the same item lock until rebasing completes, including between these transactions.
+		await this.batchDelete(oldRevisions.map(item => item.id), { sourceDescription: 'Revision.deleteOldRevisions' });
+		if (queries.length) {
+			const startedAt = Date.now();
 			try {
-				await deleteOldRevisionsForItem(latestOldRevision.item_type, itemId, oldRevisions);
-			} catch (error) {
-				if (error.code === 'revision_encrypted') {
-					this.logger().info(`Aborted deletion of old revisions for item "${itemId}" (latest old rev "${latestOldRevision.id}") because one of the revisions is still encrypted`, error);
-				} else {
-					throw error;
-				}
+				await this.db().transactionExecBatch(queries);
+			} finally {
+				reportHeadlessPerformance(this.logger(), { stage: 'historyPruneRebaseTransaction', itemType, itemId, elapsedMs: Date.now() - startedAt, revisionCount: queries.length });
 			}
 		}
 	}
 
+	/** Delete native history; callers must hold the affected note history locks. */
 	public static async deleteHistoryForNote(noteIds: string | string[], options: DeleteOptions) {
 		const ids = Array.isArray(noteIds) ? noteIds : [noteIds];
 
@@ -468,7 +456,7 @@ export default class Revision extends BaseItem {
 		await this.batchDelete(revisions.map(item => item.id), options);
 	}
 
-	// Same as deleteHistoryForNote, but keeps locked revisions when clearing plaintext history during note locking.
+	/** Delete plaintext history while retaining locked revisions; callers must hold the affected note history locks. */
 	public static async deleteUnencryptedHistoryForNote(noteIds: string | string[], options: DeleteOptions) {
 		const ids = Array.isArray(noteIds) ? noteIds : [noteIds];
 

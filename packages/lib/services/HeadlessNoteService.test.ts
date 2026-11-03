@@ -249,6 +249,36 @@ describe('services/HeadlessNoteService', () => {
 		expect(await Revision.countRevisions(BaseModel.TYPE_NOTE, note.id)).toBe(2);
 	});
 
+	it('allows another note to read and commit while one note has an owner and a waiting reader', async () => {
+		const first = await Note.save({ title: 'Waiting note', body: 'A' });
+		const second = await Note.save({ title: 'Independent note', body: 'B' });
+		let release: ()=> void;
+		let entered: ()=> void;
+		const held = new Promise<void>(resolve => release = resolve);
+		const acquired = new Promise<void>(resolve => entered = resolve);
+		const owner = revisionService().withRevisionLock(first.id, async () => {
+			entered();
+			await held;
+		});
+		await acquired;
+		let firstFinished = false;
+		const waiting = readNote(first.id).then(result => {
+			firstFinished = true;
+			return result;
+		});
+		try {
+			const snapshot = await readNote(second.id);
+			const edited = await updateNote({ id: second.id, base_revision_id: snapshot.revision_id, changes: { body: 'B updated' } });
+			expect(edited).toMatchObject({ body: 'B updated', changed: true });
+			expect(firstFinished).toBe(false);
+		} finally {
+			release();
+			await owner;
+			await waiting;
+		}
+		expect(firstFinished).toBe(true);
+	});
+
 	it('rejects an earlier native revision after the note returns to its earlier content', async () => {
 		const note = await Note.save({ title: 'Reverted', body: 'A' });
 		const first = await readNote(note.id);

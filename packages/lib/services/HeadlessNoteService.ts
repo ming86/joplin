@@ -1,3 +1,4 @@
+import Logger from '@joplin/utils/Logger';
 import BaseModel, { UserSideValidationError } from '../BaseModel';
 import JoplinError from '../JoplinError';
 import Folder from '../models/Folder';
@@ -5,7 +6,21 @@ import Note from '../models/Note';
 import Revision, { RevisionContent, RevisionReconstruction } from '../models/Revision';
 import Setting from '../models/Setting';
 import applyBodyPatch from './HeadlessNotePatch';
+import { reportHeadlessPerformance } from './HeadlessPerformance';
 import { NoteEntity, RevisionEntity, SqlQuery } from './database/types';
+
+/** Native headless note stage timings; values and SQL are deliberately omitted. */
+const logger = Logger.create('HeadlessNoteService');
+
+/** Time a native save or transaction, including SQLite's existing shared transaction wait. */
+async function timeTransaction<T>(noteId: string, operation: 'create' | 'read-capture' | 'unchanged-edit' | 'update', action: ()=> Promise<T>): Promise<T> {
+	const startedAt = Date.now();
+	try {
+		return await action();
+	} finally {
+		reportHeadlessPerformance(logger, { stage: 'noteTransaction', noteId, operation, elapsedMs: Date.now() - startedAt });
+	}
+}
 
 /** Supported inputs for a new Markdown note and its first native revision. */
 export interface HeadlessNoteCreate {
@@ -257,7 +272,8 @@ async function editPatch(note: NoteEntity, changes: HeadlessNoteChanges): Promis
 /** Create one native note and its first revision in the same ordinary save transaction. */
 export async function createNoteWithRevision(input: HeadlessNoteCreate): Promise<HeadlessNoteRead> {
 	validateCreate(input);
-	return Note.revisionService().withRevisionLock(async () => {
+	const id = Note.generateUuid();
+	return Note.revisionService().withRevisionLock(id, async () => {
 		const folder = await Folder.load(input.notebook_id);
 		if (!folder || folder.encryption_applied !== 0 || folder.deleted_time) throw new JoplinError('The notebook is unavailable.', 'notebook_unavailable');
 
@@ -266,7 +282,7 @@ export async function createNoteWithRevision(input: HeadlessNoteCreate): Promise
 		const now = Date.now();
 		const note = Note.filter({
 			...Note.defaultValues(Note.fieldNames()),
-			id: Note.generateUuid(),
+			id,
 			parent_id: folder.id,
 			title: input.title,
 			body: input.body ?? '',
@@ -284,12 +300,12 @@ export async function createNoteWithRevision(input: HeadlessNoteCreate): Promise
 		});
 		const capture = await prepareCapture(note);
 		try {
-			const saved = await Note.save(note, {
+			const saved = await timeTransaction(id, 'create', () => Note.save(note, {
 				isNew: true,
 				autoTimestamp: false,
 				userSideValidation: true,
 				nextQueries: [...capture.checks, ...capture.queries],
-			});
+			}));
 			return { ...saved, revision_id: capture.revision.id };
 		} catch (error) {
 			rethrowSaveError(error);
@@ -300,11 +316,11 @@ export async function createNoteWithRevision(input: HeadlessNoteCreate): Promise
 /** Read one eligible snapshot, creating native history only when its tracked state is unrecorded. */
 export async function readNote(id: string): Promise<HeadlessNoteRead> {
 	requireId(id);
-	return Note.revisionService().withRevisionLock(async () => {
+	return Note.revisionService().withRevisionLock(id, async () => {
 		const note = await loadReadableNote(id);
 		const capture = await prepareCapture(note);
 		try {
-			await Note.db().transactionExecBatch([snapshotCheck(Note, note), ...capture.checks, ...capture.queries]);
+			await timeTransaction(id, 'read-capture', () => Note.db().transactionExecBatch([snapshotCheck(Note, note), ...capture.checks, ...capture.queries]));
 		} catch (error) {
 			rethrowSaveError(error);
 		}
@@ -317,7 +333,7 @@ export async function updateNote(input: HeadlessNoteUpdate): Promise<HeadlessNot
 	requireId(input?.id);
 	requireId(input?.base_revision_id);
 	validateChanges(input.changes);
-	return Note.revisionService().withRevisionLock(async () => {
+	return Note.revisionService().withRevisionLock(input.id, async () => {
 		const note = await loadReadableNote(input.id);
 		const baseRevision = await Revision.load(input.base_revision_id);
 		if (!baseRevision || baseRevision.item_type !== BaseModel.TYPE_NOTE || baseRevision.item_id !== note.id) {
@@ -334,7 +350,7 @@ export async function updateNote(input: HeadlessNoteUpdate): Promise<HeadlessNot
 			// Verify the current snapshot even for an unchanged request. This preserves both note
 			// timestamps and ItemChange state while guarding any newly needed history insert.
 			try {
-				await Note.db().transactionExecBatch([snapshotCheck(Note, note), ...before.checks, ...before.queries]);
+				await timeTransaction(note.id, 'unchanged-edit', () => Note.db().transactionExecBatch([snapshotCheck(Note, note), ...before.checks, ...before.queries]));
 			} catch (error) {
 				rethrowSaveError(error);
 			}
@@ -348,12 +364,12 @@ export async function updateNote(input: HeadlessNoteUpdate): Promise<HeadlessNot
 		const updated = { ...note, ...mutation };
 		const after = await prepareCapture(updated, before);
 		try {
-			await Note.save(mutation, {
+			await timeTransaction(note.id, 'update', () => Note.save(mutation, {
 				autoTimestamp: false,
 				userSideValidation: true,
 				expectedItem: note,
 				nextQueries: [...before.checks, ...before.queries, ...after.queries],
-			});
+			}));
 		} catch (error) {
 			rethrowSaveError(error);
 		}

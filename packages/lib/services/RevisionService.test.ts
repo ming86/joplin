@@ -7,6 +7,8 @@ import BaseModel, { ModelType } from '../BaseModel';
 import RevisionService from '../services/RevisionService';
 import { MarkupLanguage } from '../../renderer';
 import { NoteEntity } from './database/types';
+import { readNote } from './HeadlessNoteService';
+import HeadlessRevisionHistory from './HeadlessRevisionHistory';
 
 interface CreateTestRevisionOptions {
 	// How long to pause (in milliseconds) between each note modification.
@@ -233,6 +235,147 @@ describe('services/RevisionService', () => {
 
 		// Should leave newer revisions (handle the case where revisions are downloaded before the note).
 		expect(await getNoteRevisions()).toHaveLength(1);
+	});
+
+	it('keeps same-note readers outside native prune deletion and rebase while another note proceeds', async () => {
+		const first = await Note.save({ title: 'Pruned note', body: 'Old body' });
+		const old = await revisionService().createNoteRevision_(first, null, true);
+		jest.advanceTimersByTime(10_000);
+		const updated = await Note.save({ id: first.id, body: 'Retained body' });
+		const kept = await revisionService().createNoteRevision_(updated, null, true);
+		const second = await Note.save({ title: 'Independent note', body: 'B' });
+		let release: ()=> void;
+		let deleted: ()=> void;
+		const resume = new Promise<void>(resolve => release = resolve);
+		const deletionFinished = new Promise<void>(resolve => deleted = resolve);
+		const batchDelete = Revision.batchDelete.bind(Revision);
+		const deletion = jest.spyOn(Revision, 'batchDelete').mockImplementation(async (ids, options) => {
+			await batchDelete(ids, options);
+			if (ids.includes(old.id)) {
+				deleted();
+				await resume;
+			}
+		});
+		const pruning = revisionService().deleteOldRevisions(5_000);
+		await deletionFinished;
+		let finished = false;
+		const reading = HeadlessRevisionHistory.readNoteRevision({ note_id: first.id, revision_id: kept.id }).then(result => {
+			finished = true;
+			return result;
+		});
+		try {
+			expect(await Revision.load(old.id)).toBeUndefined();
+			expect((await readNote(second.id)).body).toBe('B');
+			expect(finished).toBe(false);
+		} finally {
+			release();
+			await pruning;
+			deletion.mockRestore();
+		}
+		expect(await reading).toMatchObject({ body: 'Retained body' });
+		const survivor = await Revision.load(kept.id);
+		expect(survivor.parent_id).toBe('');
+		expect(await Revision.mergeDiffsStrict(survivor)).toMatchObject({ body: 'Retained body' });
+	});
+
+	it('skips a replaced queued collector change and processes its replacement after intervening notes', async () => {
+		const service = revisionService();
+		const first = await Note.save({ title: 'Cleared note', body: 'Pre-clear body' });
+		jest.advanceTimersByTime(10_000);
+		Setting.setValue('revisionService.oldNoteInterval', 1_000);
+		await Note.save({ id: first.id, body: 'Current body' });
+		await ItemChange.waitForAllSaved();
+		const second = await Note.save({ title: 'Intervening note', body: 'B' });
+		await Note.save({ id: second.id, body: 'B updated' });
+		await ItemChange.waitForAllSaved();
+		let release: ()=> void;
+		let clearing: ()=> void;
+		let selected: ()=> void;
+		const resume = new Promise<void>(resolve => release = resolve);
+		const clearEntered = new Promise<void>(resolve => clearing = resolve);
+		const changesSelected = new Promise<void>(resolve => selected = resolve);
+		const batchDelete = Revision.batchDelete.bind(Revision);
+		const deletion = jest.spyOn(Revision, 'batchDelete').mockImplementation(async (ids, options) => {
+			clearing();
+			await resume;
+			return batchDelete(ids, options);
+		});
+		const selectChanges = ItemChange.modelSelectAll.bind(ItemChange);
+		const select = jest.spyOn(ItemChange, 'modelSelectAll').mockImplementation(async (query, params) => {
+			const rows = await selectChanges(query, params);
+			if (rows.some(row => row.item_id === first.id)) selected();
+			return rows;
+		});
+		const save = jest.spyOn(Revision, 'save');
+		const clear = service.deleteHistoryForNote(first.id, { sourceDescription: 'test' });
+		await clearEntered;
+		const collecting = service.collectRevisions();
+		await changesSelected;
+		try {
+			release();
+			await clear;
+			await collecting;
+			expect(save.mock.calls.map(call => call[0].item_id)).toEqual([second.id, first.id]);
+			const revisions = await Revision.allByType(BaseModel.TYPE_NOTE, first.id);
+			expect(revisions).toHaveLength(1);
+			expect(await Revision.mergeDiffsStrict(revisions[0])).toMatchObject({ body: 'Current body' });
+			expect(service.changedSinceCollection(first.id)).toBe(false);
+		} finally {
+			release();
+			await clear;
+			await collecting;
+			deletion.mockRestore();
+			select.mockRestore();
+			save.mockRestore();
+		}
+	});
+
+	it.each([false, true])('captures replacement changes after clearing an already collected note (post-clear edit: %s)', async (editAfterClear) => {
+		const service = revisionService();
+		const first = await Note.save({ title: 'First note', body: 'Original A' });
+		await Note.save({ id: first.id, body: 'Current A' });
+		await ItemChange.waitForAllSaved();
+		const second = await Note.save({ title: 'Blocked note', body: 'Original B' });
+		await Note.save({ id: second.id, body: 'Current B' });
+		await ItemChange.waitForAllSaved();
+
+		let release: ()=> void;
+		let entered: ()=> void;
+		const resume = new Promise<void>(resolve => release = resolve);
+		const secondStarted = new Promise<void>(resolve => entered = resolve);
+		const saveRevision = Revision.save.bind(Revision);
+		const save = jest.spyOn(Revision, 'save').mockImplementation(async (item, options) => {
+			if (item.item_id === second.id) {
+				entered();
+				await resume;
+			}
+			return saveRevision(item, options);
+		});
+		const collecting = service.collectRevisions();
+		await secondStarted;
+		try {
+			// A has finished before collection blocks on B. Clearing A must invalidate that
+			// completion so its replacement change remains eligible in this same run.
+			expect(await Revision.countRevisions(BaseModel.TYPE_NOTE, first.id)).toBe(1);
+			await service.deleteHistoryForNote(first.id, { sourceDescription: 'test' });
+			expect(await Revision.countRevisions(BaseModel.TYPE_NOTE, first.id)).toBe(0);
+			if (editAfterClear) await Note.save({ id: first.id, body: 'Post-clear A' });
+			await ItemChange.waitForAllSaved();
+			const replacement = await ItemChange.modelSelectOne('SELECT id FROM item_changes WHERE item_id = ?', [first.id]);
+			release();
+			await collecting;
+
+			expect(save.mock.calls.map(call => call[0].item_id)).toEqual([first.id, second.id, first.id]);
+			const revisions = await Revision.allByType(BaseModel.TYPE_NOTE, first.id);
+			expect(revisions).toHaveLength(1);
+			expect(await Revision.mergeDiffsStrict(revisions[0])).toMatchObject({ body: editAfterClear ? 'Post-clear A' : 'Current A' });
+			expect(Setting.value('revisionService.lastProcessedChangeId')).toBe(replacement.id);
+			expect(service.changedSinceCollection(first.id)).toBe(false);
+		} finally {
+			release();
+			await collecting;
+			save.mockRestore();
+		}
 	});
 
 	it('should handle conflicts', (async () => {

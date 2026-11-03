@@ -1187,7 +1187,7 @@ export default class Note extends BaseItem {
 				const Revision = this.getClass<typeof RevisionClass>('Revision');
 				// No need to call additional logic in RevisionService, as new change events are already sent via the code below, and additional clearing
 				// is not relevant for deleted notes
-				await Revision.deleteHistoryForNote(processIds, { ...options, sourceDescription: actionLogger });
+				await this.revisionService().withNoteRevisionLocks(processIds, () => Revision.deleteHistoryForNote(processIds, { ...options, sourceDescription: actionLogger }));
 			}
 
 			for (let i = 0; i < processIds.length; i++) {

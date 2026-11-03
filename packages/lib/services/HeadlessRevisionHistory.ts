@@ -260,51 +260,49 @@ export default class HeadlessRevisionHistory {
 	public static async listRevisions(request: ListRevisionsRequest): Promise<ListRevisionsResult> {
 		const page = request.page ?? 1;
 		const limit = request.limit ?? 20;
-		return Note.revisionService().withRevisionLock(async () => {
-			const where = ['r.item_type = ?'];
-			const params: (string|number)[] = [ModelType.Note];
-			if (isNoteLockEnabled()) where.push('r.is_locked = 0');
-			if (request.since !== undefined) {
-				where.push('r.item_updated_time >= ?');
-				params.push(request.since);
-			}
-			if (request.until !== undefined) {
-				where.push('r.item_updated_time < ?');
-				params.push(request.until);
-			}
+		const where = ['r.item_type = ?'];
+		const params: (string|number)[] = [ModelType.Note];
+		if (isNoteLockEnabled()) where.push('r.is_locked = 0');
+		if (request.since !== undefined) {
+			where.push('r.item_updated_time >= ?');
+			params.push(request.since);
+		}
+		if (request.until !== undefined) {
+			where.push('r.item_updated_time < ?');
+			params.push(request.until);
+		}
 
-			// Notebook scopes use only current readable membership; explicit notes need no live row.
-			if (request.note_ids !== undefined || request.notebook_ids !== undefined) {
-				const scopes: string[] = [];
-				if (request.note_ids?.length) scopes.push(`r.item_id IN (${Revision.escapeIdsForSql([...new Set(request.note_ids)])})`);
-				if (request.notebook_ids?.length) {
-					const folders = await Folder.db().selectAll<{ id: string; parent_id: string }>('SELECT id, parent_id FROM folders WHERE encryption_applied = 0 AND deleted_time = 0');
-					const selected = new Set(request.notebook_ids);
-					if ([...selected].some(id => !folders.some(folder => folder.id === id))) {
-						throw new JoplinError('The notebook is unavailable.', 'notebook_unavailable');
-					}
-					if (request.include_descendants ?? true) {
-						let previousSize = 0;
-						while (previousSize !== selected.size) {
-							previousSize = selected.size;
-							for (const folder of folders) if (selected.has(folder.parent_id)) selected.add(folder.id);
-						}
-					}
-					scopes.push(`n.parent_id IN (${Folder.escapeIdsForSql([...selected])})`);
+		// Notebook scopes use only current readable membership; explicit notes need no live row.
+		if (request.note_ids !== undefined || request.notebook_ids !== undefined) {
+			const scopes: string[] = [];
+			if (request.note_ids?.length) scopes.push(`r.item_id IN (${Revision.escapeIdsForSql([...new Set(request.note_ids)])})`);
+			if (request.notebook_ids?.length) {
+				const folders = await Folder.db().selectAll<{ id: string; parent_id: string }>('SELECT id, parent_id FROM folders WHERE encryption_applied = 0 AND deleted_time = 0');
+				const selected = new Set(request.notebook_ids);
+				if ([...selected].some(id => !folders.some(folder => folder.id === id))) {
+					throw new JoplinError('The notebook is unavailable.', 'notebook_unavailable');
 				}
-				where.push(scopes.length ? `(${scopes.join(' OR ')})` : '0');
+				if (request.include_descendants ?? true) {
+					let previousSize = 0;
+					while (previousSize !== selected.size) {
+						previousSize = selected.size;
+						for (const folder of folders) if (selected.has(folder.parent_id)) selected.add(folder.id);
+					}
+				}
+				scopes.push(`n.parent_id IN (${Folder.escapeIdsForSql([...selected])})`);
 			}
+			where.push(scopes.length ? `(${scopes.join(' OR ')})` : '0');
+		}
 
-			// The left join masks current metadata without excluding deleted-note history.
-			const rows = await Revision.db().selectAll<RevisionListItem>(`
-				SELECT r.item_id AS note_id, r.id AS revision_id, NULLIF(r.parent_id, '') AS parent_revision_id,
-					r.item_updated_time AS captured_time, n.title AS current_title, NULLIF(n.parent_id, '') AS current_notebook_id
-				FROM revisions r LEFT JOIN notes n ON n.id = r.item_id
-					AND n.encryption_applied = 0 AND n.deleted_time = 0 AND n.is_locked = 0
-				WHERE ${where.join(' AND ')}
-				ORDER BY r.item_updated_time DESC, r.id DESC LIMIT ? OFFSET ?`, [...params, limit + 1, (page - 1) * limit]);
-			return { items: rows.slice(0, limit), page, limit, hasMore: rows.length > limit };
-		});
+		// The left join masks current metadata without excluding deleted-note history.
+		const rows = await Revision.db().selectAll<RevisionListItem>(`
+			SELECT r.item_id AS note_id, r.id AS revision_id, NULLIF(r.parent_id, '') AS parent_revision_id,
+				r.item_updated_time AS captured_time, n.title AS current_title, NULLIF(n.parent_id, '') AS current_notebook_id
+			FROM revisions r LEFT JOIN notes n ON n.id = r.item_id
+				AND n.encryption_applied = 0 AND n.deleted_time = 0 AND n.is_locked = 0
+			WHERE ${where.join(' AND ')}
+			ORDER BY r.item_updated_time DESC, r.id DESC LIMIT ? OFFSET ?`, [...params, limit + 1, (page - 1) * limit]);
+		return { items: rows.slice(0, limit), page, limit, hasMore: rows.length > limit };
 	}
 
 	/** Lists retained note revisions, newest first, without requiring the source note to still exist. */
@@ -321,7 +319,7 @@ export default class HeadlessRevisionHistory {
 		const end = offset + limit;
 		if (!Number.isSafeInteger(end)) invalidRequest('The requested page is too large.');
 
-		return Note.revisionService().withRevisionLock(async () => {
+		return Note.revisionService().withRevisionLock(request.note_id, async () => {
 			const revisions = await Revision.allByType(ModelType.Note, request.note_id);
 			const visibleRevisions = isNoteLockEnabled() ? revisions.filter(revision => !revision.is_locked) : revisions;
 			const newestFirst = visibleRevisions.slice().reverse();
@@ -343,7 +341,7 @@ export default class HeadlessRevisionHistory {
 		validateId(request.note_id, 'note_id');
 		validateId(request.revision_id, 'revision_id');
 
-		return Note.revisionService().withRevisionLock(async () => {
+		return Note.revisionService().withRevisionLock(request.note_id, async () => {
 			const revision = await this.revisionForNote_(request.note_id, request.revision_id);
 			const snapshot = await snapshotFromRevision(revision);
 			return {
@@ -364,7 +362,7 @@ export default class HeadlessRevisionHistory {
 		validateId(request.from_revision_id, 'from_revision_id');
 		if (request.to_revision_id !== undefined) validateId(request.to_revision_id, 'to_revision_id');
 
-		const from = await Note.revisionService().withRevisionLock(async () => {
+		const from = await Note.revisionService().withRevisionLock(request.note_id, async () => {
 			const revision = await this.revisionForNote_(request.note_id, request.from_revision_id);
 			return snapshotFromRevision(revision);
 		});
@@ -375,7 +373,7 @@ export default class HeadlessRevisionHistory {
 		if (!toRevisionId) {
 			throw new JoplinError('The current note snapshot has no native revision ID.', 'revision_history_broken');
 		}
-		const to = await Note.revisionService().withRevisionLock(async () => {
+		const to = await Note.revisionService().withRevisionLock(request.note_id, async () => {
 			const revision = await this.revisionForNote_(request.note_id, toRevisionId);
 			return snapshotFromRevision(revision);
 		});
