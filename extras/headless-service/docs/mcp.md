@@ -31,6 +31,8 @@ The process waits for MCP input. There is no ordinary startup banner on stdout: 
 
 For the rootless Podman deployment, inspect these diagnostics with `ssh vps-example podman logs --timestamps --since 15m joplin-headless-mcp`. Core logs are separate: `ssh vps-example podman logs --timestamps --since 15m joplin-headless-core`. The MCP adapter records backend failures at the handling boundary rather than at every wrapper, so an exception passing through multiple layers produces one diagnostic. An error response without a corresponding core log can still represent a failed connection or response read in the adapter.
 
+For a focused grep performance check, start the adapter with `NODE_DEBUG=joplin-headless`. It writes one aggregate scan summary to stderr with body-page, explicit-read and revision-read counts, stage timings and returned-row counts. Set the same environment variable on the separate native core process to record search, metadata resolution, page hydration, revision-lock wait/hold times and guarded-save timing on its stderr. This opt-in stream leaves the core's broader upstream logger disabled and omits patterns and note content. It applies to a directly launched core, including the core container; the fleet launcher does not forward `NODE_DEBUG` to its children. Enable debug output only while investigating; ordinary error diagnostics remain available without it.
+
 In a host that accepts stdio command/arguments, configure that command directly. For Codex CLI, the documented form is:
 
 ```sh
@@ -159,7 +161,15 @@ Use `replace_text` when one exact snippet occurs once. Use `body_patch` for one 
 
 ### Contextual body patches
 
-Pass `body_patch` as a string with one or more bare `@@` hunk markers. In each hunk, a line beginning with one space is unchanged context, `-` removes a source line and `+` adds a line. The prefix is syntax: in the example, ` ## Travel plans` matches a body line that begins with `## Travel plans`. A heading has no special matching behavior. No file headers, numeric positions or outer patch envelope are used.
+Pass `body_patch` as a string with one or more bare `@@` hunk markers. A source line starts with a space or `-`; an edit starts with `-` or `+`, so a `-` line is both source and edit. Replacement and deletion hunks need no unchanged context when their source sequence is unique. An insertion must include an existing source line as an anchor. Add unchanged context only when needed to make the source sequence unique. A prefix with no following text represents an empty body line; a bare empty syntax line is invalid. A heading has no special matching behavior. No file headers, numeric positions or outer patch envelope are used.
+
+These are valid minimal hunk shapes when the source text matches the note:
+
+| Operation | `body_patch` hunk |
+| --- | --- |
+| Replacement | `@@\n-old\n+new` |
+| Deletion only | `@@\n-obsolete` |
+| Insert after an existing `anchor` line | `@@\n anchor\n+added` |
 
 ```json
 {
@@ -169,7 +179,7 @@ Pass `body_patch` as a string with one or more bare `@@` hunk markers. In each h
 }
 ```
 
-Each hunk must contain at least one source line (context or removal) and one edit line (addition or removal). Its source lines must match one exact sequence in the original body, and that complete sequence must occur exactly once across the note. All hunks are matched against that same original body; they must appear in ascending source order and cannot overlap, including their context. If two nearby edits would reuse context, combine them into one hunk. Do not trim spaces or normalize punctuation. For `note_patch_ambiguous`, add exact unchanged context; for `note_patch_not_found`, reread the source; for `note_patch_order`, combine overlapping hunks or put them in source order. `note_patch_invalid` means the syntax or hunk contents need correction. `note_patch_body_conflict` means another body-edit mode was supplied. A failed patch applies none of the patch or accompanying metadata changes.
+Each hunk needs at least one source line and an edit operation; a `-` line satisfies both. Its source lines must match one exact sequence in the original body, and that complete sequence must occur exactly once across the note. All hunks are matched against that same original body; they must appear in ascending source order and cannot overlap, including their context. If two nearby edits would reuse context, combine them into one hunk. Do not trim spaces or normalize punctuation. For `note_patch_ambiguous`, add exact unchanged context; for `note_patch_not_found`, reread the source; for `note_patch_order`, combine overlapping hunks or put them in source order. `note_patch_invalid` means a hunk marker, prefix, source line or edit operation is missing or malformed. `note_patch_body_conflict` means another body-edit mode was supplied. A failed patch applies none of the patch or accompanying metadata changes.
 
 An empty line is represented by a prefix with no following text. This makes the final empty logical line explicit, so it can control whether the body ends with a newline. The empty body is one empty logical line. In these examples, the final newline in the patch string is only a patch separator:
 

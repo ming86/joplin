@@ -350,7 +350,7 @@ test('body-mode conflicts never download or save, while inline body precedence i
 
 test('body patch failures return fixed safe messages', async t => {
 	const expectedMessages = new Map([
-		['note_patch_invalid', 'The body_patch syntax is invalid. Correct the hunk markers and include source and edit lines in every hunk.'],
+		['note_patch_invalid', 'Each body_patch hunk needs a source line and an edit; a - line counts as both. Prefix blank body lines, and put a bare @@ before each hunk.'],
 		['note_patch_not_found', 'A body_patch source sequence was not found. Read the current source and correct the patch.'],
 		['note_patch_ambiguous', 'A body_patch source sequence is not unique. Add unchanged context to identify one occurrence.'],
 		['note_patch_order', 'body_patch hunks overlap or are out of source order. Combine hunks that share context or reorder them.'],

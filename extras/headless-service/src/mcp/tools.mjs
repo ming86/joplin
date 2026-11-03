@@ -77,7 +77,7 @@ const revisionErrorMessages = new Map([
 	['replace_text_empty_find', 'replace_text.find must not be empty.'],
 	['replace_text_not_found', 'The text to replace was not found.'],
 	['replace_text_ambiguous', 'The text to replace must occur exactly once.'],
-	['note_patch_invalid', 'The body_patch syntax is invalid. Correct the hunk markers and include source and edit lines in every hunk.'],
+	['note_patch_invalid', 'Each body_patch hunk needs a source line and an edit; a - line counts as both. Prefix blank body lines, and put a bare @@ before each hunk.'],
 	['note_patch_not_found', 'A body_patch source sequence was not found. Read the current source and correct the patch.'],
 	['note_patch_ambiguous', 'A body_patch source sequence is not unique. Add unchanged context to identify one occurrence.'],
 	['note_patch_order', 'body_patch hunks overlap or are out of source order. Combine hunks that share context or reorder them.'],
@@ -577,12 +577,20 @@ export function createTools(service, { allowWrites = false, noteFileResources, r
 			},
 			body_patch: {
 				type: 'string',
-				description: `Apply exact contextual line hunks to the original body. Start each hunk with a bare @@ line; prefix unchanged source lines with a space, removed lines with -, and added lines with +. Example:
+				description: `Apply exact line hunks to the original body. Start each hunk with a bare @@ line. A space starts an unchanged source line, - starts a removed source line and is also an edit, and + starts an added line. Examples:
+Replace:
 @@
- ## Travel plans
--We arrive Monday.
-+We arrive Tuesday.
-Each hunk needs source and edit lines; its source sequence must match exactly once in the original body, and hunks must be source-ordered and nonoverlapping. Combine hunks that would share context. Requires the current base_revision_id. Cannot combine with body_file, body, prepend, append or replace_text; metadata fields may accompany it. An empty line is a prefix by itself, and adding or removing a final empty line controls the final newline. A matched no-op keeps the saved body unchanged.`,
+-old
++new
+Delete:
+@@
+-obsolete
+Insert after an existing source line:
+@@
+ anchor
++added
+
+Replacement and deletion need no unchanged context when their source sequence is unique. Insertion needs an existing source line as an anchor; add unchanged context only when needed to make the source sequence unique. A prefix alone represents an empty body line; a bare empty syntax line is invalid. Each hunk needs at least one source line and an edit. Source sequences must match exactly once in the original body; hunks must be source-ordered and nonoverlapping. Combine hunks that would share context. Requires the current base_revision_id. Cannot combine with body_file, body, prepend, append or replace_text; metadata fields may accompany it. Adding or removing a final empty line controls the final newline. A matched no-op keeps the saved body unchanged.`,
 			},
 			append: { ...body, description: 'Raw text to append to the existing body when body is omitted.' },
 			prepend: { ...body, description: 'Raw text to insert at the start of the existing body when body is omitted.' },
@@ -602,7 +610,7 @@ Each hunk needs source and edit lines; its source sequence must match exactly on
 		// Require an update field alongside the two identifiers without repeating the file schema in union branches.
 		updateSchema.minProperties = 3;
 		// Preserve the host hint: it supplies a downloadable file reference; this server cannot read client-local paths.
-		add('update_note', 'Update supplied note fields using base_revision_id from read_note, grep_notes, create_note or a previous update_note result. On note_conflict, reread the current note, reconcile the edit and retry with its revision. Use replace_text for one exact snippet that occurs once, body_patch for localized contextual line edits, body_file for large or full-file rewrites, and body for a small complete replacement. body_patch uses bare @@ hunk markers and space, - and + line prefixes; each source sequence must occur exactly once in the original body, and hunks must be source-ordered and nonoverlapping. Combine hunks that share context. A patch can accompany metadata but cannot combine with body_file, body, prepend, append or replace_text. Empty prefixed lines represent empty body lines; adding or removing a final empty line controls the final newline. A matched no-op leaves the body unchanged. Any supplied body, body_file, body_patch, replace_text, prepend or append includes body_length, body_size_bytes, body_sha256 and body_total_line_count from the saved native body, even for empty values and successful no-ops. Metadata-only updates omit all four measurements. body_length uses UTF-16 code units; body_size_bytes counts exact UTF-8 bytes; body_sha256 is lowercase SHA-256 hex of the UTF-8 body; body_total_line_count treats CRLF, LF and lone CR as breaks, adds a final empty line after a trailing break, and counts an empty body as one line. Results never include the body. Body operations preserve the note\'s existing Markdown or HTML format. When body is omitted, the existing prepend, append and replace_text operations run in that order; replace_text requires exactly one occurrence.', updateSchema, async ({ id: noteId, ...changes }, signal, context) => {
+		add('update_note', 'Update supplied note fields using base_revision_id from read_note, grep_notes, create_note or a previous update_note result. On note_conflict, reread the current note, reconcile the edit and retry with its revision. Use replace_text for one exact snippet that occurs once, body_patch for localized contextual line edits, body_file for large or full-file rewrites, and body for a small complete replacement. body_patch uses bare @@ hunk markers; source lines start with a space or -, and edit lines start with - or +, so - counts as both. A replacement or deletion needs no unchanged context when its source sequence is unique; an insertion needs an existing source line as an anchor. Add unchanged context only to resolve ambiguity. A prefix alone represents an empty body line; a bare empty syntax line is invalid. Each source sequence must match exactly once in the original body, and hunks must be source-ordered and nonoverlapping. Combine hunks that share context. A patch can accompany metadata but cannot combine with body_file, body, prepend, append or replace_text. Adding or removing a final empty line controls the final newline. A matched no-op leaves the body unchanged. Any supplied body, body_file, body_patch, replace_text, prepend or append includes body_length, body_size_bytes, body_sha256 and body_total_line_count from the saved native body, even for empty values and successful no-ops. Metadata-only updates omit all four measurements. body_length uses UTF-16 code units; body_size_bytes counts exact UTF-8 bytes; body_sha256 is lowercase SHA-256 hex of the UTF-8 body; body_total_line_count treats CRLF, LF and lone CR as breaks, adds a final empty line after a trailing break, and counts an empty body as one line. Results never include the body. Body operations preserve the note\'s existing Markdown or HTML format. When body is omitted, the existing prepend, append and replace_text operations run in that order; replace_text requires exactly one occurrence.', updateSchema, async ({ id: noteId, ...changes }, signal, context) => {
 			const patchUpdate = Object.hasOwn(changes, 'body_patch');
 			if (patchUpdate && ['body_file', 'body', 'prepend', 'append', 'replace_text'].some(key => Object.hasOwn(changes, key))) {
 				throw new ServiceError('note_patch_body_conflict');
