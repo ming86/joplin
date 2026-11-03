@@ -20,6 +20,8 @@ import initializeCommandService from './utils/initializeCommandService';
 import { cliUtils } from './cli-utils';
 import Cache from '@joplin/lib/Cache';
 import * as locker from 'proper-lockfile';
+import { debuglog } from 'node:util';
+import { setHeadlessPerformanceReporter } from '@joplin/lib/services/HeadlessPerformance';
 import Logger from '@joplin/utils/Logger';
 import ClipperServer from '@joplin/lib/ClipperServer';
 import DecryptionWorker from '@joplin/lib/services/DecryptionWorker';
@@ -37,6 +39,7 @@ import createHeadlessAttachmentActions from './headless/attachments';
 import createHeadlessConflictActions from './headless/conflicts';
 import createHeadlessTrashActions from './headless/trash';
 import createHeadlessAttachmentReferenceActions from './headless/attachmentReferences';
+import createHeadlessQueryPageActions from './headless/queryPages';
 import { initializeHeadlessDiagnostics, logHeadlessError, logHeadlessInfo, flushHeadlessDiagnostics } from './headless/diagnostics';
 
 type FolderOrNoteType = ModelType.Note | ModelType.Folder | 'folderOrNote';
@@ -123,6 +126,7 @@ export class Application extends BaseApplication {
 			createHeadlessConflictActions(),
 			createHeadlessTrashActions(),
 			createHeadlessAttachmentReferenceActions(),
+			createHeadlessQueryPageActions(),
 		);
 		clipper.initialize(createHeadlessActionApi(
 			() => ({ ...this.store().getState(), syncPending: reg.syncSchedulingPending() ?? this.store().getState().syncPending }),
@@ -530,7 +534,14 @@ export class Application extends BaseApplication {
 	/** Start the CLI with an encrypted dedicated profile and the supplied headless configuration. */
 	public async startHeadless(argv: string[], config: HeadlessConfig) {
 		this.headlessConfig_ = config;
-		await this.start(argv);
+		// Forward only typed, content-free timings despite the headless native log level of none.
+		const debug = debuglog('joplin-headless');
+		setHeadlessPerformanceReporter(record => debug('%s', JSON.stringify(record)));
+		try {
+			await this.start(argv);
+		} finally {
+			setHeadlessPerformanceReporter(null);
+		}
 	}
 
 	/** Prepare the selected profile, run the command, and drain initialized headless services. */
