@@ -19,7 +19,7 @@ The supplied successful native builder is **ARM64**. Its `.node` and ELF shared-
 
 Please prepare `joplin-headless-runtime-linux-x64.tar.zst` (or `.tar.gz`) from a **clean build staging directory**, for Linux amd64/x86-64, Node 22.16.0, and glibc no newer than 2.41. Debian 12/bookworm amd64 or Debian 13/trixie amd64 are reasonable builder targets; validate the resulting libraries rather than assuming the distro name is enough. On the ARM64 builder, Docker `--platform linux/amd64` is one possible build environment if available there. Do not send a Docker image as the only artifact: this sandbox needs extracted files, not a running container engine.
 
-Use the already tested dependency versions and vendored Yarn 4.16.0. The historical original-source core used by the earlier tests is `10bf74ee79537b697b82db92b6519087fdf3ad51`; its mapped public-history commit is `5ddb572501f5430e02ad25840a372984c8c04392`. Those tests were not rerun against the mapped commit. For the equivalent changes in snapshot history, see `d3f50c9213b58c5e2728b0b217b7c71b51b11e7b`. Record any later imported account-interface commit separately. Do not change the upstream lockfile to manufacture a smaller pack.
+Use the current checkout's vendored Yarn 4.17.0 when preparing this pack. The historical original-source core used by the earlier tests is `10bf74ee79537b697b82db92b6519087fdf3ad51`; its mapped public-history commit is `5ddb572501f5430e02ad25840a372984c8c04392`. Those tests were not rerun against the mapped commit. For the equivalent changes in snapshot history, see `d3f50c9213b58c5e2728b0b217b7c71b51b11e7b`. Record any later imported account-interface commit separately. Do not change the upstream lockfile to manufacture a smaller pack.
 
 Suggested archive layout:
 
@@ -100,7 +100,7 @@ Attach the archive and checksum here, or upload them to an artifact destination 
 
 If preparing an amd64 runtime is inconvenient, the complete `.yarn/cache` and exact manifests/lock/patches, plus source/toolchain inputs for native builds, are still useful. They do **not** replace a ready-made native runtime: cache archives are package inputs, and install/build scripts may separately need Node headers, SQLCipher source, native prebuilds or other assets. Include those needed inputs or document missing ones. An ARM64-only cache can omit platform-specific x64 packages.
 
-For a deliberately complete offline mirror, the receiving install would use the vendored Yarn with network disabled and immutable inputs, for example `YARN_ENABLE_NETWORK=0 node .yarn/releases/yarn-4.16.0.cjs install --immutable --immutable-cache`. That command cannot compensate for missing cached packages or unavailable native build inputs. Do not send an entire HOME/npm cache as a substitute; it may contain credentials and unrelated data.
+For a deliberately complete offline mirror, the receiving install would use the vendored Yarn with network disabled and immutable inputs, for example `YARN_ENABLE_NETWORK=0 node .yarn/releases/yarn-4.17.0.cjs install --immutable --immutable-cache`. That command cannot compensate for missing cached packages or unavailable native build inputs. Do not send an entire HOME/npm cache as a substitute; it may contain credentials and unrelated data.
 
 The **preferred first pack is the runnable x64 workspace plus native binding**, because it removes the immediate native/runtime blocker. A cache-only pack is a secondary option, not an additional mandatory deliverable.
 

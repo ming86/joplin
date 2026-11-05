@@ -12,7 +12,7 @@ MCP, semantic search, remote clipping, the PWA and operational multi-user suppor
 
 ## Runtime and native prerequisites
 
-Initial target: Linux, Node 22.12 or newer, using the repository-selected Yarn 4.16.0. The sandbox used Node 22.16.0. Use the vendored Yarn binary rather than silently changing the lockfile to match the older `engines.yarn` value in the snapshot.
+For the current checkout, use the repository's vendored Yarn 4.17.0. The earlier validation sandbox used Linux and Node 22.16.0; that historical environment description does not record a run with the current Yarn release. Use the vendored binary with the committed lockfile; do not change the lockfile to accommodate a different Yarn release.
 
 A **SQLCipher 4-enabled node-sqlite3-compatible binding is required**. The unchanged upstream `sqlite3@5.1.6` dependency ordinarily uses unencrypted SQLite. A successful standard install is therefore not enough. This increment neither vendors SQLCipher nor selects an untested replacement dependency in `yarn.lock`.
 
@@ -39,11 +39,11 @@ References: [node-sqlite3 SQLCipher build instructions](https://github.com/TryGh
 From the repository root in an environment with dependencies available:
 
 ```sh
-node .yarn/releases/yarn-4.16.0.cjs install --immutable
-node .yarn/releases/yarn-4.16.0.cjs tsc
-node .yarn/releases/yarn-4.16.0.cjs workspace joplin build
-node .yarn/releases/yarn-4.16.0.cjs updateIgnored
-node .yarn/releases/yarn-4.16.0.cjs workspace joplin test-headless
+node .yarn/releases/yarn-4.17.0.cjs install --immutable
+node .yarn/releases/yarn-4.17.0.cjs tsc
+node .yarn/releases/yarn-4.17.0.cjs workspace joplin build
+node .yarn/releases/yarn-4.17.0.cjs updateIgnored
+node .yarn/releases/yarn-4.17.0.cjs workspace joplin test-headless
 
 # The external binding path must be set, or explicitly use the rebuilt 'sqlite3'.
 JOPLIN_TEST_SQLITE_MODULE="$JOPLIN_HEADLESS_SQLITE_MODULE" \
