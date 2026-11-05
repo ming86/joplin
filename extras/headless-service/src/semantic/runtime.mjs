@@ -3,7 +3,7 @@ import { createAccountRegistry, bindEmbeddingProvider } from '../../index.mjs';
 import { createJoplinClient } from '../joplin.mjs';
 import { loadMcpConfig, readFile } from '../mcp/config.mjs';
 import { ServiceError, requireValue } from '../errors.mjs';
-import { logOperationError } from '../diagnostics.mjs';
+import { logMcpStartupSettings, logOperationError } from '../diagnostics.mjs';
 import { openSemanticStore } from './store.mjs';
 import { createEmbeddingTransport } from './http.mjs';
 import { createSemanticEngine } from './engine.mjs';
@@ -14,11 +14,12 @@ import { chunkSettings } from './chunks.mjs';
 /**
  * Open the configured MCP service and optional semantic engine.
  * @param {string} filename Absolute path to the JSON configuration file.
- * @param {{background?: boolean, transport?: 'stdio'|'http'}} [options]
- * @returns {Promise<object>} Loaded service, runtime engine state and close function.
+ * @param {{background?: boolean, transport?: 'stdio'|'http'}} [options] Runtime startup settings.
+ * @returns {Promise<object>} Loaded service, stable write settings, runtime engine state and close function.
  */
 export async function openMcpRuntime(filename, { background = true, transport = 'stdio' } = {}) {
 	const loaded = loadMcpConfig(filename, { transport });
+	logMcpStartupSettings({ allowWrites: loaded.allowWrites, allowAttachmentWrites: loaded.allowWrites && loaded.allowAttachmentWrites });
 	const config = loaded.semanticConfig;
 	if (config === undefined || config.enabled === false) return { ...loaded, close: async () => {} };
 	requireValue(config && config.enabled === true && Object.keys(config).every(key => ['enabled', 'sqliteModule', 'keyFile', 'embedding', 'chunks', 'pollMs', 'batchSize', 'rebuild'].includes(key)), 'invalid_semantic_configuration');

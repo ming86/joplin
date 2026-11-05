@@ -241,8 +241,12 @@ function makeSnippet(bodyText, query) {
 /**
  * Register the Desktop-compatible catalog with one shared active-payload allowance.
  * Calls retain supplied request/response owners through transport cleanup; direct calls release their temporary owners on completion.
+ * @param {object} service Account-scoped service that supplies the catalog operations.
+ * @param {object} [options] Catalog construction options.
+ * @param {boolean} [options.allowWrites=false] Enables MCP write tools.
+ * @param {boolean} [options.allowAttachmentWrites=true] Keeps attachment mutation tools available when general writes are enabled.
  */
-export function createTools(service, { allowWrites = false, noteFileResources, readBodyFile = readNoteBodyFile, readFile = readBinaryFile, payloadCapacity = createPayloadCapacity() } = {}) {
+export function createTools(service, { allowWrites = false, allowAttachmentWrites = true, noteFileResources, readBodyFile = readNoteBodyFile, readFile = readBinaryFile, payloadCapacity = createPayloadCapacity() } = {}) {
 	const present = createAccountResultPresenter(service);
 	// Direct tool users allocate a snapshot store only when a file is requested.
 	let fileResources = noteFileResources;
@@ -665,7 +669,7 @@ Replacement and deletion need no unchanged context when their source sequence is
 	registerTrashTools(add, service, { allowWrites });
 	registerAttachmentReferenceTools(add, service);
 	if (allowWrites) registerMaintenanceTools(add, service);
-	registerAttachmentTools(add, service, { allowWrites, readFile });
+	registerAttachmentTools(add, service, { allowWrites: allowWrites && allowAttachmentWrites, readFile });
 
 	return Object.freeze({
 		list: () => [...tools.values()].map(tool => structuredClone(tool.definition)),

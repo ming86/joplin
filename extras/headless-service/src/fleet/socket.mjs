@@ -52,8 +52,18 @@ export async function listenPrivateSocket(filename, handler, maxConnections = 16
 	} };
 }
 const digest = s => createHash('sha256').update(s).digest();
-/** Share account payload capacity and export lifetime across authenticated socket connections. */
-export async function startMcpSocket({ socketPath: filename, token, service, allowWrites, payloadCapacity = createPayloadCapacity() }) {
+/**
+ * Share account payload capacity and export lifetime across authenticated socket connections.
+ * @param {object} options Account transport settings resolved by its worker.
+ * @param {string} options.socketPath Private socket filename.
+ * @param {string} options.token Account-bound socket credential.
+ * @param {object} options.service Account-bound service used by each session.
+ * @param {boolean} options.allowWrites General write permission.
+ * @param {boolean} [options.allowAttachmentWrites=true] Attachment mutation permission when general writes are enabled.
+ * @param {object} [options.payloadCapacity] Process-owned payload allowance.
+ * @returns {Promise<object>} Socket listener and close operation.
+ */
+export async function startMcpSocket({ socketPath: filename, token, service, allowWrites, allowAttachmentWrites = true, payloadCapacity = createPayloadCapacity() }) {
 	requireValue(/^[A-Za-z0-9_-]{32,256}$/.test(token), 'invalid_mcp_credential');
 	const expected = digest(token), transports = new Set();
 	const noteFileResources = createNoteFileResources({ payloadCapacity });
@@ -61,7 +71,7 @@ export async function startMcpSocket({ socketPath: filename, token, service, all
 		const hello = await firstLine(socket, { maxBytes: 512 });
 		if (!hello || Object.keys(hello).length !== 1 || typeof hello.token !== 'string' || hello.token.length > 256 || !timingSafeEqual(digest(hello.token), expected)) { socket.end('{"authenticated":false}\n'); return; }
 		socket.write('{"authenticated":true}\n');
-		const transport = serveStdio(createMcpSession(service, { allowWrites, payloadCapacity, noteFileResources }), { input: socket, output: socket, payloadCapacity });
+		const transport = serveStdio(createMcpSession(service, { allowWrites, allowAttachmentWrites, payloadCapacity, noteFileResources }), { input: socket, output: socket, payloadCapacity });
 		transports.add(transport);
 		socket.once('close', () => { void transport.close(); });
 		transport.done.then(() => { transports.delete(transport); socket.end(); }); socket.resume();

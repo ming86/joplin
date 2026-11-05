@@ -55,10 +55,13 @@ function isAllowedOrigin(value) {
  * Load the configured account service and optional transport settings.
  * @param {string} filename Absolute path to the JSON configuration file.
  * @param {{transport?: 'stdio'|'http'}} [options] Selects stdio or HTTP transport.
- * @returns {{service: object, allowWrites: boolean, accountConfig: object, semanticConfig: (object|undefined), httpConfig?: McpHttpConfig}}
+ * @returns {{service: object, allowWrites: boolean, allowAttachmentWrites: boolean, accountConfig: object, semanticConfig: (object|undefined), httpConfig?: McpHttpConfig}} `allowAttachmentWrites` defaults to true and reads only the exact `true` or `false` environment values.
  */
 export function loadMcpConfig(filename, { transport = 'stdio' } = {}) {
 	check(transport === 'stdio' || transport === 'http');
+	const attachmentWriteSetting = process.env.JOPLIN_MCP_ALLOW_ATTACHMENT_WRITES;
+	check(attachmentWriteSetting === undefined || attachmentWriteSetting === 'true' || attachmentWriteSetting === 'false');
+	const allowAttachmentWrites = attachmentWriteSetting !== 'false';
 	const input = JSON.parse(readFile(filename, 65536, false));
 	check(input && typeof input === 'object' && !Array.isArray(input));
 	const allowed = ['accountId', 'baseUrl', 'apiTokenFile', 'allowWrites', 'defaultNotebookId', 'semanticDatabasePath', 'semanticKeyRef', 'allowInsecureHttp', 'timeoutMs', 'semantic', 'listenHost', 'listenPort', 'bearerTokenFile', 'allowedOrigins'];
@@ -94,6 +97,7 @@ export function loadMcpConfig(filename, { transport = 'stdio' } = {}) {
 	return {
 		service: registry.forPrincipal('local-stdio', input.accountId),
 		allowWrites: input.allowWrites === true,
+		allowAttachmentWrites,
 		accountConfig: config,
 		semanticConfig: input.semantic,
 		...(httpConfig ? { httpConfig } : {}),

@@ -40,6 +40,14 @@ export function withDiagnostics(error, diagnostics) {
 	return error;
 }
 
+/** Write the fixed MCP startup record with effective permissions and no credentials or request data.
+ * @param {{allowWrites: boolean, allowAttachmentWrites: boolean}} settings Loaded write permissions.
+ * @param {boolean} settings.allowAttachmentWrites Effective attachment mutation permission after allowWrites.
+ */
+export function logMcpStartupSettings({ allowWrites, allowAttachmentWrites }) {
+	console.error(JSON.stringify({ event: 'mcp_startup_settings', allowWrites, allowAttachmentWrites }));
+}
+
 /** Walks native causes and aggregate connection errors without reading arbitrary fields. */
 function errorChain(error) {
 	const chain = [];

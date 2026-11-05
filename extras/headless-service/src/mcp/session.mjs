@@ -49,8 +49,19 @@ export function completeResult(result, version) {
 	return { ...result, resultType: 'complete', _meta: { ...result._meta, [serverInfoKey]: { ...serverInfo } } };
 }
 
-/** Create account-bound tools handling, with legacy handshake state and independent modern requests. */
-export function createMcpSession(service, { allowWrites = false, maxConcurrent = 8, stateless = false, noteFileResources: sharedNoteFileResources, payloadCapacity = createPayloadCapacity() } = {}) {
+/**
+ * Create account-bound tool handling with legacy handshake state and independent modern requests.
+ * @param {object} service Account-bound service used by the tools.
+ * @param {object} [options] Session behavior and process-owned resources.
+ * @param {boolean} [options.allowWrites=false] Include general write tools in the catalog.
+ * @param {boolean} [options.allowAttachmentWrites=true] Include attachment mutation tools when general writes are enabled.
+ * @param {number} [options.maxConcurrent=8] Maximum simultaneous calls.
+ * @param {boolean} [options.stateless=false] Accept legacy requests without initialization state.
+ * @param {object} [options.noteFileResources] Process-owned note-file export store.
+ * @param {object} [options.payloadCapacity] Process-owned payload allowance.
+ * @returns {object} Session request handler and cleanup operations.
+ */
+export function createMcpSession(service, { allowWrites = false, allowAttachmentWrites = true, maxConcurrent = 8, stateless = false, noteFileResources: sharedNoteFileResources, payloadCapacity = createPayloadCapacity() } = {}) {
 	if (!Number.isSafeInteger(maxConcurrent) || maxConcurrent < 1 || maxConcurrent > 32) throw new Error('invalid_concurrency');
 	if (typeof stateless !== 'boolean') throw new Error('invalid_stateless_mode');
 	// Sessions own their default store; stateless HTTP injects a server-owned store shared across per-request sessions.
@@ -59,7 +70,7 @@ export function createMcpSession(service, { allowWrites = false, maxConcurrent =
 	if (!noteFileResources || typeof noteFileResources.exportNote !== 'function'
 		|| typeof noteFileResources.read !== 'function' || typeof noteFileResources.list !== 'function'
 		|| typeof noteFileResources.close !== 'function') throw new Error('invalid_note_file_resources');
-	const tools = createTools(service, { allowWrites, noteFileResources, payloadCapacity });
+	const tools = createTools(service, { allowWrites, allowAttachmentWrites, noteFileResources, payloadCapacity });
 	// Each active call retains its wire version and cancellation state until its work settles.
 	const active = new Map();
 	// Modern requests do not read or change this legacy handshake state, except that close applies to both eras.

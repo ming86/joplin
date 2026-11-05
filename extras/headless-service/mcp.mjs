@@ -13,9 +13,9 @@ async function main() {
 	try {
 		if (process.argv.length !== 3) throw new ServiceError('usage_node_mcp_mjs_absolute_config_path');
 		runtime = await openMcpRuntime(process.argv[2]);
-		const { service, allowWrites } = runtime;
+		const { service, allowWrites, allowAttachmentWrites } = runtime;
 		const payloadCapacity = createPayloadCapacity();
-		const transport = serveStdio(createMcpSession(service, { allowWrites, payloadCapacity }), { payloadCapacity });
+		const transport = serveStdio(createMcpSession(service, { allowWrites, allowAttachmentWrites, payloadCapacity }), { payloadCapacity });
 		const stop = () => { void transport.close(); };
 		process.once('SIGTERM', stop); process.once('SIGINT', stop);
 		const result = await transport.done;

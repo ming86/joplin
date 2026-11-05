@@ -148,8 +148,20 @@ function capacityError(id, error) {
 	return rpcError(id, -32000, error.message, { code: error.code });
 }
 
-/** Serve stateless MCP JSON POSTs bound to one operator-configured service. */
-export async function startMcpHttpServer({ service, allowWrites = false, bearerToken, listenHost = '127.0.0.1', listenPort = 0, allowedOrigins = [], payloadCapacity = createPayloadCapacity() }) {
+/**
+ * Serve stateless MCP JSON POSTs bound to one operator-configured service.
+ * @param {object} options Startup configuration captured for every request.
+ * @param {object} options.service Account-bound service used by each request.
+ * @param {boolean} [options.allowWrites=false] General write permission captured for each request.
+ * @param {boolean} [options.allowAttachmentWrites=true] Attachment mutation permission captured for each request.
+ * @param {string} options.bearerToken Private HTTP listener credential.
+ * @param {string} [options.listenHost='127.0.0.1'] Listener hostname or IP address.
+ * @param {number} [options.listenPort=0] Listener port.
+ * @param {string[]} [options.allowedOrigins=[]] Exact permitted HTTP(S) origins.
+ * @param {object} [options.payloadCapacity] Process-owned payload allowance.
+ * @returns {Promise<object>} Listener address and close operation.
+ */
+export async function startMcpHttpServer({ service, allowWrites = false, allowAttachmentWrites = true, bearerToken, listenHost = '127.0.0.1', listenPort = 0, allowedOrigins = [], payloadCapacity = createPayloadCapacity() }) {
 	if (typeof bearerToken !== 'string' || !bearerToken || /\s/.test(bearerToken)) throw new Error('invalid_mcp_http_token');
 	if (!Number.isInteger(listenPort) || listenPort < 0 || listenPort > 65535) throw new Error('invalid_mcp_http_port');
 	if (typeof listenHost !== 'string' || !listenHost.trim()) throw new Error('invalid_mcp_http_host');
@@ -240,7 +252,7 @@ export async function startMcpHttpServer({ service, allowWrites = false, bearerT
 			if (version === undefined && message.method !== 'initialize') return respond(res, 400, { error: 'protocol_version_required' });
 			if (kind === 'response') return respond(res, 202);
 			if (closing) return respond(res, 503, { error: 'server_closing' });
-			const session = createMcpSession(service, { allowWrites, stateless: true, noteFileResources, payloadCapacity });
+			const session = createMcpSession(service, { allowWrites, allowAttachmentWrites, stateless: true, noteFileResources, payloadCapacity });
 			sessions.add(session);
 			try {
 				// A disconnected client does not cancel a write; only shutdown closes the session.

@@ -29,7 +29,7 @@ async function main() {
 			throw new ServiceError('usage_node_mcp_http_mjs_absolute_config_path');
 		}
 		runtime = await openMcpRuntime(process.argv[2], { transport: 'http' });
-		server = await startMcpHttpServer({ service: runtime.service, allowWrites: runtime.allowWrites, ...runtime.httpConfig });
+		server = await startMcpHttpServer({ service: runtime.service, allowWrites: runtime.allowWrites, allowAttachmentWrites: runtime.allowAttachmentWrites, ...runtime.httpConfig });
 		process.once('SIGTERM', stop);
 		process.once('SIGINT', stop);
 		await stopped;

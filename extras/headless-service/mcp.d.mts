@@ -62,6 +62,8 @@ export interface McpSession {
 export function createMcpSession(service: AccountService, options?: {
     /** Include write tools in the account-bound catalog. */
     allowWrites?: boolean;
+    /** Include attachment write tools when allowWrites also permits writes; defaults to true. */
+    allowAttachmentWrites?: boolean;
     /** Maximum simultaneous tool calls, from 1 through 32. */
     maxConcurrent?: number;
     /** Accept legacy tool requests without retaining initialization state; modern requests are always independent. */

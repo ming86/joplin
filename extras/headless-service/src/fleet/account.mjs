@@ -32,7 +32,7 @@ export async function startAccount(definition, { signal, onCoreExit = () => {} }
 		if (cancelled.aborted) throw new ServiceError('account_start_cancelled');
 		runtime = await openMcpRuntime(d.accountConfigFile);
 		if (cancelled.aborted || core.exited) throw new ServiceError('account_start_cancelled');
-		const { service, allowWrites } = runtime;
+		const { service, allowWrites, allowAttachmentWrites } = runtime;
 		if (d.web) components.push(await startWebServer({ ...d.web, cookieScope: d.id,
 			token: privateText(d.web.webTokenFile, 4096).trim(),
 			service: createWebService({ account: service, namespace: d.web.namespace, allowWrites, render: createMarkdownRenderer(d.web.markdownModule) }),
@@ -41,7 +41,7 @@ export async function startAccount(definition, { signal, onCoreExit = () => {} }
 			token: privateText(d.clipper.clipTokenFile, 4096).trim(),
 			service: createClipService({ accountId: d.id, namespace: d.clipper.namespace, notebookIds: d.clipper.notebookIds, backend: createJoplinClient(loaded.accountConfig.joplin) }),
 		}));
-		if (d.mcp) components.push(await startMcpSocket({ ...d.mcp, token: privateText(d.mcp.tokenFile, 4096).trim(), service, allowWrites }));
+		if (d.mcp) components.push(await startMcpSocket({ ...d.mcp, token: privateText(d.mcp.tokenFile, 4096).trim(), service, allowWrites, allowAttachmentWrites }));
 		if (cancelled.aborted || core.exited) throw new ServiceError('account_start_cancelled');
 		return { corePid: core.child.pid, close };
 	} catch (error) { await close(); throw error; }

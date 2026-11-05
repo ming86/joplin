@@ -40,7 +40,10 @@ export async function startFleet(config) {
 			requireValue(JSON.stringify(definition) === JSON.stringify(a.definition), 'fleet_configuration_changed_restart_required');
 			active.set(definition.id, checkSecrets(definition, config.accounts, active));
 			const hash = createHash('sha256').update(JSON.stringify(definition)).digest('hex');
-			child = spawn(process.execPath, [workerEntry, definition.filename, hash], { env: childEnvironment(), detached: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
+			const workerEnvironment = childEnvironment();
+			// The account worker needs this MCP-only option; launchCore retains the filtered environment.
+			if (process.env.JOPLIN_MCP_ALLOW_ATTACHMENT_WRITES !== undefined) workerEnvironment.JOPLIN_MCP_ALLOW_ATTACHMENT_WRITES = process.env.JOPLIN_MCP_ALLOW_ATTACHMENT_WRITES;
+			child = spawn(process.execPath, [workerEntry, definition.filename, hash], { env: workerEnvironment, detached: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
 			a.child = child;
 			let exited = false;
 			a.done = new Promise(resolve => {
