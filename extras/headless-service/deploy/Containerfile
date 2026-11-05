@@ -64,10 +64,10 @@ COPY packages/tools/package.json ./packages/tools/package.json
 RUN mkdir -p /root/.yarn node_modules \
     && cp -a .yarn/patches /root/.yarn/patches \
     && node -e 'const fs = require("node:fs"); const p = JSON.parse(fs.readFileSync("package.json", "utf8")); delete p.scripts.postinstall; fs.writeFileSync("package.json", JSON.stringify(p, null, 2));' \
-    && ln -sf /app/.yarn/releases/yarn-4.16.0.cjs /usr/local/bin/yarn
+    && ln -sf /app/.yarn/releases/yarn-4.17.0.cjs /usr/local/bin/yarn
 
 # Focus uses the committed lock without rewriting it, and installs workspace-local dependencies.
-RUN node .yarn/releases/yarn-4.16.0.cjs workspaces focus joplin @joplin/tools
+RUN node .yarn/releases/yarn-4.17.0.cjs workspaces focus joplin @joplin/tools
 
 COPY tsconfig.json LICENSE ./
 COPY packages/app-cli ./packages/app-cli
@@ -84,13 +84,13 @@ COPY packages/turndown-plugin-gfm ./packages/turndown-plugin-gfm
 COPY packages/tools ./packages/tools
 
 # OneNote import is outside this headless runtime; its optional Rust/Wasm build is omitted.
-RUN node .yarn/releases/yarn-4.16.0.cjs workspaces foreach --all --exclude @joplin/onenote-converter --topological-dev run build \
-    && node .yarn/releases/yarn-4.16.0.cjs workspaces foreach --all --exclude root --topological-dev run tsc \
+RUN node .yarn/releases/yarn-4.17.0.cjs workspaces foreach --all --exclude @joplin/onenote-converter --topological-dev run build \
+    && node .yarn/releases/yarn-4.17.0.cjs workspaces foreach --all --exclude root --topological-dev run tsc \
     # The CLI copies generated JavaScript into build/, so copy it again after TypeScript emits it.
-    && node .yarn/releases/yarn-4.16.0.cjs workspace joplin build \
+    && node .yarn/releases/yarn-4.17.0.cjs workspace joplin build \
     && JOPLIN_TEST_SQLITE_MODULE=/opt/headless-native/node_modules/sqlite3 \
        node --test packages/app-cli/tests/headless/native.test.cjs \
-    && YARN_ENABLE_SCRIPTS=false node .yarn/releases/yarn-4.16.0.cjs workspaces focus --production joplin \
+    && YARN_ENABLE_SCRIPTS=false node .yarn/releases/yarn-4.17.0.cjs workspaces focus --production joplin \
     && rm -rf .yarn/cache .yarn/berry
 
 FROM node:${NODE_VERSION}-trixie-slim AS runtime
