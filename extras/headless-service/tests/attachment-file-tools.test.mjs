@@ -6,6 +6,7 @@ import { ServiceError } from '../src/errors.mjs';
 import { createPayloadCapacity } from '../src/payload-capacity.mjs';
 
 const resourceId = 'b'.repeat(32);
+const noteId = 'a'.repeat(32);
 const file = {
 	download_url: 'https://files.example.test/attachment?secret=hidden',
 	file_id: 'file-attachment',
@@ -131,6 +132,68 @@ test('attachment file input schemas publish client file parameters and retain us
 	}
 	assert.equal(reads, 0);
 	assert.equal(writes, 0);
+});
+
+test('attachment mutation tools can be omitted while attachment reads and references remain available', async () => {
+	const defaultWriteCatalog = createTools({}, { allowWrites: true });
+	assert.equal(defaultWriteCatalog.has('create_attachment'), true, 'the new gate defaults to the current behavior');
+	assert.equal(defaultWriteCatalog.has('update_attachment'), true);
+	const writeGateAlone = createTools({}, { allowAttachmentWrites: true });
+	assert.equal(writeGateAlone.has('create_attachment'), false, 'attachment writes still require general writes');
+	assert.equal(writeGateAlone.has('update_attachment'), false);
+
+	let fileReads = 0;
+	let writes = 0;
+	let attachmentReads = 0;
+	let attachmentLists = 0;
+	let referenceLists = 0;
+	const catalog = createTools({
+		async createAttachment() { writes++; return { id: resourceId }; },
+		async updateAttachment() { writes++; return { id: resourceId }; },
+		async listNoteAttachments(id) { attachmentLists++; assert.equal(id, noteId); return []; },
+		async readAttachment(id) {
+			attachmentReads++;
+			assert.equal(id, resourceId);
+			return { id, filename: 'diagram.png', mime: 'image/png', contentBase64: 'AQ==' };
+		},
+		async listAttachmentNotes(input) { referenceLists++; assert.deepEqual(input, { id: resourceId, page: undefined, limit: 20 }); return { items: [], total: 0 }; },
+	}, {
+		allowWrites: true,
+		allowAttachmentWrites: false,
+		async readFile() { fileReads++; return Buffer.from([1]); },
+	});
+	const definitions = catalog.list();
+	const names = new Set(definitions.map(tool => tool.name));
+	assert.equal(names.has('create_attachment'), false);
+	assert.equal(names.has('update_attachment'), false);
+	assert.equal(names.has('update_note'), true, 'other MCP writes stay enabled');
+	assert.equal(catalog.has('list_note_attachments'), true);
+	assert.equal(catalog.has('read_attachment'), true);
+	assert.equal(catalog.has('list_attachment_notes'), true);
+
+	await assert.rejects(
+		catalog.call('create_attachment', { filename: 'upload.bin', content_file: file }),
+		error => error.code === 'unknown_tool',
+	);
+	await assert.rejects(
+		catalog.call('update_attachment', { id: resourceId, content_file: file }),
+		error => error.code === 'unknown_tool',
+	);
+	assert.equal(fileReads, 0, 'unknown mutation calls do not download client files');
+	assert.equal(writes, 0, 'unknown mutation calls do not reach attachment services');
+
+	assert.deepEqual((await catalog.call('list_note_attachments', { note_id: noteId })).structuredContent, {
+		note_id: noteId,
+		attachments: [],
+	});
+	const read = await catalog.call('read_attachment', { id: resourceId });
+	assert.equal(read.isError, false);
+	assert.equal(read.content[1].type, 'resource');
+	assert.equal(read.content[1].resource.blob, 'AQ==');
+	assert.deepEqual((await catalog.call('list_attachment_notes', { id: resourceId })).structuredContent, { items: [], total: 0 });
+	assert.equal(attachmentLists, 1);
+	assert.equal(attachmentReads, 1);
+	assert.equal(referenceLists, 1);
 });
 
 test('metadata-only attachment updates remain valid with the compact update schema', async () => {

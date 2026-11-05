@@ -285,7 +285,12 @@ test('body_file update returns measurements for the saved body, not the download
 			saved = changes;
 			return { ...note, body: savedBody, updated_time: 20, revision_id: nextRevisionId, previous_revision_id: revisionId, changed: true };
 		},
-	}, { readBodyFile: async (file, receivedSignal) => { assert.deepEqual(file, bodyFile); assert.equal(receivedSignal, signal); return submittedBody; } });
+	}, {
+		allowAttachmentWrites: false,
+		readBodyFile: async (file, receivedSignal) => { assert.deepEqual(file, bodyFile); assert.equal(receivedSignal, signal); return submittedBody; },
+	});
+	assert.equal(tools.has('create_attachment'), false);
+	assert.equal(tools.has('update_attachment'), false);
 	const result = await tools.call('update_note', { id: noteId, base_revision_id: revisionId, body_file: bodyFile, title: 'Edited', todo_completed: true }, signal);
 	assert.deepEqual(saved, { base_revision_id: revisionId, body: submittedBody, title: 'Edited', todo_completed: true });
 	assert.deepEqual(result.structuredContent, {

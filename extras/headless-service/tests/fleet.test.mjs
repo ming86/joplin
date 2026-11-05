@@ -8,6 +8,7 @@ import { spawn } from 'node:child_process';
 import { fixture, running, until, login, web, clip, write, sharedId, folderId } from './fleet/fixtures.mjs';
 import { loadFleetConfig, checkSecrets } from '../src/fleet/config.mjs';
 import { connectPrivateSocket, firstLine } from '../src/fleet/socket.mjs';
+import { childEnvironment } from '../src/fleet/process.mjs';
 import { StdioTestClient } from '../scripts/lib/stdio-client.mjs';
 const connectEntry=fileURLToPath(new URL('../mcp-connect.mjs',import.meta.url));
 async function mcp(t,a,connection=a.connection){const c=new StdioTestClient(connection,connectEntry,{timeoutMs:5000});t.after(()=>c.close());await c.initialize();return c;}
@@ -70,6 +71,17 @@ test('fleet: read-only account has no clipping route or write tools; unavailable
  const al=await login(a);const search=await web(a,'/api/search',{cookie:al.cookie,body:{query:'alice',mode:'hybrid'}});assert.equal(search.body.executedMode,'keyword');assert.equal(search.body.semantic.state,'unavailable');assert.ok(search.body.items.every(n=>n.accountId==='alice'));
  const unavailable=await web(b,'/api/search',{cookie:bl.cookie,body:{query:'alice',mode:'semantic'}});assert.equal(unavailable.body.executedMode,null);assert.equal(unavailable.body.accountId,'bob');
  await c.close();
+});
+
+test('fleet: attachment-write setting reaches the account worker and stays out of the core environment',async t=>{
+ const setting='JOPLIN_MCP_ALLOW_ATTACHMENT_WRITES',previous=process.env[setting];process.env[setting]='false';
+ t.after(()=>{if(previous===undefined)delete process.env[setting];else process.env[setting]=previous;});
+ const f=await fixture(t),fleet=await f.start(),[a]=f.accounts;await running(fleet,'alice');
+ const client=await mcp(t,a),tools=(await client.request('tools/list')).tools;
+ assert.ok(tools.some(tool=>tool.name==='update_note'));
+ assert.ok(!tools.some(tool=>['create_attachment','update_attachment'].includes(tool.name)));
+ assert.equal(childEnvironment()[setting],undefined);
+ await client.close();
 });
 
 test('fleet: lost worker is isolated; residual core is killed and explicit restart recovers',async t=>{

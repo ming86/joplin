@@ -106,8 +106,10 @@ test('HTTP MCP launcher serves authenticated stateless requests and stops cleanl
 	t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
 	const apiToken = 'synthetic-private-api-token';
 	const bearerToken = 'synthetic-http-bearer-token';
+	const apiRequests = [];
 	const api = http.createServer(async (req, res) => {
 		const target = new URL(req.url, 'http://127.0.0.1');
+		apiRequests.push(`${req.method} ${target.pathname}`);
 		if (target.searchParams.get('token') !== apiToken) {
 			res.writeHead(401).end();
 			return;
@@ -149,9 +151,13 @@ test('HTTP MCP launcher serves authenticated stateless requests and stops cleanl
 		bearerTokenFile,
 		listenHost: '127.0.0.1',
 		listenPort: port,
+		allowWrites: true,
 	}));
 
-	const child = spawn(process.execPath, [executable, configFile], { stdio: ['ignore', 'ignore', 'pipe'] });
+	const child = spawn(process.execPath, [executable, configFile], {
+		env: { ...process.env, JOPLIN_MCP_ALLOW_ATTACHMENT_WRITES: 'false' },
+		stdio: ['ignore', 'ignore', 'pipe'],
+	});
 	let stderr = '';
 	child.stderr.setEncoding('utf8');
 	child.stderr.on('data', data => { stderr = (stderr + data).slice(-4096); });
@@ -173,12 +179,25 @@ test('HTTP MCP launcher serves authenticated stateless requests and stops cleanl
 	const listed = await post(baseUrl, bearerToken, { jsonrpc: '2.0', id: 2, method: 'tools/list' }, '2025-11-25');
 	assert.equal(listed.response.status, 200);
 	assert.ok(listed.body.result.tools.some(tool => tool.name === 'read_note'));
+	assert.ok(listed.body.result.tools.some(tool => tool.name === 'update_note'));
+	assert.ok(!listed.body.result.tools.some(tool => ['create_attachment', 'update_attachment'].includes(tool.name)));
 
 	const read = await post(baseUrl, bearerToken, {
 		jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'read_note', arguments: { id: noteId } },
 	}, '2025-11-25');
 	assert.equal(read.response.status, 200);
 	assert.equal(read.body.result.structuredContent.body, note.body);
+
+	const apiRequestCount = apiRequests.length;
+	for (const [id, name] of [[6, 'create_attachment'], [7, 'update_attachment']]) {
+		const cachedWrite = await post(baseUrl, bearerToken, {
+			jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: {} },
+		}, '2025-11-25');
+		assert.equal(cachedWrite.response.status, 200);
+		assert.equal(cachedWrite.body.error.code, -32602);
+		assert.equal(cachedWrite.body.error.message, 'Unknown or disabled tool');
+	}
+	assert.equal(apiRequests.length, apiRequestCount, 'disabled cached attachment calls do not reach the backend');
 
 	const discovered = await post(baseUrl, bearerToken, {
 		jsonrpc: '2.0', id: 4, method: 'server/discover', params: {},
@@ -207,4 +226,9 @@ test('HTTP MCP launcher serves authenticated stateless requests and stops cleanl
 	try { [code, signal] = await exited; } finally { clearTimeout(exitTimer); }
 	assert.equal(code, 0, `HTTP MCP process exit ${code} signal ${signal}; stderr retained for redaction checks`);
 	assert.doesNotMatch(stderr, new RegExp(`${apiToken}|${bearerToken}|${configFile}|${new URL(`http://127.0.0.1:${api.address().port}`).href}`));
+	const startupRecords = stderr.split(/\r?\n/).filter(line => line.includes('"event":"mcp_startup_settings"'));
+	assert.equal(startupRecords.length, 1);
+	assert.deepEqual(JSON.parse(startupRecords[0]), {
+		event: 'mcp_startup_settings', allowWrites: true, allowAttachmentWrites: false,
+	});
 });

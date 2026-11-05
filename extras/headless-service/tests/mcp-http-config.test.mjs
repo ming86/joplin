@@ -66,6 +66,32 @@ test('stdio config does not read its optional bearer token file', t => {
 	assert.equal(loaded.httpConfig, undefined);
 });
 
+test('attachment-write environment accepts only exact booleans and leaves account write permission unchanged', t => {
+	const f = fixture(t);
+	const setting = 'JOPLIN_MCP_ALLOW_ATTACHMENT_WRITES';
+	const previous = process.env[setting];
+	t.after(() => {
+		if (previous === undefined) delete process.env[setting];
+		else process.env[setting] = previous;
+	});
+
+	delete process.env[setting];
+	assert.equal(loadMcpConfig(f.writeConfig({ allowWrites: true })).allowAttachmentWrites, true);
+	process.env[setting] = 'true';
+	assert.equal(loadMcpConfig(f.configFile).allowAttachmentWrites, true);
+	process.env[setting] = 'false';
+	assert.equal(loadMcpConfig(f.configFile).allowAttachmentWrites, false);
+	process.env[setting] = 'true';
+	const readOnly = loadMcpConfig(f.writeConfig({ allowWrites: false }));
+	assert.equal(readOnly.allowWrites, false);
+	assert.equal(readOnly.allowAttachmentWrites, true);
+
+	for (const value of ['', 'TRUE', ' true']) {
+		process.env[setting] = value;
+		assert.throws(() => loadMcpConfig(f.configFile), error => error.code === 'invalid_mcp_configuration');
+	}
+});
+
 test('MCP runtime forwards HTTP transport when semantic search is disabled', async t => {
 	const f = fixture(t);
 	const runtime = await openMcpRuntime(f.writeConfig({ semantic: { enabled: false } }), { transport: 'http' });
