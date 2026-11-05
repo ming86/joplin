@@ -192,7 +192,11 @@ test('catalog publishes a fixed file-input object and object output variants', a
 	assert.deepEqual(Object.keys(update.inputSchema.properties.body_file.properties), ['download_url', 'file_id', 'mime_type', 'file_name']);
 	assert.deepEqual(update.inputSchema.properties.body_file.required, ['download_url', 'file_id']);
 	assert.match(update.inputSchema.properties.body_file.description, /any body operation.*body_length, body_size_bytes, body_sha256 and body_total_line_count.*edited local file byte count.*SHA-256/);
-	assert.match(update.description, /Any supplied body, body_file, body_patch, replace_text, prepend or append includes body_length, body_size_bytes, body_sha256 and body_total_line_count/);
+	assert.match(update.description, /Any supplied body, body_file, body_patch or replace_text includes body_length, body_size_bytes, body_sha256 and body_total_line_count/);
+	assert.match(update.description, /Prefer updating the existing passage/);
+	assert.match(update.description, /intentional boundary addition.*enough exact context.*metadata-only reads do not provide source text/);
+	assert.equal(Object.hasOwn(update.inputSchema.properties, 'prepend'), false);
+	assert.equal(Object.hasOwn(update.inputSchema.properties, 'append'), false);
 	assert.match(update.description, /metadata-only updates omit all four measurements/i);
 	assert.equal(update.inputSchema.type, 'object');
 	assert.deepEqual(update.inputSchema.required, ['id', 'base_revision_id']);
@@ -242,6 +246,31 @@ test('fixed update input rejects empty changes and accepts metadata-only changes
 		assert.equal(result.isError, false);
 		assert.deepEqual(saves.at(-1), { base_revision_id: revisionId, ...changes });
 	}
+});
+
+test('removed update fields are rejected before body-file downloads or note saves', async t => {
+	let downloads = 0;
+	const saves = [];
+	const { tools } = fixture(t, {
+		async updateNoteWithRevision(_id, changes) { saves.push(changes); return note; },
+	}, { readBodyFile: async () => { downloads++; return 'edited'; } });
+	const cases = [
+		{ prepend: '' },
+		{ prepend: 'Beginning', title: 'Valid metadata' },
+		{ prepend: 'Beginning', body: 'Valid body' },
+		{ prepend: 'Beginning', body_file: bodyFile },
+		{ append: '' },
+		{ append: 'Ending', title: 'Valid metadata' },
+		{ append: 'Ending', body: 'Valid body' },
+		{ append: 'Ending', body_file: bodyFile },
+	];
+	for (const change of cases) {
+		const result = await tools.call('update_note', { id: noteId, base_revision_id: revisionId, ...change });
+		assert.equal(result.isError, true);
+		assert.equal(result.structuredContent.error.code, 'invalid_tool_arguments');
+	}
+	assert.equal(downloads, 0);
+	assert.equal(saves.length, 0);
 });
 
 test('body_file update returns measurements for the saved body, not the downloaded text', async t => {
@@ -319,13 +348,13 @@ test('non-file update acknowledgments retain their original compact fields', asy
 	});
 });
 
-test('body-mode conflicts never download or save, while inline body precedence is retained', async t => {
+test('supported body-mode conflicts never download or save, while body and replace_text remain accepted together', async t => {
 	let downloads = 0;
 	const saves = [];
 	const { tools } = fixture(t, {
 		async updateNoteWithRevision(_id, changes) { saves.push(changes); return note; },
 	}, { readBodyFile: async () => { downloads++; return 'edited'; } });
-	for (const conflict of [{ body: '' }, { append: '' }, { prepend: '' }, { replace_text: { find: 'a', replace: 'b' } }]) {
+	for (const conflict of [{ body: '' }, { replace_text: { find: 'a', replace: 'b' } }]) {
 		const result = await tools.call('update_note', { id: noteId, base_revision_id: revisionId, body_file: bodyFile, ...conflict });
 		assert.equal(result.isError, true);
 		assert.equal(result.structuredContent.error.code, 'note_file_body_conflict');
@@ -333,19 +362,19 @@ test('body-mode conflicts never download or save, while inline body precedence i
 	for (const conflict of [
 		{ body_file: bodyFile },
 		{ body: 'replacement' },
-		{ append: '' },
-		{ prepend: '' },
 		{ replace_text: { find: 'a', replace: 'b' } },
 	]) {
 		const result = await tools.call('update_note', { id: noteId, base_revision_id: revisionId, body_patch: bodyPatch, ...conflict });
 		assert.equal(result.isError, true);
 		assert.equal(result.structuredContent.error.code, 'note_patch_body_conflict');
-		assert.equal(result.structuredContent.error.message, 'body_patch cannot be combined with body_file, body, prepend, append or replace_text. Choose one body-edit mode.');
+		assert.equal(result.structuredContent.error.message, 'body_patch cannot be combined with body_file, body or replace_text. Choose one body-edit mode.');
 	}
 	assert.equal(downloads, 0);
 	assert.equal(saves.length, 0);
-	await tools.call('update_note', { id: noteId, base_revision_id: revisionId, body: 'rewrite', append: 'ignored by native backend' });
-	assert.deepEqual(saves, [{ base_revision_id: revisionId, body: 'rewrite', append: 'ignored by native backend' }]);
+	const replaceText = { find: 'old passage', replace: 'new passage' };
+	const accepted = await tools.call('update_note', { id: noteId, base_revision_id: revisionId, body: 'rewrite', replace_text: replaceText });
+	assert.equal(accepted.isError, false);
+	assert.deepEqual(saves, [{ base_revision_id: revisionId, body: 'rewrite', replace_text: replaceText }]);
 });
 
 test('body patch failures return fixed safe messages', async t => {
@@ -354,7 +383,7 @@ test('body patch failures return fixed safe messages', async t => {
 		['note_patch_not_found', 'A body_patch source sequence was not found. Read the current source and correct the patch.'],
 		['note_patch_ambiguous', 'A body_patch source sequence is not unique. Add unchanged context to identify one occurrence.'],
 		['note_patch_order', 'body_patch hunks overlap or are out of source order. Combine hunks that share context or reorder them.'],
-		['note_patch_body_conflict', 'body_patch cannot be combined with body_file, body, prepend, append or replace_text. Choose one body-edit mode.'],
+		['note_patch_body_conflict', 'body_patch cannot be combined with body_file, body or replace_text. Choose one body-edit mode.'],
 	]);
 	for (const [code, message] of expectedMessages) {
 		const { tools } = fixture(t, {
