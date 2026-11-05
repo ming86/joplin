@@ -3,6 +3,7 @@ import Folder from '../../models/Folder';
 import Note from '../../models/Note';
 import Resource from '../../models/Resource';
 import Setting from '../../models/Setting';
+import shim from '../../shim';
 import Synchronizer from '../../Synchronizer';
 import SyncTargetRegistry from '../../SyncTargetRegistry';
 import { reg } from '../../registry';
@@ -140,6 +141,7 @@ describe('Synchronizer.remoteChangesOnly', () => {
 		});
 		const itemsThatNeedSync = jest.spyOn(BaseItem, 'itemsThatNeedSync');
 		const scheduleSync = jest.spyOn(reg, 'scheduleSync').mockResolvedValue(undefined);
+		jest.spyOn(shim, 'isTestingEnv').mockReturnValue(false);
 
 		await synchronizerStart(null, { remoteChangesOnly: true, throwOnError: true });
 

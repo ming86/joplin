@@ -8,6 +8,8 @@ const path = require('node:path');
 const load = require('./loadSource.cjs');
 // The shim uses lib's Undici version, which can differ from the CLI workspace's.
 const libRequire = require('node:module').createRequire(path.resolve(__dirname, '../../../lib/package.json'));
+// Load the real connector helper with the same Undici dependency used by the shim.
+const publicNetworkOnly = load('packages/lib/utils/publicNetworkOnly.ts', { 'undici': libRequire('undici') });
 
 /** Loads the real Node transport with mutable application settings and unrelated services isolated. */
 function createShim(settings) {
@@ -31,6 +33,7 @@ function createShim(settings) {
 		'./path-utils': {},
 		'fs-extra': fsExtra,
 		'./utils/replaceUnsupportedCharacters': value => value,
+		'./utils/publicNetworkOnly': publicNetworkOnly,
 		'file-type': { fromFile: async () => null },
 		'undici': libRequire('undici'),
 		'./services/e2ee/crypto': {},
