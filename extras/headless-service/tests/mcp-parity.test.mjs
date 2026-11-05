@@ -229,7 +229,7 @@ test('MCP note, search, and tag fields accept values beyond the former arbitrary
 	} finally { session.close(); }
 });
 
-test('Desktop update operations compose, replace only unique text, move notebooks, and toggle to-dos', async () => {
+test('MCP update operations replace only unique text, move notebooks, and toggle to-dos', async () => {
 	const b = backend();
 	let current = { ...note, body: 'middle' };
 	const patches = [];
@@ -242,7 +242,7 @@ test('Desktop update operations compose, replace only unique text, move notebook
 	const session = createSession(b);
 	await ready(session);
 	try {
-		await update(session, { id: noteId, prepend: 'start ', append: ' end' });
+		await update(session, { id: noteId, replace_text: { find: 'middle', replace: 'start middle end' } });
 		assert.equal(patches[0].body, 'start middle end');
 
 		await update(session, { id: noteId, replace_text: { find: 'middle', replace: 'center' } }, 3);
@@ -569,7 +569,7 @@ test('MCP updates preserve HTML note bodies and format for metadata and raw-body
 				assert.equal(action.base_revision_id, currentRevisionId);
 				updates.push(action.changes);
 				const changes = action.changes;
-				const { append, prepend, replace_text: replaceText, ...fields } = changes;
+				const { replace_text: replaceText, ...fields } = changes;
 				currentNote = {
 					...currentNote,
 					...fields,
@@ -581,8 +581,6 @@ test('MCP updates preserve HTML note bodies and format for metadata and raw-body
 				if (Object.hasOwn(changes, 'body')) currentNote.body = changes.body;
 				else {
 					let nextBody = currentNote.body;
-					if (prepend !== undefined) nextBody = prepend + nextBody;
-					if (append !== undefined) nextBody += append;
 					if (replaceText) nextBody = nextBody.replace(replaceText.find, replaceText.replace);
 					currentNote.body = nextBody;
 				}
@@ -627,12 +625,10 @@ test('MCP updates preserve HTML note bodies and format for metadata and raw-body
 		const expectedBody = '<!-- start --><article><h1>Updated</h1><p>New text</p></article><!-- end -->';
 		const partialResult = await update(session, {
 			id: noteId,
-			prepend: '<!-- start -->',
-			append: '<!-- end -->',
-			replace_text: { find: 'Old text', replace: 'New text' },
+			replace_text: { find: replacement, replace: expectedBody },
 		}, 4);
 		assert.equal(partialResult.isError, false);
-		assert.deepEqual(updates[2], { prepend: '<!-- start -->', append: '<!-- end -->', replace_text: { find: 'Old text', replace: 'New text' } });
+		assert.deepEqual(updates[2], { replace_text: { find: replacement, replace: expectedBody } });
 		assert.equal(currentNote.body, expectedBody);
 		assert.equal(currentNote.markup_language, 2);
 		assert.equal(Object.hasOwn(partialResult.structuredContent, 'note'), false);

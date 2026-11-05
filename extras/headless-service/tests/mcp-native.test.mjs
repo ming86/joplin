@@ -190,7 +190,7 @@ test('MCP over stdio -> actual encrypted Joplin API, FTS, E2EE filesystem sync a
 	const staleWrite = await mcp.call('update_note', {
 		id: noteId,
 		base_revision_id: initialRevisionId,
-		append: ' stale update',
+		replace_text: { find: revisedBody, replace: `${marker} stale update` },
 	});
 	assert.equal(staleWrite.isError, true);
 	assert.equal(staleWrite.structuredContent.error.code, 'note_conflict');
@@ -241,7 +241,8 @@ test('MCP over stdio -> actual encrypted Joplin API, FTS, E2EE filesystem sync a
 	assert.equal(betaSection.structuredContent.nextOffset, null);
 	assert.equal(betaSection.structuredContent.is_todo, 0);
 
-	const bodyPatch = `@@\n ${patchMarker} header\n ## Alpha\n-first: old\n+first: new\n+first: added\n keep alpha\n@@\n ## Beta\n-second: old\n+second: new\n keep beta\n ${patchMarker} footer\n`;
+	// Both boundary insertions and the interior edits match the same original source snapshot.
+	const bodyPatch = `@@\n+${patchMarker} leading\n ${patchMarker} header\n ## Alpha\n-first: old\n+first: new\n+first: added\n keep alpha\n@@\n ## Beta\n-second: old\n+second: new\n keep beta\n ${patchMarker} footer\n+${patchMarker} trailing\n`;
 	const patched = await mcp.call('update_note', {
 		id: patchNoteId,
 		base_revision_id: betaSection.structuredContent.revision_id,
@@ -258,12 +259,12 @@ test('MCP over stdio -> actual encrypted Joplin API, FTS, E2EE filesystem sync a
 	assert.equal(Object.hasOwn(patched.structuredContent, 'body'), false);
 	assert.equal(Object.hasOwn(patched.structuredContent, 'body_patch'), false);
 	assert.ok(!JSON.stringify(patched).includes(bodyPatch));
-	const patchedBody = `${patchMarker} header\n## Alpha\nfirst: new\nfirst: added\nkeep alpha\n\n## Beta\nsecond: new\nkeep beta\n${patchMarker} footer`;
-	assertBodyMeasurements(patched.structuredContent, patchedBody, 10);
+	const patchedBody = `${patchMarker} leading\n${patchMarker} header\n## Alpha\nfirst: new\nfirst: added\nkeep alpha\n\n## Beta\nsecond: new\nkeep beta\n${patchMarker} footer\n${patchMarker} trailing`;
+	assertBodyMeasurements(patched.structuredContent, patchedBody, 12);
 	const patchRead = await mcp.call('read_note', { id: patchNoteId });
 	assert.equal(patchRead.isError, false);
 	assert.equal(patchRead.structuredContent.body, patchedBody);
-	assert.equal(patchRead.structuredContent.body_total_line_count, 10);
+	assert.equal(patchRead.structuredContent.body_total_line_count, 12);
 	assert.equal(patchRead.structuredContent.title, 'MCP context patch fixture updated');
 	assert.equal(patchRead.structuredContent.revision_id, patched.structuredContent.revision_id);
 
@@ -387,12 +388,15 @@ test('MCP over stdio -> actual encrypted Joplin API, FTS, E2EE filesystem sync a
 	assert.equal(attachmentRead.isError, false);
 	assert.equal(attachmentRead.content[1].type, 'resource');
 	assert.equal(attachmentRead.content[1].resource.blob, originalBytes.toString('base64'));
+	const attachmentBase = await mcp.call('read_note', { id: noteId });
+	assert.equal(attachmentBase.isError, false);
 	const attached = await mcp.call('update_note', {
 		id: noteId,
-		base_revision_id: (await mcp.call('read_note', { id: noteId })).structuredContent.revision_id,
-		append: `\n${uploaded.structuredContent.markdown_link}`,
+		base_revision_id: attachmentBase.structuredContent.revision_id,
+		body_patch: `@@\n ${attachmentBase.structuredContent.body}\n+${uploaded.structuredContent.markdown_link}\n`,
 	});
 	assert.equal(attached.isError, false);
+	assert.equal((await mcp.call('read_note', { id: noteId })).structuredContent.body, `${revisedBody}\n${uploaded.structuredContent.markdown_link}`);
 	const noteAttachments = await mcp.call('list_note_attachments', { note_id: noteId });
 	assert.ok(noteAttachments.structuredContent.attachments.some(item => item.id === uploaded.structuredContent.resource_id));
 	const renamedAttachment = await mcp.call('update_attachment', {
